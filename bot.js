@@ -4,6 +4,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { searchUser, looksLikePhone } = require('./lib/search-user');
 const { openDb, getBotUser, registerBotUser } = require('./lib/partners-db');
 const { isPhoneAllowed, normalizeRegisteredPhone } = require('./lib/bot-users');
+const { registerVipHandlers, handleVipMessage } = require('./lib/vip-bot');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -134,6 +135,11 @@ function tryRegisterUser(msg) {
   return { ok: true, user };
 }
 
+registerVipHandlers(bot, {
+  getBotUser: (telegramId) => getBotUser(db, telegramId),
+  sendRegisterPrompt,
+});
+
 bot.onText(/\/start/, (msg) => {
   const botUser = getBotUser(db, msg.from.id);
   if (botUser) {
@@ -173,6 +179,10 @@ bot.on('message', async (msg) => {
   }
 
   if (!text) return;
+
+  if (await handleVipMessage(bot, msg, botUser)) {
+    return;
+  }
 
   try {
     const result = searchUser(text, db);
