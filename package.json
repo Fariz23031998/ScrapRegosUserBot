@@ -1,0 +1,35 @@
+{
+  "name": "scrapregosuserbot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "fetch": "node fetch-partners.js",
+    "login": "node fetch-partners-interactive.js",
+    "fetch:auth": "set HEADLESS=1&& node fetch-partners-interactive.js",
+    "import:json": "node import-partners-json.js",
+    "sync": "set HEADLESS=1&& node sync-partners.js",
+    "import:accounts-json": "node import-partner-accounts-json.js",
+    "sync:accounts": "set HEADLESS=1&& node sync-partner-accounts.js",
+    "login:easytrade": "node login-easytrade.js",
+    "import:licenses-json": "node import-licenses-json.js",
+    "sync:licenses": "set HEADLESS=1&& node sync-licenses.js",
+    "sync:all": "node sync-all.js",
+    "sync:rpos": "node sync-rpos.js",
+    "bot": "node bot.js",
+    "service:install": "node scripts/install-bot-service.js",
+    "service:uninstall": "node scripts/uninstall-bot-service.js",
+    "task:install": "powershell -ExecutionPolicy Bypass -File scripts/install-sync-task.ps1",
+    "task:uninstall": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-sync-task.ps1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "node-telegram-bot-api": "^0.67.0",
+    "node-windows": "^1.0.0-beta.8",
+    "playwright": "^1.60.0"
+  }
+}
