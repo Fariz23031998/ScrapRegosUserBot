@@ -17,6 +17,7 @@
     "sync:all": "node sync-all.js",
     "sync:rpos": "node sync-rpos.js",
     "bot": "node bot.js",
+    "click-server": "node click-server.js",
     "service:install": "node scripts/install-bot-service.js",
     "service:uninstall": "node scripts/uninstall-bot-service.js",
     "task:install": "powershell -ExecutionPolicy Bypass -File scripts/install-sync-task.ps1",
@@ -28,6 +29,7 @@
   "type": "commonjs",
   "dependencies": {
     "dotenv": "^17.4.2",
+    "express": "^4.22.2",
     "node-telegram-bot-api": "^0.67.0",
     "node-windows": "^1.0.0-beta.8",
     "playwright": "^1.60.0"

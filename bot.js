@@ -2,9 +2,12 @@ require('dotenv').config();
 
 const TelegramBot = require('node-telegram-bot-api');
 const { searchUser, looksLikePhone } = require('./lib/search-user');
-const { openDb, getBotUser, registerBotUser } = require('./lib/partners-db');
+const { openDb, getBotUser, registerBotUser, getUnpaidOrdersByClientPhone } = require('./lib/partners-db');
 const { isPhoneAllowed, normalizeRegisteredPhone } = require('./lib/bot-users');
 const { registerVipHandlers, handleVipMessage } = require('./lib/vip-bot');
+const { registerServiceHandlers, handleServiceMessage, makeServiceButtonForResult } = require('./lib/service-bot');
+const { formatClickUrl } = require('./lib/click');
+const { formatPaymentPageUrl } = require('./lib/payments-api');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -101,9 +104,68 @@ function splitTelegramMessage(text, maxLength = TELEGRAM_MAX_MESSAGE_LENGTH) {
 
 async function sendBotMessage(chatId, text, options) {
   const chunks = splitTelegramMessage(text);
-  for (const chunk of chunks) {
-    await bot.sendMessage(chatId, chunk, options);
-    options = undefined;
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    const chunkOptions = i === chunks.length - 1 ? options : undefined;
+    await bot.sendMessage(chatId, chunk, chunkOptions);
+  }
+}
+
+function formatUnpaidOrderLines(order) {
+  const paymentPageUrl = formatPaymentPageUrl(order.id);
+  let paymentUrl = null;
+  try {
+    paymentUrl = formatClickUrl(order.id, order.amount);
+  } catch {
+    paymentUrl = null;
+  }
+  const paymentLink = paymentPageUrl || paymentUrl;
+  const lines = [
+    `ID: ${order.id}`,
+    `Сумма: ${order.amount} ${order.currency || 'UZS'}`,
+    `Статус: ${order.status}`,
+  ];
+  if (paymentLink) {
+    lines.push(`${paymentPageUrl ? 'Страница оплаты' : 'Ссылка на оплату'}: ${paymentLink}`);
+  }
+  return lines;
+}
+
+function formatUnpaidOrdersBlock(orders) {
+  if (!orders.length) return '';
+
+  const header =
+    orders.length === 1
+      ? 'Есть неоплаченный заказ:'
+      : `Есть неоплаченные заказы (${orders.length}):`;
+
+  const blocks = orders.map((order, index) => {
+    const lines = formatUnpaidOrderLines(order);
+    if (orders.length === 1) {
+      return lines.join('\n');
+    }
+    return [`Заказ ${index + 1}:`, ...lines].join('\n');
+  });
+
+  return `${header}\n\n${blocks.join('\n\n')}`;
+}
+
+async function sendSearchResultWithAction(chatId, telegramId, entry) {
+  let text = entry.message || '';
+  const unpaidOrders = getUnpaidOrdersByClientPhone(db, entry.phone);
+  const unpaidBlock = formatUnpaidOrdersBlock(unpaidOrders);
+  if (unpaidBlock) {
+    text = `${text}\n\n${unpaidBlock}`;
+  }
+
+  const chunks = splitTelegramMessage(text);
+  for (let i = 0; i < chunks.length; i += 1) {
+    const isLast = i === chunks.length - 1;
+    if (isLast) {
+      await bot.sendMessage(chatId, chunks[i], makeServiceButtonForResult(entry, telegramId));
+    } else {
+      await bot.sendMessage(chatId, chunks[i]);
+    }
   }
 }
 function getPhoneFromMessage(msg) {
@@ -138,6 +200,10 @@ function tryRegisterUser(msg) {
 registerVipHandlers(bot, {
   getBotUser: (telegramId) => getBotUser(db, telegramId),
   sendRegisterPrompt,
+});
+registerServiceHandlers(bot, {
+  db,
+  getBotUser: (telegramId) => getBotUser(db, telegramId),
 });
 
 bot.onText(/\/start/, (msg) => {
@@ -180,12 +246,22 @@ bot.on('message', async (msg) => {
 
   if (!text) return;
 
+  if (await handleServiceMessage(bot, msg, botUser, db)) {
+    return;
+  }
+
   if (await handleVipMessage(bot, msg, botUser)) {
     return;
   }
 
   try {
     const result = searchUser(text, db);
+    if (result.found && Array.isArray(result.results) && result.results.length > 0) {
+      for (const entry of result.results) {
+        await sendSearchResultWithAction(msg.chat.id, msg.from.id, entry);
+      }
+      return;
+    }
     await sendBotMessage(msg.chat.id, result.message);
   } catch (err) {
     console.error(`Failed to send search result to ${msg.chat.id}:`, err.message);
