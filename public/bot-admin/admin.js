@@ -1,6 +1,9 @@
 const rightsMeta = [];
 let users = [];
 let modalMode = 'create';
+let activeRole = 'employee';
+let searchQuery = '';
+let searchTimer = null;
 
 const modalEl = document.getElementById('user-modal');
 const userForm = document.getElementById('user-form');
@@ -9,6 +12,10 @@ const modalError = document.getElementById('modal-error');
 const modalTitle = document.getElementById('modal-title');
 const modalSubmit = document.getElementById('modal-submit');
 const userIdInput = document.getElementById('user-id');
+const phoneInput = userForm.elements.phone;
+const searchInput = document.getElementById('user-search');
+const searchClearBtn = document.getElementById('search-clear');
+const searchBox = document.getElementById('search-box');
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -89,14 +96,29 @@ function renderRightsSummary(rights = {}) {
   return `<span class="rights-tag">${active.length} права</span>`;
 }
 
+function formatLinkedAt(value) {
+  if (!value) return '—';
+  const date = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return escapeHtml(value);
+  return escapeHtml(date.toLocaleString('ru-RU'));
+}
+
 function renderUsersTable() {
   const wrap = document.getElementById('users-table-wrap');
+  const isEmployeeView = activeRole === 'employee';
+
   if (!users.length) {
-    wrap.innerHTML = '<p class="empty-state">Сотрудников пока нет. Нажмите «Создать сотрудника».</p>';
+    const emptyMessage = searchQuery
+      ? 'Ничего не найдено. Попробуйте другой запрос.'
+      : isEmployeeView
+        ? 'Сотрудников пока нет. Нажмите «Создать сотрудника».'
+        : 'Клиентов пока нет. Они появятся после регистрации в боте.';
+    wrap.innerHTML = `<p class="empty-state">${emptyMessage}</p>`;
     return;
   }
 
-  wrap.innerHTML = `
+  if (isEmployeeView) {
+    wrap.innerHTML = `
     <table class="users-table">
       <thead>
         <tr>
@@ -132,6 +154,44 @@ function renderUsersTable() {
       </tbody>
     </table>
   `;
+    return;
+  }
+
+  wrap.innerHTML = `
+    <table class="users-table">
+      <thead>
+        <tr>
+          <th>Телефон</th>
+          <th>Имя</th>
+          <th>Telegram</th>
+          <th>Привязан</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${users
+          .map(
+            (user) => `
+          <tr data-user-id="${user.id}">
+            <td class="cell-phone">${escapeHtml(user.phone || '—')}</td>
+            <td class="cell-name">${formatUserNameHtml(user)}</td>
+            <td>
+              <span class="status ${user.is_linked ? 'status-linked' : 'status-pending'}">
+                ${user.is_linked ? `Привязан · ${user.telegram_id}` : 'Не привязан'}
+              </span>
+            </td>
+            <td class="cell-nowrap">${formatLinkedAt(user.linked_at)}</td>
+            <td>
+              <div class="row-actions">
+                <button type="button" class="btn btn-primary btn-sm" data-action="promote">Сделать сотрудником</button>
+              </div>
+            </td>
+          </tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 function openModal(mode, user = null) {
@@ -139,10 +199,21 @@ function openModal(mode, user = null) {
   modalError.hidden = true;
   userForm.reset();
   userIdInput.value = user?.id ?? '';
+  phoneInput.readOnly = false;
+  phoneInput.required = true;
 
   if (mode === 'create') {
     modalTitle.textContent = 'Новый сотрудник';
     modalSubmit.textContent = 'Создать';
+    renderRightsInputs(modalRights, { see_own_report: true });
+  } else if (mode === 'promote') {
+    modalTitle.textContent = 'Назначить сотрудником';
+    modalSubmit.textContent = 'Назначить';
+    phoneInput.value = user.phone || '';
+    phoneInput.readOnly = true;
+    phoneInput.required = false;
+    const defaultName = user.display_name || formatTelegramName(user);
+    userForm.elements.display_name.value = defaultName;
     renderRightsInputs(modalRights, { see_own_report: true });
   } else {
     modalTitle.textContent = 'Редактирование сотрудника';
@@ -153,7 +224,11 @@ function openModal(mode, user = null) {
   }
 
   modalEl.hidden = false;
-  userForm.elements.phone.focus();
+  if (mode === 'promote') {
+    userForm.elements.display_name.focus();
+  } else {
+    phoneInput.focus();
+  }
 }
 
 function closeModal() {
@@ -161,10 +236,32 @@ function closeModal() {
   modalError.hidden = true;
 }
 
+function updateSearchUi() {
+  const hasQuery = searchQuery.length > 0;
+  searchClearBtn.hidden = !hasQuery;
+  searchBox.classList.toggle('search-box--active', hasQuery);
+}
+
 async function loadUsers() {
-  const data = await api('/bot-admin/api/users');
+  const params = new URLSearchParams({ role: activeRole });
+  if (searchQuery) {
+    params.set('q', searchQuery);
+  }
+  const data = await api(`/bot-admin/api/users?${params.toString()}`);
   users = data.users || [];
+  updateSearchUi();
   renderUsersTable();
+}
+
+function setActiveRole(role) {
+  activeRole = role;
+  document.querySelectorAll('.role-tab').forEach((tab) => {
+    const isActive = tab.dataset.role === role;
+    tab.classList.toggle('role-tab--active', isActive);
+    tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+  document.getElementById('create-user-btn').hidden = role !== 'employee';
+  loadUsers().catch((error) => window.alert(error.message));
 }
 
 async function init() {
@@ -175,6 +272,30 @@ async function init() {
 }
 
 document.getElementById('create-user-btn').addEventListener('click', () => openModal('create'));
+
+document.querySelectorAll('.role-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    if (tab.dataset.role === activeRole) return;
+    setActiveRole(tab.dataset.role);
+  });
+});
+
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQuery = searchInput.value.trim();
+    updateSearchUi();
+    loadUsers().catch((error) => window.alert(error.message));
+  }, 300);
+});
+
+searchClearBtn.addEventListener('click', () => {
+  searchInput.value = '';
+  searchQuery = '';
+  updateSearchUi();
+  loadUsers().catch((error) => window.alert(error.message));
+  searchInput.focus();
+});
 
 document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
@@ -197,6 +318,12 @@ userForm.addEventListener('submit', async (event) => {
   try {
     if (modalMode === 'create') {
       await api('/bot-admin/api/users', { method: 'POST', body: JSON.stringify(payload) });
+    } else if (modalMode === 'promote') {
+      const userId = userIdInput.value;
+      await api(`/bot-admin/api/users/${userId}/promote`, { method: 'POST', body: JSON.stringify(payload) });
+      closeModal();
+      setActiveRole('employee');
+      return;
     } else {
       const userId = userIdInput.value;
       await api(`/bot-admin/api/users/${userId}`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -222,6 +349,11 @@ document.getElementById('users-table-wrap').addEventListener('click', async (eve
 
   if (action === 'edit') {
     openModal('edit', user);
+    return;
+  }
+
+  if (action === 'promote') {
+    openModal('promote', user);
     return;
   }
 

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Управление сотрудниками бота</title>
+    <title>Управление пользователями бота</title>
     <link rel="stylesheet" href="admin.css" />
   </head>
   <body>
@@ -11,8 +11,8 @@
       <header class="header">
         <div class="header-top">
           <div>
-            <h1>Сотрудники Telegram-бота</h1>
-            <p>Добавьте телефон и права. Сотрудник отправит этот номер в боте для привязки Telegram.</p>
+            <h1>Пользователи Telegram-бота</h1>
+            <p>Сотрудники: добавьте телефон и права. Клиенты регистрируются автоматически при привязке номера в боте.</p>
           </div>
           <button type="button" class="btn btn-secondary" id="logout-btn">Выйти</button>
         </div>
@@ -20,8 +20,33 @@
 
       <section class="card">
         <div class="card-toolbar">
-          <h2>Список сотрудников</h2>
-          <button type="button" class="btn btn-primary" id="create-user-btn">+ Создать сотрудника</button>
+          <div class="card-toolbar-left">
+            <h2>Пользователи</h2>
+            <div class="role-tabs" role="tablist">
+              <button type="button" class="role-tab role-tab--active" data-role="employee" role="tab" aria-selected="true">Сотрудники</button>
+              <button type="button" class="role-tab" data-role="customer" role="tab" aria-selected="false">Клиенты</button>
+            </div>
+          </div>
+          <div class="card-toolbar-right">
+            <div class="search-box" id="search-box">
+              <span class="search-box__icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <input
+                type="search"
+                id="user-search"
+                class="search-box__input"
+                placeholder="Поиск по телефону, имени, Telegram…"
+                autocomplete="off"
+                enterkeyhint="search"
+              />
+              <button type="button" class="search-box__clear" id="search-clear" aria-label="Очистить поиск" hidden>&times;</button>
+            </div>
+            <button type="button" class="btn btn-primary" id="create-user-btn">+ Создать сотрудника</button>
+          </div>
         </div>
         <div id="users-table-wrap"></div>
       </section>
