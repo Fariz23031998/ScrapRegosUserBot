@@ -13,55 +13,18 @@ It listens on `CLICK_SERVER_PORT` (default `3000`).
 
 ## 2) nginx reverse proxy
 
-Add to your site config:
+Use the ready-made config in the repo root: `no-thing.uz.conf`.
 
-```nginx
-location /click/ {
-  proxy_pass http://127.0.0.1:3000/click/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-}
+**Do not** proxy all of `/api/` to port 3000 if the same host already serves another API (e.g. Regos Partner Bot on `:8001`). Route only payment paths:
 
-location /pay {
-  proxy_pass http://127.0.0.1:3000/pay;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-}
+- `/api/orders/` → `:3000` (longer prefix wins over `/api` → `:8001`)
+- `/click/`, `/pay`, `/bot-admin/`, payment static assets, order UUID pages
 
-location /api/ {
-  proxy_pass http://127.0.0.1:3000/api/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-location /css/ {
-  proxy_pass http://127.0.0.1:3000/css/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-location /js/ {
-  proxy_pass http://127.0.0.1:3000/js/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-location ~ ^/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ {
-  proxy_pass http://127.0.0.1:3000;
-  proxy_set_header Host $host;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-Reload nginx:
+Copy to the server and reload:
 
 ```bash
+sudo cp /srv/ScrapRegosUserBot/no-thing.uz.conf /etc/nginx/sites-available/no-thing.uz.conf
+sudo ln -sf /etc/nginx/sites-available/no-thing.uz.conf /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -124,8 +87,17 @@ Set in `.env`:
 - `CLICK_SERVER_PORT`
 - `PUBLIC_BASE_URL` (used for payment page links like `https://your-domain/{order_id}`)
 - `PAYME_MERCHANT_ID`, `PAYME_SECRET_KEY`, `PAYME_TEST_KEY`, `PAYME_TEST_MODE`, `PAYME_RETURN_URL` (optional Payme)
+- `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (web admin at `/bot-admin/`)
 
-## 6) Payment page
+## 6) Bot admin and employees
+
+Open `https://your-domain/bot-admin/` and sign in with `BOT_ADMIN_LOGIN` / `BOT_ADMIN_PASSWORD`.
+
+1. Add employee phone and rights in the admin panel.
+2. Employee opens the Telegram bot and sends the same phone to link their account.
+3. `/report` sends earnings summary and Excel file (based on assigned rights).
+
+## 7) Payment page
 
 Open in browser:
 

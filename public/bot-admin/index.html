@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Управление сотрудниками бота</title>
+    <link rel="stylesheet" href="admin.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <div class="header-top">
+          <div>
+            <h1>Сотрудники Telegram-бота</h1>
+            <p>Добавьте телефон и права. Сотрудник отправит этот номер в боте для привязки Telegram.</p>
+          </div>
+          <button type="button" class="btn btn-secondary" id="logout-btn">Выйти</button>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="card-toolbar">
+          <h2>Список сотрудников</h2>
+          <button type="button" class="btn btn-primary" id="create-user-btn">+ Создать сотрудника</button>
+        </div>
+        <div id="users-table-wrap"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-toolbar">
+          <h2>Журнал заказов</h2>
+          <button type="button" class="btn btn-secondary btn-sm" id="refresh-logs-btn">Обновить</button>
+        </div>
+        <p class="card-hint">Создание и удаление заказов с указанием сотрудника.</p>
+        <div id="order-logs-wrap"></div>
+      </section>
+    </main>
+
+    <div class="modal-overlay" id="user-modal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-header">
+          <h3 id="modal-title">Сотрудник</h3>
+          <button type="button" class="modal-close" id="modal-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form id="user-form" class="modal-body">
+          <input type="hidden" name="user_id" id="user-id" />
+          <label class="field">
+            <span>Телефон</span>
+            <input type="text" name="phone" required placeholder="+998900000000" />
+          </label>
+          <label class="field">
+            <span>Имя (необязательно)</span>
+            <input type="text" name="display_name" placeholder="Иван" />
+          </label>
+          <div class="field">
+            <span>Права</span>
+            <div id="modal-rights" class="rights-grid"></div>
+          </div>
+          <p id="modal-error" class="message error" hidden></p>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="modal-cancel">Отмена</button>
+            <button type="submit" class="btn btn-primary" id="modal-submit">Сохранить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="admin.js"></script>
+    <script src="admin-order-logs.js"></script>
+  </body>
+</html>

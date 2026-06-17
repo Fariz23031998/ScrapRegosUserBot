@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const path = require('path');
 const express = require('express');
@@ -6,6 +6,7 @@ const { openDb, getOrderById, createPayment, markOrderPaid } = require('./lib/pa
 const { verifyClickSignature } = require('./lib/click');
 const { syncPaymeReceiptStatus } = require('./lib/payme-receipts');
 const { getPaymentOptionsForOrder, getPublicDir, isOrderId } = require('./lib/payments-api');
+const { createBotAdminRouter } = require('./lib/bot-admin');
 
 const app = express();
 const db = openDb();
@@ -30,6 +31,8 @@ app.get('/pay', (req, res) => {
   }
   res.sendFile(path.join(getPublicDir(), 'pay.html'));
 });
+
+app.use('/bot-admin', createBotAdminRouter(db));
 
 app.get('/:orderId', (req, res, next) => {
   const orderId = String(req.params.orderId || '').trim();
@@ -140,7 +143,13 @@ app.get('/health', (_req, res) => {
 });
 
 app.listen(port, () => {
+  const adminConfigured = Boolean(
+    process.env.BOT_ADMIN_LOGIN?.trim() && process.env.BOT_ADMIN_PASSWORD?.trim()
+  );
   console.log(`CLICK server listening on :${port}`);
+  if (!adminConfigured) {
+    console.warn('BOT_ADMIN_LOGIN / BOT_ADMIN_PASSWORD not set — /bot-admin/ is disabled.');
+  }
 });
 
 process.on('SIGINT', () => {
