@@ -4,18 +4,42 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Оплата заказа</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/css/payment.css" />
   </head>
   <body>
-    <main class="card">
-      <h1>Оплата заказа</h1>
-      <p id="status" class="status">Загрузка...</p>
+    <div class="page-bg" aria-hidden="true"></div>
 
-      <section id="order-info" class="order-info hidden"></section>
+    <main class="card">
+      <header class="card-header">
+        <img class="brand-image" src="/brand-logo.png" alt="Logo" />
+        <h1>Оплата заказа</h1>
+        <p id="status" class="status status--loading">
+          <span class="status-spinner" aria-hidden="true"></span>
+          <span id="status-text">Загрузка данных...</span>
+        </p>
+      </header>
+
+      <section id="order-info" class="order-summary hidden" aria-live="polite"></section>
 
       <section id="payments" class="payments hidden">
-        <h2>Способы оплаты</h2>
         <div id="payment-buttons" class="payment-buttons"></div>
+        <p class="secure-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 2L4 6v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V6l-8-4z"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linejoin="round"
+            />
+          </svg>
+          Безопасная оплата через Payme
+        </p>
       </section>
     </main>
 

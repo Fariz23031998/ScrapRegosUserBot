@@ -4,6 +4,7 @@ const path = require('path');
 const express = require('express');
 const { openDb, getOrderById, createPayment, markOrderPaid } = require('./lib/partners-db');
 const { verifyClickSignature } = require('./lib/click');
+const { syncPaymeReceiptStatus } = require('./lib/payme-receipts');
 const { getPaymentOptionsForOrder, getPublicDir, isOrderId } = require('./lib/payments-api');
 
 const app = express();
@@ -13,6 +14,10 @@ const port = Number(process.env.CLICK_SERVER_PORT || 3000);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use(express.static(getPublicDir()));
+
+app.get('/brand-logo.png', (_req, res) => {
+  res.sendFile(path.join(__dirname, '8c69cd56997dd51c986e951e0d553f14582ea8b4.png'));
+});
 
 function amountsEqual(payloadAmount, orderAmount) {
   return Number(payloadAmount) === Number(orderAmount);
@@ -27,18 +32,48 @@ app.get('/pay', (req, res) => {
 });
 
 app.get('/:orderId', (req, res, next) => {
-  if (!isOrderId(req.params.orderId)) {
-    return next();
+  const orderId = String(req.params.orderId || '').trim();
+  if (isOrderId(orderId) || getOrderById(db, orderId)) {
+    return res.sendFile(path.join(getPublicDir(), 'pay.html'));
   }
-  res.sendFile(path.join(getPublicDir(), 'pay.html'));
+  return next();
 });
 
-app.get('/api/orders/:orderId/payments', (req, res) => {
-  const data = getPaymentOptionsForOrder(db, req.params.orderId);
-  if (!data) {
-    return res.status(404).json({ message: 'Заказ не найден.' });
+app.get('/api/orders/:orderId/payments', async (req, res) => {
+  try {
+    const data = await getPaymentOptionsForOrder(db, req.params.orderId);
+    if (!data) {
+      return res.status(404).json({ message: 'Заказ не найден.' });
+    }
+    return res.json(data);
+  } catch (error) {
+    console.error('Payment options error:', error);
+    return res.status(500).json({ message: 'Не удалось подготовить способы оплаты.' });
   }
-  return res.json(data);
+});
+
+app.post('/api/orders/:orderId/payme/check', async (req, res) => {
+  try {
+    const order = getOrderById(db, req.params.orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Заказ не найден.' });
+    }
+    const result = await syncPaymeReceiptStatus(db, req.params.orderId);
+    const updatedOrder = getOrderById(db, req.params.orderId);
+    return res.json({
+      ...result,
+      order: updatedOrder
+        ? {
+            id: updatedOrder.id,
+            status: updatedOrder.status,
+            paid_at: updatedOrder.paid_at,
+          }
+        : null,
+    });
+  } catch (error) {
+    console.error('Payme status check error:', error);
+    return res.status(500).json({ message: 'Не удалось проверить статус оплаты Payme.' });
+  }
 });
 
 app.post('/click/prepare', (req, res) => {

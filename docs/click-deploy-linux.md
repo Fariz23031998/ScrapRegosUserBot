@@ -72,6 +72,14 @@ Set:
 - Prepare URL: `https://your-domain/click/prepare`
 - Complete URL: `https://your-domain/click/complete`
 
+## 3.1) Payme cabinet
+
+Payme uses the **Subscribe API** (receipts). No billing webhook URL is required.
+
+- Create receipt server-side via `receipts.create`
+- Client pays at `https://checkout.paycom.uz/{receipt_id}`
+- Check status via `receipts.check` (`POST /api/orders/{order_id}/payme/check`)
+
 ## 4) systemd unit
 
 Create `/etc/systemd/system/scrapregos-click.service`:
@@ -115,6 +123,7 @@ Set in `.env`:
 - `CLICK_RETURN_URL`
 - `CLICK_SERVER_PORT`
 - `PUBLIC_BASE_URL` (used for payment page links like `https://your-domain/{order_id}`)
+- `PAYME_MERCHANT_ID`, `PAYME_SECRET_KEY`, `PAYME_TEST_KEY`, `PAYME_TEST_MODE`, `PAYME_RETURN_URL` (optional Payme)
 
 ## 6) Payment page
 

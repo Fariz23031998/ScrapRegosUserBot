@@ -2,11 +2,16 @@ require('dotenv').config();
 
 const TelegramBot = require('node-telegram-bot-api');
 const { searchUser, looksLikePhone } = require('./lib/search-user');
-const { openDb, getBotUser, registerBotUser, getUnpaidOrdersByClientPhone } = require('./lib/partners-db');
+const {
+  openDb,
+  getBotUser,
+  registerBotUser,
+  getUnpaidOrdersByClientPhone,
+  getUnpaidOrdersByUserPhone,
+} = require('./lib/partners-db');
 const { isPhoneAllowed, normalizeRegisteredPhone } = require('./lib/bot-users');
 const { registerVipHandlers, handleVipMessage } = require('./lib/vip-bot');
 const { registerServiceHandlers, handleServiceMessage, makeServiceButtonForResult } = require('./lib/service-bot');
-const { formatClickUrl } = require('./lib/click');
 const { formatPaymentPageUrl } = require('./lib/payments-api');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -34,12 +39,13 @@ const HELP_TEXT = [
 const REGISTER_PROMPT = [
   'Бот поиска пользователей Regos',
   '',
-  'Для доступа нажмите кнопку ниже и отправьте свой номер телефона.',
-  'Номер должен быть в списке разрешённых.',
+  'Нажмите кнопку ниже и отправьте свой номер телефона.',
+  'После этого бот покажет доступные действия.',
 ].join('\n');
 
 const REGISTER_SUCCESS = 'Регистрация успешна. Теперь вы можете выполнять поиск.';
-const ACCESS_DENIED = 'Ваш номер телефона не найден в списке разрешённых. Доступ запрещён.';
+const CUSTOMER_NO_ORDERS = 'По вашему номеру не найдено неоплаченных заказов.';
+const CUSTOMER_ONLY_MODE_TEXT = 'Доступ только к оплате. Отправьте /start для проверки заказов.';
 
 const REGISTER_KEYBOARD = {
   reply_markup: {
@@ -113,20 +119,13 @@ async function sendBotMessage(chatId, text, options) {
 
 function formatUnpaidOrderLines(order) {
   const paymentPageUrl = formatPaymentPageUrl(order.id);
-  let paymentUrl = null;
-  try {
-    paymentUrl = formatClickUrl(order.id, order.amount);
-  } catch {
-    paymentUrl = null;
-  }
-  const paymentLink = paymentPageUrl || paymentUrl;
   const lines = [
     `ID: ${order.id}`,
     `Сумма: ${order.amount} ${order.currency || 'UZS'}`,
     `Статус: ${order.status}`,
   ];
-  if (paymentLink) {
-    lines.push(`${paymentPageUrl ? 'Страница оплаты' : 'Ссылка на оплату'}: ${paymentLink}`);
+  if (paymentPageUrl) {
+    lines.push(`Страница оплаты: ${paymentPageUrl}`);
   }
   return lines;
 }
@@ -150,12 +149,14 @@ function formatUnpaidOrdersBlock(orders) {
   return `${header}\n\n${blocks.join('\n\n')}`;
 }
 
-async function sendSearchResultWithAction(chatId, telegramId, entry) {
+async function sendSearchResultWithAction(chatId, telegramId, entry, { appendUnpaid = true } = {}) {
   let text = entry.message || '';
-  const unpaidOrders = getUnpaidOrdersByClientPhone(db, entry.phone);
-  const unpaidBlock = formatUnpaidOrdersBlock(unpaidOrders);
-  if (unpaidBlock) {
-    text = `${text}\n\n${unpaidBlock}`;
+  if (appendUnpaid) {
+    const unpaidOrders = getUnpaidOrdersByClientPhone(db, entry.phone);
+    const unpaidBlock = formatUnpaidOrdersBlock(unpaidOrders);
+    if (unpaidBlock) {
+      text = `${text}\n\n${unpaidBlock}`;
+    }
   }
 
   const chunks = splitTelegramMessage(text);
@@ -168,6 +169,21 @@ async function sendSearchResultWithAction(chatId, telegramId, entry) {
     }
   }
 }
+
+function isEmployeeBotUser(botUser) {
+  return !!botUser && isPhoneAllowed(botUser.phone);
+}
+
+async function sendCustomerPaymentLinks(chatId, phone) {
+  const orders = getUnpaidOrdersByUserPhone(db, phone);
+  const unpaidBlock = formatUnpaidOrdersBlock(orders);
+  if (!unpaidBlock) {
+    await sendBotMessage(chatId, CUSTOMER_NO_ORDERS, REMOVE_KEYBOARD);
+    return;
+  }
+  await sendBotMessage(chatId, unpaidBlock, REMOVE_KEYBOARD);
+}
+
 function getPhoneFromMessage(msg) {
   if (msg.contact?.phone_number) {
     return msg.contact.phone_number;
@@ -181,10 +197,7 @@ function tryRegisterUser(msg) {
     return { ok: false, reason: 'invalid' };
   }
 
-  if (!isPhoneAllowed(phoneInput)) {
-    return { ok: false, reason: 'denied' };
-  }
-
+  const isEmployee = isPhoneAllowed(phoneInput);
   const phone = normalizeRegisteredPhone(phoneInput);
   const user = registerBotUser(db, {
     telegramId: msg.from.id,
@@ -194,7 +207,7 @@ function tryRegisterUser(msg) {
     lastName: msg.from.last_name,
   });
 
-  return { ok: true, user };
+  return { ok: true, user, role: isEmployee ? 'employee' : 'customer' };
 }
 
 registerVipHandlers(bot, {
@@ -206,22 +219,30 @@ registerServiceHandlers(bot, {
   getBotUser: (telegramId) => getBotUser(db, telegramId),
 });
 
-bot.onText(/\/start/, (msg) => {
+bot.onText(/\/start/, async (msg) => {
   const botUser = getBotUser(db, msg.from.id);
   if (botUser) {
-    bot.sendMessage(msg.chat.id, `Бот поиска пользователей Regos\n\n${HELP_TEXT}`, REMOVE_KEYBOARD);
+    if (isEmployeeBotUser(botUser)) {
+      await bot.sendMessage(msg.chat.id, `Бот поиска пользователей Regos\n\n${HELP_TEXT}`, REMOVE_KEYBOARD);
+      return;
+    }
+    await sendCustomerPaymentLinks(msg.chat.id, botUser.phone);
     return;
   }
-  sendRegisterPrompt(msg.chat.id);
+  await sendRegisterPrompt(msg.chat.id);
 });
 
-bot.onText(/\/help/, (msg) => {
+bot.onText(/\/help/, async (msg) => {
   const botUser = getBotUser(db, msg.from.id);
   if (!botUser) {
-    sendRegisterPrompt(msg.chat.id);
+    await sendRegisterPrompt(msg.chat.id);
     return;
   }
-  bot.sendMessage(msg.chat.id, HELP_TEXT, REMOVE_KEYBOARD);
+  if (!isEmployeeBotUser(botUser)) {
+    await sendCustomerPaymentLinks(msg.chat.id, botUser.phone);
+    return;
+  }
+  await bot.sendMessage(msg.chat.id, HELP_TEXT, REMOVE_KEYBOARD);
 });
 
 bot.on('message', async (msg) => {
@@ -233,14 +254,20 @@ bot.on('message', async (msg) => {
   if (!botUser) {
     const registration = tryRegisterUser(msg);
     if (registration.ok) {
-      await sendBotMessage(msg.chat.id, `${REGISTER_SUCCESS}\n\n${HELP_TEXT}`, REMOVE_KEYBOARD);
-      return;
-    }
-    if (registration.reason === 'denied') {
-      await bot.sendMessage(msg.chat.id, ACCESS_DENIED, REGISTER_KEYBOARD);
+      if (registration.role === 'employee') {
+        await sendBotMessage(msg.chat.id, `${REGISTER_SUCCESS}\n\n${HELP_TEXT}`, REMOVE_KEYBOARD);
+      } else {
+        await sendCustomerPaymentLinks(msg.chat.id, registration.user.phone);
+      }
       return;
     }
     await sendRegisterPrompt(msg.chat.id);
+    return;
+  }
+
+  const isEmployee = isEmployeeBotUser(botUser);
+  if (!isEmployee) {
+    await sendBotMessage(msg.chat.id, CUSTOMER_ONLY_MODE_TEXT, REMOVE_KEYBOARD);
     return;
   }
 
@@ -257,8 +284,14 @@ bot.on('message', async (msg) => {
   try {
     const result = searchUser(text, db);
     if (result.found && Array.isArray(result.results) && result.results.length > 0) {
+      const shownUnpaidForPhones = new Set();
       for (const entry of result.results) {
-        await sendSearchResultWithAction(msg.chat.id, msg.from.id, entry);
+        const phoneKey = String(entry.phone || '').trim();
+        const appendUnpaid = !phoneKey || !shownUnpaidForPhones.has(phoneKey);
+        if (appendUnpaid && phoneKey) {
+          shownUnpaidForPhones.add(phoneKey);
+        }
+        await sendSearchResultWithAction(msg.chat.id, msg.from.id, entry, { appendUnpaid });
       }
       return;
     }
