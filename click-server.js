@@ -11,10 +11,16 @@ const { createBotAdminRouter } = require('./lib/bot-admin');
 const app = express();
 const db = openDb();
 const port = Number(process.env.CLICK_SERVER_PORT || 3000);
+const publicStatic = express.static(getPublicDir());
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-app.use(express.static(getPublicDir()));
+app.use((req, res, next) => {
+  if (req.path === '/bot-admin' || req.path.startsWith('/bot-admin/')) {
+    return next();
+  }
+  return publicStatic(req, res, next);
+});
 
 app.get('/brand-logo.png', (_req, res) => {
   res.sendFile(path.join(__dirname, '8c69cd56997dd51c986e951e0d553f14582ea8b4.png'));

@@ -16,6 +16,10 @@
           </div>
           <button type="button" class="btn btn-secondary" id="logout-btn">Выйти</button>
         </div>
+        <nav class="admin-nav" aria-label="Разделы админ-панели">
+          <a class="admin-nav__link admin-nav__link--active" href="/bot-admin/" aria-current="page">Пользователи</a>
+          <a class="admin-nav__link" href="/bot-admin/order-logs">Журнал заказов</a>
+        </nav>
       </header>
 
       <section class="card">
@@ -49,15 +53,7 @@
           </div>
         </div>
         <div id="users-table-wrap"></div>
-      </section>
-
-      <section class="card">
-        <div class="card-toolbar">
-          <h2>Журнал заказов</h2>
-          <button type="button" class="btn btn-secondary btn-sm" id="refresh-logs-btn">Обновить</button>
-        </div>
-        <p class="card-hint">Создание и удаление заказов с указанием сотрудника.</p>
-        <div id="order-logs-wrap"></div>
+        <div id="users-pagination" class="pagination-wrap"></div>
       </section>
     </main>
 
@@ -90,7 +86,7 @@
       </div>
     </div>
 
+    <script src="admin-common.js"></script>
     <script src="admin.js"></script>
-    <script src="admin-order-logs.js"></script>
   </body>
 </html>

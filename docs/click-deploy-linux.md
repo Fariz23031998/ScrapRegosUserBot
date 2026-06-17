@@ -73,6 +73,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable scrapregos-click
 sudo systemctl start scrapregos-click
 sudo systemctl status scrapregos-click
+sudo systemctl restart scrapregos-click
 ```
 
 ## 5) Required environment variables

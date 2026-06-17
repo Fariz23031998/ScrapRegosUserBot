@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Журнал заказов — админ-панель бота</title>
+    <link rel="stylesheet" href="admin.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <div class="header-top">
+          <div>
+            <h1>Журнал заказов</h1>
+            <p>Создание и удаление заказов с указанием сотрудника.</p>
+          </div>
+          <button type="button" class="btn btn-secondary" id="logout-btn">Выйти</button>
+        </div>
+        <nav class="admin-nav" aria-label="Разделы админ-панели">
+          <a class="admin-nav__link" href="/bot-admin/">Пользователи</a>
+          <a class="admin-nav__link admin-nav__link--active" href="/bot-admin/order-logs" aria-current="page">Журнал заказов</a>
+        </nav>
+      </header>
+
+      <section class="card">
+        <div class="card-toolbar">
+          <h2>Записи</h2>
+          <div class="card-toolbar-right">
+            <div class="search-box" id="search-box">
+              <span class="search-box__icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <input
+                type="search"
+                id="log-search"
+                class="search-box__input"
+                placeholder="Поиск по заказу, телефону, сотруднику…"
+                autocomplete="off"
+                enterkeyhint="search"
+              />
+              <button type="button" class="search-box__clear" id="search-clear" aria-label="Очистить поиск" hidden>&times;</button>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="refresh-logs-btn">Обновить</button>
+          </div>
+        </div>
+        <div id="order-logs-wrap"></div>
+        <div id="order-logs-pagination" class="pagination-wrap"></div>
+      </section>
+    </main>
+
+    <script src="admin-common.js"></script>
+    <script src="admin-order-logs.js"></script>
+  </body>
+</html>

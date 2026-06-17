@@ -3,7 +3,9 @@ let users = [];
 let modalMode = 'create';
 let activeRole = 'employee';
 let searchQuery = '';
-let searchTimer = null;
+let currentPage = 1;
+let pageLimit = 25;
+let totalUsers = 0;
 
 const modalEl = document.getElementById('user-modal');
 const userForm = document.getElementById('user-form');
@@ -16,31 +18,7 @@ const phoneInput = userForm.elements.phone;
 const searchInput = document.getElementById('user-search');
 const searchClearBtn = document.getElementById('search-clear');
 const searchBox = document.getElementById('search-box');
-
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401) {
-    window.location.href = '/bot-admin/login';
-    throw new Error('Требуется вход в систему.');
-  }
-  if (!response.ok) {
-    throw new Error(data.message || 'Ошибка запроса');
-  }
-  return data;
-}
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+const usersPaginationEl = document.getElementById('users-pagination');
 
 function renderRightsInputs(container, selected = {}) {
   container.innerHTML = rightsMeta
@@ -194,6 +172,24 @@ function renderUsersTable() {
   `;
 }
 
+function renderUsersPagination() {
+  renderPagination(
+    usersPaginationEl,
+    { page: currentPage, limit: pageLimit, total: totalUsers },
+    {
+      onPageChange: (page) => {
+        currentPage = page;
+        loadUsers().catch((error) => window.alert(error.message));
+      },
+      onLimitChange: (limit) => {
+        pageLimit = limit;
+        currentPage = 1;
+        loadUsers().catch((error) => window.alert(error.message));
+      },
+    }
+  );
+}
+
 function openModal(mode, user = null) {
   modalMode = mode;
   modalError.hidden = true;
@@ -236,25 +232,28 @@ function closeModal() {
   modalError.hidden = true;
 }
 
-function updateSearchUi() {
-  const hasQuery = searchQuery.length > 0;
-  searchClearBtn.hidden = !hasQuery;
-  searchBox.classList.toggle('search-box--active', hasQuery);
-}
-
 async function loadUsers() {
-  const params = new URLSearchParams({ role: activeRole });
+  const params = new URLSearchParams({
+    role: activeRole,
+    page: String(currentPage),
+    limit: String(pageLimit),
+  });
   if (searchQuery) {
     params.set('q', searchQuery);
   }
   const data = await api(`/bot-admin/api/users?${params.toString()}`);
   users = data.users || [];
-  updateSearchUi();
+  totalUsers = data.total ?? users.length;
+  currentPage = data.page ?? currentPage;
+  pageLimit = data.limit ?? pageLimit;
+  updateSearchBoxUi(searchInput, searchClearBtn, searchBox, searchQuery);
   renderUsersTable();
+  renderUsersPagination();
 }
 
 function setActiveRole(role) {
   activeRole = role;
+  currentPage = 1;
   document.querySelectorAll('.role-tab').forEach((tab) => {
     const isActive = tab.dataset.role === role;
     tab.classList.toggle('role-tab--active', isActive);
@@ -265,10 +264,10 @@ function setActiveRole(role) {
 }
 
 async function init() {
+  await ensureSession();
   const meta = await api('/bot-admin/rights-meta');
   rightsMeta.push(...(meta.rights || []));
   await loadUsers();
-  window.dispatchEvent(new Event('bot-admin-ready'));
 }
 
 document.getElementById('create-user-btn').addEventListener('click', () => openModal('create'));
@@ -280,21 +279,15 @@ document.querySelectorAll('.role-tab').forEach((tab) => {
   });
 });
 
-searchInput.addEventListener('input', () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    searchQuery = searchInput.value.trim();
-    updateSearchUi();
+bindSearchBox({
+  input: searchInput,
+  clearBtn: searchClearBtn,
+  box: searchBox,
+  onSearch: (query) => {
+    searchQuery = query;
+    currentPage = 1;
     loadUsers().catch((error) => window.alert(error.message));
-  }, 300);
-});
-
-searchClearBtn.addEventListener('click', () => {
-  searchInput.value = '';
-  searchQuery = '';
-  updateSearchUi();
-  loadUsers().catch((error) => window.alert(error.message));
-  searchInput.focus();
+  },
 });
 
 document.getElementById('modal-close').addEventListener('click', closeModal);
@@ -368,15 +361,11 @@ document.getElementById('users-table-wrap').addEventListener('click', async (eve
   }
 });
 
-document.getElementById('logout-btn').addEventListener('click', async () => {
-  await fetch('/bot-admin/api/logout', { method: 'POST', credentials: 'same-origin' });
-  window.location.href = '/bot-admin/login';
-});
-
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !modalEl.hidden) closeModal();
 });
 
+setupLogout();
 init().catch((error) => {
   document.body.innerHTML = `<main class="page"><p class="message error">${escapeHtml(error.message)}</p></main>`;
 });

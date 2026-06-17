@@ -15,7 +15,7 @@ const { isLinkedEmployee, hasRight } = require('./lib/user-rights');
 const { syncUserCommands, getHelpCommandLines } = require('./lib/bot-commands');
 const { registerVipHandlers, handleVipMessage } = require('./lib/vip-bot');
 const { registerServiceHandlers, handleServiceMessage, makeServiceButtonForResult } = require('./lib/service-bot');
-const { registerReportHandlers } = require('./lib/report-bot');
+const { registerReportHandlers, handleReportMessage } = require('./lib/report-bot');
 const {
   registerOrderActionHandlers,
   appendDeleteButtonsForOrders,
@@ -325,6 +325,10 @@ bot.on('message', async (msg) => {
   }
 
   if (!text) return;
+
+  if (await handleReportMessage(bot, msg, db)) {
+    return;
+  }
 
   if (await handleServiceMessage(bot, msg, botUser, db)) {
     return;
