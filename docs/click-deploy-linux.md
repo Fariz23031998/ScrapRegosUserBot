@@ -13,27 +13,38 @@ It listens on `CLICK_SERVER_PORT` (default `3000`).
 
 ## 2) nginx reverse proxy
 
-Use the ready-made config in the repo root: `no-thing.uz.conf`.
+Payment routes live on **aserver.tech** (not `no-thing.uz`). Config file:
 
-**Do not** proxy all of `/api/` to port 3000 if the same host already serves another API (e.g. Regos Partner Bot on `:8001`). Route only payment paths:
+`/srv/RegosWholeSale/deploy/aserver.tech`
 
-- `/api/orders/` → `:3000` (longer prefix wins over `/api` → `:8001`)
+Routes proxied to port `3000`:
+
+- `/api/orders/` — payment API
 - `/click/`, `/pay`, `/bot-admin/`, payment static assets, order UUID pages
+
+Existing webhook routes on the same host are unchanged (`/webhook`, `/api/v1/telegram/webhook/`).
 
 Copy to the server and reload:
 
 ```bash
+sudo cp /srv/RegosWholeSale/deploy/aserver.tech /etc/nginx/sites-available/aserver.tech
+sudo ln -sf /etc/nginx/sites-available/aserver.tech /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Also update `no-thing.uz` if it still had payment routes (Partner Bot only):
+
+```bash
 sudo cp /srv/ScrapRegosUserBot/no-thing.uz.conf /etc/nginx/sites-available/no-thing.uz.conf
-sudo ln -sf /etc/nginx/sites-available/no-thing.uz.conf /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ## 3) CLICK merchant cabinet URLs
 
-Set:
+Set (use **aserver.tech** as the public payment host):
 
-- Prepare URL: `https://your-domain/click/prepare`
-- Complete URL: `https://your-domain/click/complete`
+- Prepare URL: `https://aserver.tech/click/prepare`
+- Complete URL: `https://aserver.tech/click/complete`
 
 ## 3.1) Payme cabinet
 
@@ -84,15 +95,15 @@ Set in `.env`:
 - `CLICK_SERVICE_ID`
 - `CLICK_MERCHANT_USER_ID`
 - `CLICK_SECRET_KEY`
-- `CLICK_RETURN_URL`
+- `CLICK_RETURN_URL` (e.g. `https://aserver.tech/{order-uuid}`)
 - `CLICK_SERVER_PORT`
-- `PUBLIC_BASE_URL` (used for payment page links like `https://your-domain/{order_id}`)
+- `PUBLIC_BASE_URL=https://aserver.tech` (payment page links like `https://aserver.tech/{order_id}`)
 - `PAYME_MERCHANT_ID`, `PAYME_SECRET_KEY`, `PAYME_TEST_KEY`, `PAYME_TEST_MODE`, `PAYME_RETURN_URL` (optional Payme)
 - `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (web admin at `/bot-admin/`)
 
 ## 6) Bot admin and employees
 
-Open `https://your-domain/bot-admin/` and sign in with `BOT_ADMIN_LOGIN` / `BOT_ADMIN_PASSWORD`.
+Open `https://aserver.tech/bot-admin/` and sign in with `BOT_ADMIN_LOGIN` / `BOT_ADMIN_PASSWORD`.
 
 1. Add employee phone and rights in the admin panel.
 2. Employee opens the Telegram bot and sends the same phone to link their account.
@@ -102,7 +113,7 @@ Open `https://your-domain/bot-admin/` and sign in with `BOT_ADMIN_LOGIN` / `BOT_
 
 Open in browser:
 
-`https://your-domain/ORDER_UUID`
+`https://aserver.tech/ORDER_UUID`
 
 The page loads payment options from:
 
