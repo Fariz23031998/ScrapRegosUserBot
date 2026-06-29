@@ -1,0 +1,8 @@
+# Copy to signing.properties and fill in your values.
+# signing.properties is gitignored — never commit real passwords or keystores.
+
+# Path relative to the android/ directory
+STORE_FILE=app/sms-gateway-release.keystore
+STORE_PASSWORD=change_me
+KEY_ALIAS=smsgateway
+KEY_PASSWORD=change_me

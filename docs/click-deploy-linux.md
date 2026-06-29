@@ -6,7 +6,7 @@ Service command:
 
 ```bash
 cd /srv/ScrapRegosUserBot
-npm run click-server
+npm run server
 ```
 
 It listens on `CLICK_SERVER_PORT` (default `3000`).
@@ -21,6 +21,7 @@ Routes proxied to port `3000`:
 
 - `/api/orders/` — payment API
 - `/click/`, `/pay`, `/bot-admin/`, payment static assets, order UUID pages
+- `/sms-gateway/` — WebSocket SMS gateway for Android app (requires upgrade headers)
 
 Existing webhook routes on the same host are unchanged (`/webhook`, `/api/v1/telegram/webhook/`).
 
@@ -37,6 +38,19 @@ Also update `no-thing.uz` if it still had payment routes (Partner Bot only):
 ```bash
 sudo cp /srv/ScrapRegosUserBot/no-thing.uz.conf /etc/nginx/sites-available/no-thing.uz.conf
 sudo nginx -t && sudo systemctl reload nginx
+```
+
+WebSocket proxy block for the SMS gateway (add inside the `server` block for aserver.tech):
+
+```nginx
+location /sms-gateway/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
+}
 ```
 
 ## 3) CLICK merchant cabinet URLs
@@ -69,7 +83,7 @@ Type=simple
 User=app
 Group=app
 WorkingDirectory=/srv/ScrapRegosUserBot
-ExecStart=/usr/bin/node click-server.js
+ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=10
 
@@ -100,6 +114,21 @@ Set in `.env`:
 - `PUBLIC_BASE_URL=https://aserver.tech` (payment page links like `https://aserver.tech/{order_id}`)
 - `PAYME_MERCHANT_ID`, `PAYME_SECRET_KEY`, `PAYME_TEST_KEY`, `PAYME_TEST_MODE`, `PAYME_RETURN_URL` (optional Payme)
 - `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (web admin at `/bot-admin/`)
+- `REDIS_URL`, `SMS_GATEWAY_TOKEN` (SMS gateway; see [SMS gateway](sms-gateway.md))
+
+Both `npm run server` and `npm run bot` need `REDIS_URL` in `.env`.
+
+## 5.1) Redis (SMS queue)
+
+Install and enable Redis on the host:
+
+```bash
+sudo apt install redis-server
+sudo systemctl enable redis-server
+sudo systemctl start redis-server
+```
+
+Default bind is localhost (`127.0.0.1:6379`). Set `REDIS_URL=redis://127.0.0.1:6379` in `.env`.
 
 ## 6) Bot admin and employees
 

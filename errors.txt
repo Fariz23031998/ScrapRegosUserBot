@@ -1,0 +1,32 @@
+Render Error
+
+undefined is not a function
+
+Source:
+C:\Projects\ScrapRegosUserBot\sms-gateway\App.tsx (95:25)
+
+Call Stack:
+useEffect$argument_0 (C:\Projects\ScrapRegosUserBot\sms-gateway\App.tsx:95)
+callCreate.react_stack_bottom_frame (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:17215)
+runWithFiberInDEV (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:697)
+commitHookEffectListMount (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:10563)
+commitHookPassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:10650)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12049)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12293)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12041)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12293)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12041)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12293)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12041)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12041)
+recursivelyTraversePassiveMountEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12004)
+commitPassiveMountOnFiber (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:12084)
+flushPassiveEffects (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:14844)
+scheduleCallback$argument_1 (C:\Projects\ScrapRegosUserBot\sms-gateway\node_modules\react-native\Libraries\Renderer\implementations\ReactFabric-dev.js:14415)

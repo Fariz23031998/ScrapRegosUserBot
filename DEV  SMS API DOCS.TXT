@@ -1,0 +1,120 @@
+
+DevSMS API
+RESTful API orqali SMS yuborish xizmati
+
+Base URL: https://devsms.uz/api
+
+POST SMS Yuborish: https://devsms.uz/api/send_sms.php
+
+Request Body:
+
+{
+    "phone": "998901234567",
+    "message": "Assalomu alaykum, tizimimizga xush kelibsiz!",
+    "from": "4546",
+    "callback_url": "https://your-domain.com/sms-callback"
+}
+Parametrlar:
+Parametr	Turi	Majburiy	Tavsif
+phone	string	Ha	Telefon raqam (998901234567 yoki xalqaro: 12025551234)
+message	string	Ha	SMS matni
+from	string	Yo'q	Kimdan (default: 4546)
+callback_url	string	Yo'q	SMS status o'zgarganda natija yuboriladigan URL (http:// yoki https://)
+Response:
+
+// O'zbekiston raqamiga
+{
+    "success": true,
+    "message": "SMS muvaffaqiyatli yuborildi",
+    "data": {
+        "sms_id": 123,
+        "request_id": "uuid-here",
+        "status": "sent",
+        "parts_count": 1,
+        "total_cost": 50,
+        "balance": 950,
+        "type": "eskiz"
+    }
+}
+
+// Xalqaro raqamga
+{
+    "success": true,
+    "message": "SMS muvaffaqiyatli yuborildi",
+    "data": {
+        "sms_id": 124,
+        "request_id": "uuid-here",
+        "status": "sent",
+        "parts_count": 1,
+        "total_cost": 112,
+        "balance": 838,
+        "type": "eskiz",
+        "country": "United States",
+        "country_code": "us"
+    }
+}
+
+
+GET balansni Olish: https://devsms.uz/api/get_balance.php
+
+Response:
+Nusxalash
+{
+    "success": true,
+    "data": {
+        "balance": 1000,
+        "sms_price": 50,
+        "statistics": {
+            "total_sms": 100,
+            "total_spent": 5000,
+            "today_sms": 10,
+            "today_spent": 500,
+            "month_sms": 50,
+            "month_spent": 2500
+        }
+    }
+}
+
+GET SMS Tarixini Olish: https://devsms.uz/api/get_history.php
+Query Parametrlar:
+Parametr	Turi	Default	Tavsif
+limit	integer	50	Nechta SMS (max: 200)
+offset	integer	0	Offset
+status	string	null	Status filter
+Misol:
+Nusxalash
+GET https://devsms.uz/api/get_history.php?limit=10&offset=0&status=delivered
+Response:
+Nusxalash
+{
+    "success": true,
+    "data": {
+        "history": [
+            {
+                "id": 123,
+                "phone_number": "998901234567",
+                "message": "Salom!",
+                "status": "delivered",
+                "parts_count": 1,
+                "total_cost": 50,
+                "from_number": "4546",
+                "eskiz_request_id": "uuid-here",
+                "eskiz_message_id": "msg-id",
+                "sent_at": "2026-03-09 10:30:00",
+                "delivered_at": "2026-03-09 10:30:05",
+                "failed_at": null,
+                "created_at": "2026-03-09 10:29:58"
+            }
+        ],
+        "count": 1,
+        "limit": 10,
+        "offset": 0
+    }
+}
+Status vaqtlari:
+Maydon	Tavsif
+created_at	SMS yaratilgan vaqt
+sent_at	SMS yuborilgan vaqt
+delivered_at	SMS yetkazilgan vaqt (faqat delivered statusda)
+failed_at	SMS muvaffaqiyatsiz bo'lgan vaqt (faqat failed statusda)
+

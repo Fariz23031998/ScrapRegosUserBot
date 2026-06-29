@@ -32,7 +32,7 @@ ScrapRegosUserBot — Telegram-бот для сотрудников поддер
 | Компонент | Файл | Роль |
 |-----------|------|------|
 | Telegram-бот | `bot.js`, `lib/service-bot.js` | Создание заказа, ссылка на оплату |
-| Платёжный сервер | `click-server.js` | Статика, API, webhook CLICK |
+| Платёжный сервер | `server.js` | Статика, API, webhook CLICK |
 | Провайдер CLICK | `lib/click.js` | URL оплаты, проверка подписи |
 | Список способов оплаты | `lib/payments-api.js` | `GET /api/orders/:id/payments` |
 | Страница оплаты | `public/pay.html`, `public/js/payment.js` | Кнопки провайдеров |
@@ -85,7 +85,7 @@ ScrapRegosUserBot — Telegram-бот для сотрудников поддер
 | Ссылка оплаты | Query-параметры на `my.click.uz` | Base64 URL или POST на `checkout.paycom.uz` |
 | Повторы запросов | Минимальная обработка | **Обязательна идемпотентность** |
 
-Текущий `click-server.js` — хороший образец валидации заказа и суммы; для Payme понадобится отдельный модуль и таблица/поля для промежуточных транзакций Payme.
+Текущий `server.js` — хороший образец валидации заказа и суммы; для Payme понадобится отдельный модуль и таблица/поля для промежуточных транзакций Payme.
 
 ---
 
@@ -215,7 +215,7 @@ sequenceDiagram
     participant Bot as bot.js
     participant Page as pay.html
     participant Payme as checkout.paycom.uz
-    participant Server as click-server.js
+    participant Server as server.js
     participant DB as SQLite
 
     Staff->>Bot: Добавить услугу, сумма
@@ -332,7 +332,7 @@ function buildPaymePaymentOption(order) {
 
 В `getPaymentOptionsForOrder` добавить вызов `buildPaymePaymentOption` рядом с CLICK.
 
-### 8.3. Расширить `click-server.js`
+### 8.3. Расширить `server.js`
 
 Добавить маршрут:
 
@@ -346,7 +346,7 @@ POST /payme  →  handlePaymeJsonRpc(req, res)
 
 ### 8.4. Опционально: `lib/payme-handlers.js`
 
-Логика методов + работа с БД — чтобы `click-server.js` не разрастался (правило: файлы < 500 строк).
+Логика методов + работа с БД — чтобы `server.js` не разрастался (правило: файлы < 500 строк).
 
 ### 8.5. `lib/partners-db.js`
 
@@ -430,7 +430,7 @@ return `${base}/${Buffer.from(params, 'utf8').toString('base64')}`;
 ### 10.1. Каркас обработчика
 
 ```javascript
-// Псевдокод для click-server.js
+// Псевдокод для server.js
 app.post('/payme', (req, res) => {
   const body = req.body ?? {};
   const requestId = body.id;
@@ -466,7 +466,7 @@ app.post('/payme', (req, res) => {
 
 ### 10.2. Общая валидация заказа
 
-Переиспользовать логику из `click-server.js`:
+Переиспользовать логику из `server.js`:
 
 ```javascript
 function amountsEqualTiyin(paymeAmount, orderAmountUzs) {
@@ -566,7 +566,7 @@ function amountsEqualTiyin(paymeAmount, orderAmountUzs) {
    - `markOrderPaid(db, orderId, { transactionId: paymeId, provider: 'payme' })`
    - обновить `payme_transactions` → `state = 2`, `perform_time`.
 
-Аналог текущего `/click/complete` в `click-server.js` (строки 69–100).
+Аналог текущего `/click/complete` в `server.js` (строки 69–100).
 
 ### 11.4. CancelTransaction
 
@@ -614,7 +614,7 @@ orders (1) ←—— (N) payments (provider = 'payme')
 При успешном `PerformTransaction`:
 
 ```javascript
-// Псевдокод — аналог click-server.js /click/complete
+// Псевдокод — аналог server.js /click/complete
 createPayment(db, {
   orderId: order.id,
   telegramId: order.telegram_id,
@@ -657,7 +657,7 @@ PAYME_RETURN_URL=https://your-domain/thanks
 
 ## 14. Деплой и nginx
 
-Платёжный сервер тот же: `npm run click-server` (порт `CLICK_SERVER_PORT`, по умолчанию 3000).
+Платёжный сервер тот же: `npm run server` (порт `CLICK_SERVER_PORT`, по умолчанию 3000).
 
 В конфиг nginx (по аналогии с [click-deploy-linux.md](./click-deploy-linux.md)) добавить:
 

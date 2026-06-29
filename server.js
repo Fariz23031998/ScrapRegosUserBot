@@ -1,5 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
+const http = require('http');
 const path = require('path');
 const express = require('express');
 const { openDb, getOrderById, createPayment, markOrderPaid } = require('./lib/partners-db');
@@ -7,6 +8,7 @@ const { verifyClickSignature } = require('./lib/click');
 const { syncPaymeReceiptStatus } = require('./lib/payme-receipts');
 const { getPaymentOptionsForOrder, getPublicDir, isOrderId } = require('./lib/payments-api');
 const { createBotAdminRouter } = require('./lib/bot-admin');
+const { attachSmsGateway } = require('./lib/sms-gateway-ws');
 
 const app = express();
 const db = openDb();
@@ -148,7 +150,10 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(port, () => {
+const server = http.createServer(app);
+attachSmsGateway(server, { db });
+
+server.listen(port, () => {
   const adminConfigured = Boolean(
     process.env.BOT_ADMIN_LOGIN?.trim() && process.env.BOT_ADMIN_PASSWORD?.trim()
   );
