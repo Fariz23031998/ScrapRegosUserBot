@@ -95,10 +95,10 @@ Enable:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable scrapregos-click
-sudo systemctl start scrapregos-click
-sudo systemctl status scrapregos-click
-sudo systemctl restart scrapregos-click
+sudo systemctl enable scrapregos-server
+sudo systemctl start scrapregos-server
+sudo systemctl status scrapregos-server
+sudo systemctl restart scrapregos-server
 ```
 
 ## 5) Required environment variables

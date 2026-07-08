@@ -25,7 +25,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/brand-logo.png', (_req, res) => {
-  res.sendFile(path.join(__dirname, '8c69cd56997dd51c986e951e0d553f14582ea8b4.png'));
+  res.sendFile(path.join(__dirname, 'brand-logo.png'));
 });
 
 function amountsEqual(payloadAmount, orderAmount) {
