@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   Alert,
   PermissionsAndroid,
@@ -13,23 +13,20 @@ import {
   View,
 } from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
+import {getSimCards, SimCard} from './src/smsSender';
 import {
   ConnectionState,
   GatewayEvent,
-  SmsGatewayClient,
-  SmsJob,
-} from './src/wsClient';
-import {
-  getSimCards,
-  setSelectedSimSubscriptionId,
-  SimCard,
-} from './src/smsSender';
-import {
+  getGatewayStatus,
+  isIgnoringBatteryOptimizations,
+  requestIgnoreBatteryOptimizations,
   requestNotificationPermission,
   startBackgroundService,
   stopBackgroundService,
-  updateBackgroundServiceStatus,
+  subscribeToGatewayEvents,
 } from './src/gatewayService';
+
+type LastJob = {jobId: string; phone: string; orderId: string};
 
 const STORAGE_SERVER_URL = 'sms_gateway_server_url';
 const STORAGE_TOKEN = 'sms_gateway_token';
@@ -53,18 +50,6 @@ async function requestSmsPermission(): Promise<boolean> {
   return granted === PermissionsAndroid.RESULTS.GRANTED;
 }
 
-function notificationStatus(state: ConnectionState): string {
-  switch (state) {
-    case 'connected':
-      return 'Connected — listening for SMS jobs';
-    case 'connecting':
-      return 'Connecting to server…';
-    case 'auth_failed':
-      return 'Authentication failed';
-    default:
-      return 'Disconnected';
-  }
-}
 function stateLabel(state: ConnectionState): string {
   switch (state) {
     case 'connected':
@@ -90,7 +75,6 @@ function formatSimLabel(sim: SimCard): string {
 }
 
 function App() {
-  const clientRef = useRef(new SmsGatewayClient());
   const [serverUrl, setServerUrl] = useState('ws://10.0.2.2:3000/sms-gateway/ws');
   const [token, setToken] = useState('');
   const [simCards, setSimCards] = useState<SimCard[]>([]);
@@ -98,9 +82,10 @@ function App() {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>('disconnected');
   const [running, setRunning] = useState(false);
-  const [lastJob, setLastJob] = useState<SmsJob | null>(null);
+  const [lastJob, setLastJob] = useState<LastJob | null>(null);
   const [lastResult, setLastResult] = useState<string>('—');
   const [logs, setLogs] = useState<string[]>([]);
+  const [batteryExempt, setBatteryExempt] = useState(true);
 
   const appendLog = useCallback((message: string) => {
     const line = `${new Date().toLocaleTimeString()} — ${message}`;
@@ -112,32 +97,39 @@ function App() {
       if (event.type === 'state') {
         setConnectionState(event.state);
         appendLog(`State: ${stateLabel(event.state)}`);
-        updateBackgroundServiceStatus(notificationStatus(event.state)).catch(
-          () => {},
-        );
       } else if (event.type === 'job') {
-        setLastJob(event.job);
-        appendLog(`Job ${event.job.id} → ${event.job.phone}`);
-        updateBackgroundServiceStatus(
-          `Sending SMS to ${event.job.phone}`,
-        ).catch(() => {});
+        setLastJob({
+          jobId: event.jobId,
+          phone: event.phone,
+          orderId: event.orderId,
+        });
+        appendLog(`Job ${event.jobId} → ${event.phone}`);
       } else if (event.type === 'result') {
         const summary = event.success
           ? `Sent job ${event.jobId}`
           : `Failed job ${event.jobId}: ${event.error ?? 'unknown error'}`;
         setLastResult(summary);
         appendLog(summary);
-        updateBackgroundServiceStatus(
-          event.success
-            ? 'Connected — listening for SMS jobs'
-            : `Last send failed: ${event.error ?? 'unknown error'}`,
-        ).catch(() => {});
       } else if (event.type === 'log') {
         appendLog(event.message);
       }
     },
     [appendLog],
   );
+
+  useEffect(() => {
+    const unsubscribe = subscribeToGatewayEvents(handleEvent);
+    getGatewayStatus()
+      .then(status => {
+        setRunning(status.running);
+        setConnectionState(status.state);
+      })
+      .catch(() => {});
+    isIgnoringBatteryOptimizations()
+      .then(setBatteryExempt)
+      .catch(() => {});
+    return unsubscribe;
+  }, [handleEvent]);
 
   useEffect(() => {
     AsyncStorage.getMany([
@@ -158,7 +150,6 @@ function App() {
         const parsed = Number(savedSimId);
         if (Number.isFinite(parsed)) {
           setSelectedSimId(parsed);
-          setSelectedSimSubscriptionId(parsed);
         }
       }
     });
@@ -170,7 +161,6 @@ function App() {
         setSimCards(cards);
         if (cards.length === 1) {
           setSelectedSimId(cards[0].subscriptionId);
-          setSelectedSimSubscriptionId(cards[0].subscriptionId);
           AsyncStorage.setItem(
             STORAGE_SIM_SUBSCRIPTION_ID,
             String(cards[0].subscriptionId),
@@ -184,10 +174,8 @@ function App() {
               current != null &&
               cards.some(card => card.subscriptionId === current)
             ) {
-              setSelectedSimSubscriptionId(current);
               return current;
             }
-            setSelectedSimSubscriptionId(null);
             return null;
           });
         }
@@ -214,11 +202,15 @@ function App() {
 
   const selectSim = async (subscriptionId: number) => {
     setSelectedSimId(subscriptionId);
-    setSelectedSimSubscriptionId(subscriptionId);
     await AsyncStorage.setItem(
       STORAGE_SIM_SUBSCRIPTION_ID,
       String(subscriptionId),
     );
+  };
+
+  const enableBackground = async () => {
+    const exempt = await requestIgnoreBatteryOptimizations();
+    setBatteryExempt(exempt);
   };
 
   const startGateway = async () => {
@@ -248,23 +240,26 @@ function App() {
       );
     }
 
+    const exempt = await isIgnoringBatteryOptimizations();
+    setBatteryExempt(exempt);
+    if (!exempt) {
+      await requestIgnoreBatteryOptimizations();
+    }
+
     await AsyncStorage.setMany({
       [STORAGE_SERVER_URL]: trimmedUrl,
       [STORAGE_TOKEN]: trimmedToken,
     });
 
+    const subscriptionId =
+      selectedSimId ?? simCards[0]?.subscriptionId ?? -1;
+
     setRunning(true);
-    await startBackgroundService('Connecting to server…');
-    clientRef.current.start({
-      serverUrl: trimmedUrl,
-      token: trimmedToken,
-      onEvent: handleEvent,
-    });
+    await startBackgroundService(trimmedUrl, trimmedToken, subscriptionId);
   };
 
   const stopGateway = async () => {
     setRunning(false);
-    clientRef.current.stop();
     await stopBackgroundService();
   };
 
@@ -275,9 +270,27 @@ function App() {
         <ScrollView contentContainerStyle={styles.container}>
           <Text style={styles.title}>SMS Gateway</Text>
           <Text style={styles.subtitle}>
-            Connects to backend WebSocket and sends queued payment SMS. Keeps
-            running in the background while connected.
+            Connects to backend WebSocket and sends queued payment SMS. Runs as a
+            background service that survives app close and restarts on reboot.
           </Text>
+
+          {!batteryExempt ? (
+            <View style={styles.warningCard}>
+              <Text style={styles.warningTitle}>Battery optimization is on</Text>
+              <Text style={styles.warningText}>
+                To keep the gateway alive when the app is closed, disable battery
+                optimization for this app. On some phones you must also enable
+                "Autostart" in system settings.
+              </Text>
+              <Pressable
+                style={styles.warningButton}
+                onPress={enableBackground}>
+                <Text style={styles.warningButtonText}>
+                  Allow background running
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
 
           <View style={styles.card}>
             <Text style={styles.label}>Server URL</Text>
@@ -416,6 +429,35 @@ const styles = StyleSheet.create({
     gap: 10,
     borderWidth: 1,
     borderColor: '#eaecf0',
+  },
+  warningCard: {
+    backgroundColor: '#fffaeb',
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#fedf89',
+  },
+  warningTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#b54708',
+  },
+  warningText: {
+    fontSize: 13,
+    color: '#93370d',
+  },
+  warningButton: {
+    marginTop: 4,
+    backgroundColor: '#f79009',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  warningButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 15,
   },
   label: {
     fontSize: 13,

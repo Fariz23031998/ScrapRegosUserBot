@@ -432,6 +432,11 @@ input[type='text']:read-only {
   color: #b91c1c;
 }
 
+.log-action--paid_cash {
+  background: #dcfce7;
+  color: #15803d;
+}
+
 .order-logs-table td {
   vertical-align: top;
 }

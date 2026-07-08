@@ -11,14 +11,14 @@ const {
   getUnpaidOrdersByClientPhone,
   getUnpaidOrdersByUserPhone,
 } = require('./lib/partners-db');
-const { isLinkedEmployee, hasRight } = require('./lib/user-rights');
+const { isLinkedEmployee } = require('./lib/user-rights');
 const { syncUserCommands, getHelpCommandLines } = require('./lib/bot-commands');
 const { registerVipHandlers, handleVipMessage } = require('./lib/vip-bot');
 const { registerServiceHandlers, handleServiceMessage, makeServiceButtonForResult } = require('./lib/service-bot');
 const { registerReportHandlers, handleReportMessage } = require('./lib/report-bot');
 const {
   registerOrderActionHandlers,
-  appendDeleteButtonsForOrders,
+  sendOrdersWithActions,
 } = require('./lib/order-actions-bot');
 const { formatUnpaidOrdersBlock } = require('./lib/bot-format');
 
@@ -167,15 +167,8 @@ async function sendEmployeeStartMessage(chatId, telegramId) {
 }
 
 async function sendSearchResultWithAction(chatId, telegramId, entry, { appendUnpaid = true } = {}) {
-  let text = entry.message || '';
-  let unpaidOrders = [];
-  if (appendUnpaid) {
-    unpaidOrders = getUnpaidOrdersByClientPhone(db, entry.phone);
-    const unpaidBlock = formatUnpaidOrdersBlock(unpaidOrders);
-    if (unpaidBlock) {
-      text = `${text}\n\n${unpaidBlock}`;
-    }
-  }
+  const text = entry.message || '';
+  const unpaidOrders = appendUnpaid ? getUnpaidOrdersByClientPhone(db, entry.phone) : [];
 
   const chunks = splitTelegramMessage(text);
   for (let i = 0; i < chunks.length; i += 1) {
@@ -187,8 +180,10 @@ async function sendSearchResultWithAction(chatId, telegramId, entry, { appendUnp
     }
   }
 
-  if (unpaidOrders.length && hasRight(db, telegramId, 'delete_unpaid_order')) {
-    await appendDeleteButtonsForOrders(bot, chatId, unpaidOrders, telegramId, db);
+  if (unpaidOrders.length) {
+    await sendOrdersWithActions(bot, chatId, unpaidOrders, telegramId, db, {
+      includeClientPhone: true,
+    });
   }
 }
 

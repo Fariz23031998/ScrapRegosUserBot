@@ -1,6 +1,7 @@
 {
   "extends": "@react-native/typescript-config",
   "compilerOptions": {
+    "lib": ["ES2020"],
     "types": ["jest"]
   },
   "include": ["**/*.ts", "**/*.tsx"],

@@ -15,7 +15,7 @@ It listens on `CLICK_SERVER_PORT` (default `3000`).
 
 Payment routes live on **aserver.tech** (not `no-thing.uz`). Config file:
 
-`/srv/RegosWholeSale/deploy/aserver.tech`
+`/srv/ScrapRegosUserBot/deploy/aserver.tech`
 
 Routes proxied to port `3000`:
 
@@ -28,7 +28,7 @@ Existing webhook routes on the same host are unchanged (`/webhook`, `/api/v1/tel
 Copy to the server and reload:
 
 ```bash
-sudo cp /srv/RegosWholeSale/deploy/aserver.tech /etc/nginx/sites-available/aserver.tech
+sudo cp /srv/ScrapRegosUserBot/deploy/aserver.tech /etc/nginx/sites-available/aserver.tech
 sudo ln -sf /etc/nginx/sites-available/aserver.tech /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```

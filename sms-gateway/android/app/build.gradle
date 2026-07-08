@@ -141,6 +141,10 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // WebSocket client for the native SMS gateway service.
+    // Version matches React Native's pin (node_modules/react-native/gradle/libs.versions.toml).
+    implementation("com.squareup.okhttp3:okhttp:4.9.2")
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {

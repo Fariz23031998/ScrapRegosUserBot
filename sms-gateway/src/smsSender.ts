@@ -10,54 +10,16 @@ export type SimCard = {
 
 type SmsSendNative = {
   getSimCards: () => Promise<SimCard[]>;
-  send: (phone: string, message: string, subscriptionId: number) => Promise<void>;
 };
-
-let selectedSubscriptionId: number | null = null;
 
 function getSmsSendModule(): SmsSendNative {
   const module = (NativeModules as {SmsSend?: SmsSendNative}).SmsSend;
-  if (!module?.send) {
+  if (!module?.getSimCards) {
     throw new Error(
       'SmsSend native module is not available — rebuild and reinstall the app',
     );
   }
   return module;
-}
-
-export function setSelectedSimSubscriptionId(subscriptionId: number | null): void {
-  selectedSubscriptionId = subscriptionId;
-}
-
-export function getSelectedSimSubscriptionId(): number | null {
-  return selectedSubscriptionId;
-}
-
-async function ensureSmsPermission(): Promise<void> {
-  if (Platform.OS !== 'android') {
-    throw new Error('SMS sending is only supported on Android');
-  }
-
-  const granted = await PermissionsAndroid.check(
-    PermissionsAndroid.PERMISSIONS.SEND_SMS,
-  );
-  if (granted) {
-    return;
-  }
-
-  const result = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.SEND_SMS,
-    {
-      title: 'SMS Gateway permission',
-      message: 'This app needs permission to send payment link SMS messages.',
-      buttonPositive: 'Allow',
-      buttonNegative: 'Deny',
-    },
-  );
-
-  if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-    throw new Error('SEND_SMS permission is not granted');
-  }
 }
 
 async function ensurePhoneStatePermission(): Promise<void> {
@@ -101,10 +63,4 @@ export async function getSimCards(): Promise<SimCard[]> {
     carrierName: card.carrierName,
     phoneNumber: card.phoneNumber || null,
   }));
-}
-
-export async function sendSms(phone: string, message: string): Promise<void> {
-  await ensureSmsPermission();
-  const subscriptionId = selectedSubscriptionId ?? -1;
-  await getSmsSendModule().send(phone, message, subscriptionId);
 }

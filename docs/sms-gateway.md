@@ -1,6 +1,6 @@
 # SMS gateway (Redis + Android)
 
-After an order is created in the Telegram employee flow, the bot enqueues one SMS job in Redis with the payment page link. A dedicated Android app connects to the backend over WebSocket, sends the SMS natively, and reports success or failure back for audit logging.
+After an order is created in the Telegram employee flow, the bot enqueues SMS jobs in Redis: first a Telegram bot invite, then the payment page link. A dedicated Android app connects to the backend over WebSocket, sends the SMS natively, and reports success or failure back for audit logging.
 
 ## Flow
 
@@ -28,17 +28,25 @@ Set in `.env` on the host running **both** `npm run bot` and `npm run server`:
 | `REDIS_URL` | yes (to enable) | e.g. `redis://127.0.0.1:6379` |
 | `SMS_GATEWAY_TOKEN` | yes (with Redis) | Shared secret for WebSocket auth |
 | `PUBLIC_BASE_URL` | yes | Payment link in SMS, e.g. `https://aserver.tech` |
+| `TELEGRAM_BOT_USERNAME` | recommended | Bot handle for the invite SMS, e.g. `@MyShopBot`. If unset, invite SMS is skipped |
 
 When `REDIS_URL` is not set, SMS enqueue is skipped automatically (safe for local development).
 
 ## SMS text
 
-Default message (Russian):
+Two messages are queued in order (Russian):
+
+1. Telegram invite (skipped if `TELEGRAM_BOT_USERNAME` is unset):
 
 ```
-Создан заказ на {amount} UZS. Оплатите: {payment_page_url}
+Для получение ссылку на оплату, зайдите в наш телеграм бот {TELEGRAM_BOT_USERNAME}
 ```
 
+2. Payment link:
+
+```
+Ссылка на оплату создана на сумму {amount} {currency}. Оплатите: {payment_page_url}
+```
 ## WebSocket protocol
 
 Endpoint: `wss://{host}/sms-gateway/ws` (or `ws://` for local dev).
@@ -57,7 +65,7 @@ Source: [`sms-gateway/`](../sms-gateway/)
 1. Install the app on a dedicated Android phone with a SIM card.
 2. Grant **Send SMS** permission when prompted.
 3. Enter server URL (e.g. `wss://aserver.tech/sms-gateway/ws`) and gateway token.
-4. Keep the app running in the foreground or allow background operation on the gateway device.
+4. Tap **Connect**. When prompted, **allow background running** (disable battery optimization).
 
 Build (from repo root):
 
@@ -66,6 +74,22 @@ cd sms-gateway
 npm install
 npm run android
 ```
+
+### Background service
+
+The WebSocket connection runs entirely in a **native foreground service** (`SmsGatewayForegroundService` + `SmsGatewayConnection`), not in JavaScript. This means it keeps working after the app is swiped away or the OS reclaims memory, and it reconnects on its own:
+
+- Config (server URL, token, SIM subscription id) is saved to `SharedPreferences`; the service reconnects using it after a process kill (`START_STICKY`) or reboot (`BootReceiver`, `RECEIVE_BOOT_COMPLETED`).
+- The foreground service uses the `specialUse` type (no daily runtime cap, unlike `dataSync` on Android 14+).
+- Tapping **Disconnect** clears the running flag so it will not auto-restart until you connect again.
+
+### Aggressive OEM battery managers
+
+On Xiaomi/Redmi/POCO, Oppo/Realme, Vivo, Huawei, etc., a foreground service alone is not enough. On the gateway phone also:
+
+- Disable battery optimization for the app (the in-app "Allow background running" button opens this).
+- Enable **Autostart** for the app in system settings (cannot be toggled programmatically).
+- Lock the app in the recents screen so the OS does not kill it.
 
 ## Audit log
 
