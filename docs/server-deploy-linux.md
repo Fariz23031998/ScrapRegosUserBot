@@ -74,11 +74,11 @@ Payme uses the **Subscribe API** (receipts). No billing webhook URL is required.
 
 ## 4) systemd unit
 
-Create `/etc/systemd/system/scrapregos-click.service`:
+Create `/etc/systemd/system/scrapregos-server.service`:
 
 ```ini
 [Unit]
-Description=ScrapRegosUserBot CLICK Webhook Server
+Description=ScrapRegosUserBot Server
 After=network-online.target
 Wants=network-online.target
 
