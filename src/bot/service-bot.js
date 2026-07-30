@@ -9,6 +9,7 @@ const { createSupportDraft } = require('./technical-support-bot');
 const { hasRight } = require('../db/user-rights');
 const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
+const { formatOrderDateTimeLine } = require('./order-datetime');
 
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const ORDER_ACCESS_DENIED = 'Сначала пройдите регистрацию: отправьте свой номер телефона.';
@@ -114,6 +115,7 @@ function formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, extraLine 
     'Заказ создан.',
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
+    formatOrderDateTimeLine(order),
     `Сумма: ${order.amount} UZS`,
     extraLine,
     '',
@@ -151,6 +153,7 @@ function formatCustomerCreatedOrderMessage(order) {
     'Создана ссылка для оплаты услуги.',
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
+    formatOrderDateTimeLine(order),
     `Сумма: ${order.amount} ${order.currency || 'UZS'}`,
     '',
     paymentPageUrl ? `Страница оплаты: ${paymentPageUrl}` : 'Ссылка на оплату доступна после открытия заказа.',

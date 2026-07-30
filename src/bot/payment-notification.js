@@ -1,5 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
+const { formatOrderDateTimeLine } = require('./order-datetime');
 
 let outboundBot = null;
 
@@ -22,6 +23,7 @@ function formatOrderPaidMessage(order, { provider } = {}) {
     'Заказ оплачен.',
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
+    formatOrderDateTimeLine(order),
     `Сумма: ${order.amount} ${currency}`,
     `Провайдер: ${providerLabel}`,
   ]

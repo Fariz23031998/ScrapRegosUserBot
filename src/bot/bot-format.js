@@ -1,9 +1,12 @@
 const { formatPaymentPageUrl } = require('../payments/payments-api');
 const { formatOrderPartyLines } = require('./order-parties');
+const { formatOrderDateTimeLine, formatOrderDateTimeValue } = require('./order-datetime');
 
 function formatUnpaidOrderLines(order, { includeClientPhone = false } = {}) {
   const paymentPageUrl = formatPaymentPageUrl(order.id);
   const lines = [`ID: ${order.id}`, ...formatOrderPartyLines(order)];
+  const dateLine = formatOrderDateTimeLine(order);
+  if (dateLine) lines.push(dateLine);
   lines.push(`Сумма: ${order.amount} ${order.currency || 'UZS'}`, `Статус: ${order.status}`);
   if (paymentPageUrl) {
     lines.push(`Страница оплаты: ${paymentPageUrl}`);
@@ -45,6 +48,8 @@ function buildOrderActionsKeyboard(orderId, { canDelete = false, canMarkPaidCash
 }
 
 module.exports = {
+  formatOrderDateTimeValue,
+  formatOrderDateTimeLine,
   formatUnpaidOrderLines,
   formatUnpaidOrderMessage,
   formatUnpaidOrdersBlock,

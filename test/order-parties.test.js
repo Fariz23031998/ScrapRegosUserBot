@@ -16,6 +16,10 @@ const {
   enrichOrderParties,
   formatOrderPartyLines,
 } = require('../src/bot/order-parties');
+const {
+  formatOrderDateTimeValue,
+  formatOrderDateTimeLine,
+} = require('../src/bot/order-datetime');
 const { formatUnpaidOrderMessage } = require('../src/bot/bot-format');
 const { formatOrderPaidMessage } = require('../src/bot/payment-notification');
 
@@ -97,10 +101,20 @@ describe('Telegram order party details', () => {
     const unpaid = formatUnpaidOrderMessage(detailed);
     assert.match(unpaid, /Сотрудник: John - \+998 \(99\) 333-23-23/);
     assert.match(unpaid, /Клиент: Acme Customer - \+998 \(90\) 111-22-33/);
+    assert.match(unpaid, /^Дата заказа: \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/m);
+    assert.equal(formatOrderDateTimeLine(detailed), `Дата заказа: ${formatOrderDateTimeValue(detailed.created_at)}`);
 
     const paid = formatOrderPaidMessage(detailed, { provider: 'payme' });
     assert.match(paid, /Сотрудник: John - \+998 \(99\) 333-23-23/);
     assert.match(paid, /Клиент: Acme Customer - \+998 \(90\) 111-22-33/);
+    assert.match(paid, /^Дата заказа: \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/m);
+  });
+
+  it('formats order datetime in Asia/Tashkent as dd.MM.yyyy HH:mm', () => {
+    assert.equal(formatOrderDateTimeValue('2026-07-30 16:05:00'), '30.07.2026 21:05');
+    assert.equal(formatOrderDateTimeValue('2026-01-15 20:30:00'), '16.01.2026 01:30');
+    assert.equal(formatOrderDateTimeLine({ created_at: '2026-07-30 16:05:00' }), 'Дата заказа: 30.07.2026 21:05');
+    assert.equal(formatOrderDateTimeValue(null), null);
   });
 
   it('falls back to Telegram profile and stored order phones', () => {
