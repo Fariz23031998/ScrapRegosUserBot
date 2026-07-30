@@ -3,7 +3,7 @@ const { getBotUserByTelegramId, getUserRights, isLinkedEmployee } = require('./b
 const RIGHTS = {
   see_own_unpaid_orders: {
     column: 'see_own_unpaid_orders',
-    label: 'Видеть свои неоплаченные заказы (как клиент)',
+    label: 'Свои неоплаченные заказы (созданные сотрудником)',
   },
   see_own_report: {
     column: 'see_own_report',
