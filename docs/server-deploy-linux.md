@@ -19,8 +19,12 @@ Payment routes live on **aserver.tech** (not `no-thing.uz`). Config file:
 
 Routes proxied to port `3000`:
 
-- `/api/orders/` — payment API
-- `/click/`, `/pay`, `/bot-admin/`, payment static assets, order UUID pages
+- `/api/orders/` — payment API (including Payme status check)
+- `/api/prices` — public service prices JSON
+- `/prices` — public prices page (bot `/prices`)
+- `/click/`, `/pay`, `/bot-admin/`, `/health`
+- `/css/`, `/js/`, `/images/`, `/brand-logo.png` — public static assets
+- order UUID pages (`/{uuid}`)
 - `/sms-gateway/` — WebSocket SMS gateway for Android app (requires upgrade headers)
 
 Existing webhook routes on the same host are unchanged (`/webhook`, `/api/v1/telegram/webhook/`).

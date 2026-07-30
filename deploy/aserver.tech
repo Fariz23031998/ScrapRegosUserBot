@@ -31,10 +31,20 @@ server {
         proxy_connect_timeout 75s;
     }
 
-    # ScrapRegosUserBot — payment server (port 3000, npm run click-server)
+    # ScrapRegosUserBot — payment / prices / admin server (port 3000, npm run server)
 
     location /api/orders/ {
         proxy_pass http://127.0.0.1:3000/api/orders/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Public service prices catalog (GET /api/prices)
+    location = /api/prices {
+        proxy_pass http://127.0.0.1:3000/api/prices;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -49,6 +59,10 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /bot-admin {
+        return 301 /bot-admin/;
     }
 
     location /bot-admin/ {
@@ -69,6 +83,25 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Public prices page (bot /prices command → https://aserver.tech/prices)
+    location = /prices {
+        proxy_pass http://127.0.0.1:3000/prices;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /health {
+        proxy_pass http://127.0.0.1:3000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     location = /brand-logo.png {
         proxy_pass http://127.0.0.1:3000/brand-logo.png;
         proxy_set_header Host $host;
@@ -77,16 +110,25 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location = /css/payment.css {
-        proxy_pass http://127.0.0.1:3000/css/payment.css;
+    # Static assets: payment + prices pages (and future public CSS/JS)
+    location /css/ {
+        proxy_pass http://127.0.0.1:3000/css/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location = /js/payment.js {
-        proxy_pass http://127.0.0.1:3000/js/payment.js;
+    location /js/ {
+        proxy_pass http://127.0.0.1:3000/js/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /images/ {
+        proxy_pass http://127.0.0.1:3000/images/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -109,6 +151,9 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 86400;
     }
 
