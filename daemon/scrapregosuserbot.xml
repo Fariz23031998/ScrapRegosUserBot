@@ -6,7 +6,7 @@
 	<argument>--harmony</argument>
 	<argument>C:\Projects\ScrapRegosUserBot\node_modules\node-windows\lib\wrapper.js</argument>
 	<argument>--file</argument>
-	<argument>C:\Projects\ScrapRegosUserBot\bot.js</argument>
+	<argument>C:\Projects\ScrapRegosUserBot\apps\bot\index.js</argument>
 	<argument>--scriptoptions=</argument>
 	<argument>--log</argument>
 	<argument>ScrapRegosUserBot wrapper</argument>

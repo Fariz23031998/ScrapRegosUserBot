@@ -46,13 +46,14 @@ function renderOrderLogsTable() {
   }
 
   logsWrap.innerHTML = `
-    <table class="users-table order-logs-table">
+    <div class="table-scroll">
+    <table class="data-table order-logs-table">
       <thead>
         <tr>
           <th>Дата</th>
           <th>Действие</th>
           <th>Заказ</th>
-          <th>Сумма</th>
+          <th class="cell-num">Сумма</th>
           <th>Клиент</th>
           <th>Сотрудник</th>
         </tr>
@@ -62,19 +63,20 @@ function renderOrderLogsTable() {
           .map(
             (log) => `
           <tr>
-            <td class="cell-nowrap">${escapeHtml(formatDateTime(log.created_at))}</td>
-            <td>
+            <td class="cell-nowrap" data-label="Дата">${escapeHtml(formatDateTime(log.created_at))}</td>
+            <td data-label="Действие">
               <span class="log-action log-action--${escapeHtml(log.action)}">${escapeHtml(log.action_label)}</span>
             </td>
-            <td class="cell-mono">${escapeHtml(log.order_id)}</td>
-            <td>${escapeHtml(formatAmount(log.order_amount))}</td>
-            <td class="cell-phone">${escapeHtml(log.client_phone || '—')}</td>
-            <td>${escapeHtml(formatActor(log))}</td>
+            <td class="cell-mono" data-label="Заказ" title="${escapeHtml(log.order_id)}">${escapeHtml(log.order_id)}</td>
+            <td class="cell-num" data-label="Сумма">${escapeHtml(formatAmount(log.order_amount))}</td>
+            <td class="cell-phone" data-label="Клиент">${escapeHtml(log.client_phone || '—')}</td>
+            <td data-label="Сотрудник">${escapeHtml(formatActor(log))}</td>
           </tr>`
           )
           .join('')}
       </tbody>
     </table>
+    </div>
   `;
 }
 

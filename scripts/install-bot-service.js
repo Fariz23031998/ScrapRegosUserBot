@@ -10,7 +10,7 @@ const userInfo = os.userInfo();
 const svc = new Service({
   name: serviceName,
   description: 'Regos user lookup Telegram bot',
-  script: path.join(projectRoot, 'bot.js'),
+  script: path.join(projectRoot, 'apps', 'bot', 'index.js'),
   workingDirectory: projectRoot,
   logpath: logsDir,
   grow: 0.25,

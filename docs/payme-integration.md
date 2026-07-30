@@ -31,12 +31,12 @@ ScrapRegosUserBot — Telegram-бот для сотрудников поддер
 
 | Компонент | Файл | Роль |
 |-----------|------|------|
-| Telegram-бот | `bot.js`, `lib/service-bot.js` | Создание заказа, ссылка на оплату |
-| Платёжный сервер | `server.js` | Статика, API, webhook CLICK |
-| Провайдер CLICK | `lib/click.js` | URL оплаты, проверка подписи |
-| Список способов оплаты | `lib/payments-api.js` | `GET /api/orders/:id/payments` |
+| Telegram-бот | `apps/bot/index.js`, `src/bot/service-bot.js` | Создание заказа, ссылка на оплату |
+| Платёжный сервер | `apps/server/index.js` | Статика, API, webhook CLICK |
+| Провайдер CLICK | `src/payments/click.js` | URL оплаты, проверка подписи |
+| Список способов оплаты | `src/payments/payments-api.js` | `GET /api/orders/:id/payments` |
 | Страница оплаты | `public/pay.html`, `public/js/payment.js` | Кнопки провайдеров |
-| БД | `lib/partners-db.js` | Таблицы `orders`, `payments` |
+| БД | `src/db/partners-db.js` | Таблицы `orders`, `payments` |
 
 Поток для клиента:
 
@@ -47,7 +47,7 @@ ScrapRegosUserBot — Telegram-бот для сотрудников поддер
          → клиент платит → webhook → заказ paid
 ```
 
-В `lib/payments-api.js` уже есть комментарий для добавления Payme рядом с CLICK — фронтенд менять не нужно: достаточно вернуть ещё один объект `{ provider, label, url, enabled }` в массиве `payments`.
+В `src/payments/payments-api.js` уже есть комментарий для добавления Payme рядом с CLICK — фронтенд менять не нужно: достаточно вернуть ещё один объект `{ provider, label, url, enabled }` в массиве `payments`.
 
 ---
 
@@ -85,7 +85,7 @@ ScrapRegosUserBot — Telegram-бот для сотрудников поддер
 | Ссылка оплаты | Query-параметры на `my.click.uz` | Base64 URL или POST на `checkout.paycom.uz` |
 | Повторы запросов | Минимальная обработка | **Обязательна идемпотентность** |
 
-Текущий `server.js` — хороший образец валидации заказа и суммы; для Payme понадобится отдельный модуль и таблица/поля для промежуточных транзакций Payme.
+Текущий `apps/server/index.js` — хороший образец валидации заказа и суммы; для Payme понадобится отдельный модуль и таблица/поля для промежуточных транзакций Payme.
 
 ---
 
@@ -212,10 +212,10 @@ if (auth !== `Basic ${expected}`) {
 ```mermaid
 sequenceDiagram
     participant Staff as Сотрудник (Telegram)
-    participant Bot as bot.js
+    participant Bot as apps/bot/index.js
     participant Page as pay.html
     participant Payme as checkout.paycom.uz
-    participant Server as server.js
+    participant Server as apps/server/index.js
     participant DB as SQLite
 
     Staff->>Bot: Добавить услугу, сумма
@@ -267,7 +267,7 @@ sequenceDiagram
 - добавить `payme_trans_id`, или
 - хранить JSON в `metadata`.
 
-### Функции БД (`lib/partners-db.js`)
+### Функции БД (`src/db/partners-db.js`)
 
 | Сейчас | Нужно для Payme |
 |--------|-----------------|
@@ -299,9 +299,9 @@ CREATE TABLE payme_transactions (
 
 Изменения **не внесены** в репозиторий — ниже план для реализации.
 
-### 8.1. Новый файл `lib/payme.js`
+### 8.1. Новый файл `src/payments/payme.js`
 
-По аналогии с `lib/click.js`:
+По аналогии с `src/payments/click.js`:
 
 | Функция | Назначение |
 |---------|------------|
@@ -312,7 +312,7 @@ CREATE TABLE payme_transactions (
 | `buildJsonRpcResult(id, result)` | Обёртка ответа |
 | `buildJsonRpcError(id, code, message, data)` | Обёртка ошибки |
 
-### 8.2. Расширить `lib/payments-api.js`
+### 8.2. Расширить `src/payments/payments-api.js`
 
 ```javascript
 // Место для добавления — после buildClickPaymentOption (строка ~47)
@@ -332,7 +332,7 @@ function buildPaymePaymentOption(order) {
 
 В `getPaymentOptionsForOrder` добавить вызов `buildPaymePaymentOption` рядом с CLICK.
 
-### 8.3. Расширить `server.js`
+### 8.3. Расширить `apps/server/index.js`
 
 Добавить маршрут:
 
@@ -340,15 +340,15 @@ function buildPaymePaymentOption(order) {
 POST /payme  →  handlePaymeJsonRpc(req, res)
 ```
 
-Один handler разбирает `body.method` и делегирует в функции из `lib/payme-handlers.js` (или внутри `lib/payme.js`).
+Один handler разбирает `body.method` и делегирует в функции из `src/payments/payme-handlers.js` (или внутри `src/payments/payme.js`).
 
 **Важно:** маршрут `/payme` должен быть объявлен **до** `app.get('/:orderId', ...)`, иначе Express может перехватить `payme` как UUID.
 
-### 8.4. Опционально: `lib/payme-handlers.js`
+### 8.4. Опционально: `src/payments/payme-handlers.js`
 
-Логика методов + работа с БД — чтобы `server.js` не разрастался (правило: файлы < 500 строк).
+Логика методов + работа с БД — чтобы `apps/server/index.js` не разрастался (правило: файлы < 500 строк).
 
-### 8.5. `lib/partners-db.js`
+### 8.5. `src/db/partners-db.js`
 
 - Миграция/создание `payme_transactions`.
 - `getPaymeTransaction(db, paymeId)`, `upsertPaymeTransaction(...)`.
@@ -430,7 +430,7 @@ return `${base}/${Buffer.from(params, 'utf8').toString('base64')}`;
 ### 10.1. Каркас обработчика
 
 ```javascript
-// Псевдокод для server.js
+// Псевдокод для apps/server/index.js
 app.post('/payme', (req, res) => {
   const body = req.body ?? {};
   const requestId = body.id;
@@ -466,7 +466,7 @@ app.post('/payme', (req, res) => {
 
 ### 10.2. Общая валидация заказа
 
-Переиспользовать логику из `server.js`:
+Переиспользовать логику из `apps/server/index.js`:
 
 ```javascript
 function amountsEqualTiyin(paymeAmount, orderAmountUzs) {
@@ -566,7 +566,7 @@ function amountsEqualTiyin(paymeAmount, orderAmountUzs) {
    - `markOrderPaid(db, orderId, { transactionId: paymeId, provider: 'payme' })`
    - обновить `payme_transactions` → `state = 2`, `perform_time`.
 
-Аналог текущего `/click/complete` в `server.js` (строки 69–100).
+Аналог текущего `/click/complete` в `apps/server/index.js` (строки 69–100).
 
 ### 11.4. CancelTransaction
 
@@ -614,7 +614,7 @@ orders (1) ←—— (N) payments (provider = 'payme')
 При успешном `PerformTransaction`:
 
 ```javascript
-// Псевдокод — аналог server.js /click/complete
+// Псевдокод — аналог apps/server/index.js /click/complete
 createPayment(db, {
   orderId: order.id,
   telegramId: order.telegram_id,

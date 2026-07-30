@@ -5,7 +5,7 @@ const serviceName = 'ScrapRegosUserBot';
 
 const svc = new Service({
   name: serviceName,
-  script: path.join(__dirname, '..', 'bot.js'),
+  script: path.join(__dirname, '..', 'apps', 'bot', 'index.js'),
 });
 
 svc.on('uninstall', () => {

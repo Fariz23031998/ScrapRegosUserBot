@@ -5,8 +5,10 @@ const togglePassword = document.getElementById('toggle-password');
 const passwordInput = form.querySelector('input[name="password"]');
 
 togglePassword.addEventListener('click', () => {
-  const isPassword = passwordInput.type === 'password';
-  passwordInput.type = isPassword ? 'text' : 'password';
+  const reveal = passwordInput.type === 'password';
+  passwordInput.type = reveal ? 'text' : 'password';
+  togglePassword.setAttribute('aria-pressed', String(reveal));
+  togglePassword.setAttribute('aria-label', reveal ? 'Скрыть пароль' : 'Показать пароль');
 });
 
 async function checkSession() {

@@ -97,7 +97,8 @@ function renderUsersTable() {
 
   if (isEmployeeView) {
     wrap.innerHTML = `
-    <table class="users-table">
+    <div class="table-scroll">
+    <table class="data-table">
       <thead>
         <tr>
           <th>Телефон</th>
@@ -112,14 +113,14 @@ function renderUsersTable() {
           .map(
             (user) => `
           <tr data-user-id="${user.id}">
-            <td class="cell-phone">${escapeHtml(user.phone || '—')}</td>
-            <td class="cell-name">${formatUserNameHtml(user)}</td>
-            <td>
+            <td class="cell-phone" data-label="Телефон">${escapeHtml(user.phone || '—')}</td>
+            <td class="cell-name" data-label="Имя">${formatUserNameHtml(user)}</td>
+            <td data-label="Telegram">
               <span class="status ${user.is_linked ? 'status-linked' : 'status-pending'}">
                 ${user.is_linked ? `Привязан · ${user.telegram_id}` : 'Ожидает привязки'}
               </span>
             </td>
-            <td><div class="rights-summary">${renderRightsSummary(user.rights)}</div></td>
+            <td data-label="Права"><div class="rights-summary">${renderRightsSummary(user.rights)}</div></td>
             <td>
               <div class="row-actions">
                 <button type="button" class="btn btn-secondary btn-sm" data-action="edit">Изменить</button>
@@ -131,12 +132,14 @@ function renderUsersTable() {
           .join('')}
       </tbody>
     </table>
+    </div>
   `;
     return;
   }
 
   wrap.innerHTML = `
-    <table class="users-table">
+    <div class="table-scroll">
+    <table class="data-table">
       <thead>
         <tr>
           <th>Телефон</th>
@@ -151,14 +154,14 @@ function renderUsersTable() {
           .map(
             (user) => `
           <tr data-user-id="${user.id}">
-            <td class="cell-phone">${escapeHtml(user.phone || '—')}</td>
-            <td class="cell-name">${formatUserNameHtml(user)}</td>
-            <td>
+            <td class="cell-phone" data-label="Телефон">${escapeHtml(user.phone || '—')}</td>
+            <td class="cell-name" data-label="Имя">${formatUserNameHtml(user)}</td>
+            <td data-label="Telegram">
               <span class="status ${user.is_linked ? 'status-linked' : 'status-pending'}">
                 ${user.is_linked ? `Привязан · ${user.telegram_id}` : 'Не привязан'}
               </span>
             </td>
-            <td class="cell-nowrap">${formatLinkedAt(user.linked_at)}</td>
+            <td class="cell-nowrap" data-label="Привязан">${formatLinkedAt(user.linked_at)}</td>
             <td>
               <div class="row-actions">
                 <button type="button" class="btn btn-primary btn-sm" data-action="promote">Сделать сотрудником</button>
@@ -169,6 +172,7 @@ function renderUsersTable() {
           .join('')}
       </tbody>
     </table>
+    </div>
   `;
 }
 

@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $TaskName = "ScrapRegosUserBot-DailySync"
 $NodePath = (Get-Command node).Source
-$SyncScript = Join-Path $ProjectRoot "sync-all.js"
+$SyncScript = Join-Path $ProjectRoot "cli\sync-all.js"
 $UserName = $env:USERNAME
 
 $action = New-ScheduledTaskAction `

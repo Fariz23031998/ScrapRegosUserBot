@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Техподдержка — админ-панель бота</title>
+    <link rel="stylesheet" href="/bot-admin/admin.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <div class="header-top">
+          <div>
+            <h1>Техподдержка</h1>
+            <p>Цены на подписки 1/3/6/12 месяцев и история оплаченных подписок.</p>
+          </div>
+          <button type="button" class="btn btn-secondary" id="logout-btn">Выйти</button>
+        </div>
+        <nav class="admin-nav" aria-label="Разделы админ-панели">
+          <a class="admin-nav__link" href="/bot-admin/">Пользователи</a>
+          <a class="admin-nav__link" href="/bot-admin/order-logs">Журнал заказов</a>
+          <a class="admin-nav__link admin-nav__link--active" href="/bot-admin/technical-support" aria-current="page">Техподдержка</a>
+          <a class="admin-nav__link" href="/bot-admin/prices">Прайс</a>
+        </nav>
+      </header>
+
+      <section class="card">
+        <div class="card-toolbar">
+          <h2>Цены</h2>
+        </div>
+        <form id="prices-form" class="price-form">
+          <div class="price-grid" id="prices-grid"></div>
+          <p id="prices-message" class="message" hidden></p>
+          <div class="modal-footer" style="justify-content: flex-start; margin-top: 16px;">
+            <button type="submit" class="btn btn-primary" id="prices-submit">Сохранить цены</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="card-toolbar">
+          <h2>Подписки</h2>
+          <div class="card-toolbar-right">
+            <div class="search-box" id="search-box">
+              <span class="search-box__icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <input
+                type="search"
+                id="subscription-search"
+                class="search-box__input"
+                placeholder="Поиск по телефону или ID заказа…"
+                autocomplete="off"
+                enterkeyhint="search"
+              />
+              <button type="button" class="search-box__clear" id="search-clear" aria-label="Очистить поиск" hidden>&times;</button>
+            </div>
+            <label class="field field-inline">
+              <span>Статус</span>
+              <select id="status-filter">
+                <option value="">Все</option>
+                <option value="active">Активные</option>
+                <option value="expired">Истёкшие</option>
+              </select>
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" id="refresh-subscriptions-btn">Обновить</button>
+          </div>
+        </div>
+        <div id="subscriptions-wrap"></div>
+        <div id="subscriptions-pagination" class="pagination-wrap"></div>
+      </section>
+    </main>
+
+    <script src="/bot-admin/admin-common.js"></script>
+    <script src="/bot-admin/admin-technical-support.js"></script>
+  </body>
+</html>

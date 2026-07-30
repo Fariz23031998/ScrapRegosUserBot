@@ -4,21 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Вход — Bot Admin</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="/bot-admin/login.css" />
   </head>
   <body>
-    <div class="bg" aria-hidden="true">
-      <div class="bg-orb bg-orb--1"></div>
-      <div class="bg-orb bg-orb--2"></div>
-      <div class="bg-grid"></div>
-    </div>
-
     <main class="login-shell">
       <section class="login-card">
         <div class="login-brand">
@@ -61,7 +49,13 @@
                 autocomplete="current-password"
                 placeholder="••••••••"
               />
-              <button type="button" class="toggle-password" id="toggle-password" aria-label="Показать пароль">
+              <button
+                type="button"
+                class="toggle-password"
+                id="toggle-password"
+                aria-label="Показать пароль"
+                aria-pressed="false"
+              >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path
                     d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"

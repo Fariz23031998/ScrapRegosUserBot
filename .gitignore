@@ -3,5 +3,6 @@ output/
 data/
 auth-state.json
 auth-state-easytrade.json
+data/auth/
 .env
 logs/

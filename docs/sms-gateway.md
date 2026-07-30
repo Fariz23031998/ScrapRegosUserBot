@@ -1,16 +1,21 @@
-# SMS gateway (Redis + Android)
+# SMS transports (Android Redis gateway + GETSMS)
 
-After an order is created in the Telegram employee flow, the bot enqueues SMS jobs in Redis: first a Telegram bot invite, then the payment page link. A dedicated Android app connects to the backend over WebSocket, sends the SMS natively, and reports success or failure back for audit logging.
+After an order is created in the Telegram employee flow, the bot can send through two independent transports:
+
+- Android: queues one multiline payment message in Redis. A dedicated Android app receives it over WebSocket and sends it natively.
+- GETSMS.UZ: sends the same multiline payment message directly over HTTP.
+
+`SMS_GATEWAY_ENABLED` controls Android and `ENABLE_GETSMS` controls GETSMS. Enabling both intentionally sends through both providers, so the customer may receive messages from each.
 
 ## Flow
 
 1. Employee creates an order in the Telegram bot.
-2. `bot.js` enqueues an SMS job in Redis (`sms:pending` + `sms:job:{id}`).
-3. `server.js` pushes the job to the connected Android device via WebSocket.
+2. `apps/bot/index.js` enqueues an SMS job in Redis (`sms:pending` + `sms:job:{id}`).
+3. `apps/server/index.js` pushes the job to the connected Android device via WebSocket.
 4. The Android app sends the SMS with `SmsManager` and sends a result ack.
 5. The server writes `sms_sent` or `sms_failed` to `order_logs`.
 
-Telegram customer notifications are unchanged and run independently.
+The GETSMS HTTP request and Telegram customer notifications run independently. A failure in one SMS provider does not prevent the other provider from running.
 
 ## Recipient
 
@@ -25,28 +30,29 @@ Set in `.env` on the host running **both** `npm run bot` and `npm run server`:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
+| `SMS_GATEWAY_ENABLED` | no | Set to `0` to disable SMS enqueue and the WebSocket gateway. Unset or any other value keeps it enabled |
 | `REDIS_URL` | yes (to enable) | e.g. `redis://127.0.0.1:6379` |
 | `SMS_GATEWAY_TOKEN` | yes (with Redis) | Shared secret for WebSocket auth |
 | `PUBLIC_BASE_URL` | yes | Payment link in SMS, e.g. `https://aserver.tech` |
-| `TELEGRAM_BOT_USERNAME` | recommended | Bot handle for the invite SMS, e.g. `@MyShopBot`. If unset, invite SMS is skipped |
+| `GETSMS_MESSAGE_TEMPLATE` | no | Shared multiline payment template used by Android WebSocket and GETSMS HTTP |
 
-When `REDIS_URL` is not set, SMS enqueue is skipped automatically (safe for local development).
+When `SMS_GATEWAY_ENABLED=0` or `REDIS_URL` is not set, Android enqueue and the WebSocket gateway are skipped automatically (safe for local development). This does not disable GETSMS; see [`getsms.md`](getsms.md).
 
 ## SMS text
 
-Two messages are queued in order (Russian):
-
-1. Telegram invite (skipped if `TELEGRAM_BOT_USERNAME` is unset):
+One message is queued per order, rendered from `GETSMS_MESSAGE_TEMPLATE` (same body as the GETSMS HTTP path):
 
 ```
-Для получение ссылку на оплату, зайдите в наш телеграм бот {TELEGRAM_BOT_USERNAME}
+Оплата услуг ROFEEV TECHNOLOGY
+Ссылка на оплату создана на сумму {amount} {currency}.
+Оплатить: {payment_page_url}
+Служба поддержки (Telegram): {support_telegram_url}
+Веб-сайт: {website_url}
+Телефон: {support_phone}
 ```
 
-2. Payment link:
+Unknown placeholders remain unchanged. A known placeholder with no value renders as an empty string. See [`getsms.md`](getsms.md) for footer env defaults.
 
-```
-Ссылка на оплату создана на сумму {amount} {currency}. Оплатите: {payment_page_url}
-```
 ## WebSocket protocol
 
 Endpoint: `wss://{host}/sms-gateway/ws` (or `ws://` for local dev).
@@ -95,8 +101,8 @@ On Xiaomi/Redmi/POCO, Oppo/Realme, Vivo, Huawei, etc., a foreground service alon
 
 Order events in `order_logs`:
 
-- `sms_sent` — Android device confirmed send
-- `sms_failed` — enqueue error, invalid phone, or device reported failure
+- `sms_sent` — GETSMS accepted the request or the Android device confirmed send
+- `sms_failed` — GETSMS request failed, Android enqueue failed, or the device reported failure
 
 ## Manual test
 
