@@ -29,6 +29,7 @@ const {
   replaceServicePricesCatalog,
 } = require('../db/service-prices');
 const { botAdminPublicDir } = require('../paths');
+const { sendVersionedHtmlFile } = require('../http/asset-cache');
 
 function parseRightsBody(body = {}) {
   const rights = {};
@@ -57,7 +58,11 @@ function mapUserResponse(user) {
 }
 
 function sendPublicFile(res, publicDir, filename) {
-  return res.sendFile(path.join(publicDir, filename));
+  const absolutePath = path.join(publicDir, filename);
+  if (String(filename).toLowerCase().endsWith('.html')) {
+    return sendVersionedHtmlFile(res, absolutePath);
+  }
+  return res.sendFile(absolutePath);
 }
 
 function parsePaginationQuery(req) {

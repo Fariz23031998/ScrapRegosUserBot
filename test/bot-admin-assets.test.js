@@ -182,6 +182,17 @@ describe('Bot admin static assets and API auth', () => {
     assert.equal(response.headers.location, '/bot-admin/');
   });
 
+  it('serves HTML with content-hashed asset URLs and no-store cache headers', async () => {
+    const response = await request(server, '/bot-admin/order-logs', {
+      headers: { Cookie: sessionCookie },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.match(String(response.headers['cache-control'] || ''), /no-store/);
+    assert.match(response.body, /\/bot-admin\/admin\.css\?v=[a-f0-9]{10}/);
+    assert.match(response.body, /\/bot-admin\/admin-order-logs\.js\?v=[a-f0-9]{10}/);
+    assert.match(response.body, /\/bot-admin\/admin-common\.js\?v=[a-f0-9]{10}/);
+  });
+
   it('serves stylesheets and scripts with the right content types', async () => {
     const expected = {
       '/bot-admin/admin.css': 'text/css',

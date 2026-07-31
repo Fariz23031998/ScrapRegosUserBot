@@ -12,6 +12,7 @@ const { createBotAdminRouter } = require('../../src/admin/bot-admin');
 const { attachSmsGateway } = require('../../src/sms/sms-gateway-ws');
 const { notifyCreatorOrderPaid } = require('../../src/bot/payment-notification');
 const { getServicePricesCatalog } = require('../../src/db/service-prices');
+const { sendVersionedHtmlFile } = require('../../src/http/asset-cache');
 
 const app = express();
 const db = openDb();
@@ -40,11 +41,11 @@ app.get('/pay', (req, res) => {
   if (isOrderId(orderId)) {
     return res.redirect(301, `/${orderId}`);
   }
-  res.sendFile(path.join(getPublicDir(), 'pay.html'));
+  return sendVersionedHtmlFile(res, path.join(getPublicDir(), 'pay.html'));
 });
 
 app.get('/prices', (_req, res) => {
-  res.sendFile(path.join(getPublicDir(), 'prices.html'));
+  return sendVersionedHtmlFile(res, path.join(getPublicDir(), 'prices.html'));
 });
 
 app.get('/api/prices', (_req, res) => {
@@ -61,7 +62,7 @@ app.use('/bot-admin', createBotAdminRouter(db));
 app.get('/:orderId', (req, res, next) => {
   const orderId = String(req.params.orderId || '').trim();
   if (isOrderId(orderId) || getOrderById(db, orderId)) {
-    return res.sendFile(path.join(getPublicDir(), 'pay.html'));
+    return sendVersionedHtmlFile(res, path.join(getPublicDir(), 'pay.html'));
   }
   return next();
 });
