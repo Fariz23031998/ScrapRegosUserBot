@@ -538,6 +538,7 @@ function deletePendingOrder(db, orderId, actorTelegramId = null) {
     actorTelegramId,
     orderAmount: order.amount,
     clientPhone: order.client_phone,
+    additionalPhone: order.additional_phone,
   });
   return true;
 }
@@ -586,6 +587,8 @@ function markPendingOrderPaidCash(db, orderId, actorTelegramId = null) {
       actorTelegramId,
       orderAmount: order.amount,
       clientPhone: order.client_phone,
+      additionalPhone: order.additional_phone,
+      paymentProvider: 'cash',
     });
 
     db.exec('COMMIT');

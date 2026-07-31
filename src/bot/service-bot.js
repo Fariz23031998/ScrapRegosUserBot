@@ -284,7 +284,7 @@ async function handleServiceMessage(bot, msg, botUser, db) {
     clearPending(msg.from.id);
     await bot.sendMessage(
       msg.chat.id,
-      formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, `Доп. номер: ${text}`),
+      formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl),
       menuAfterOrderKeyboard()
     );
     await afterOrderCreated(bot, db, botUser, order, paymentPageUrl);

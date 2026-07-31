@@ -9,12 +9,26 @@ function ensureOrderLogsTable(db) {
       actor_name TEXT,
       order_amount INTEGER,
       client_phone TEXT,
+      additional_phone TEXT,
+      payment_provider TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_order_logs_created_at ON order_logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_order_logs_order_id ON order_logs(order_id);
   `);
+
+  try {
+    db.exec('ALTER TABLE order_logs ADD COLUMN additional_phone TEXT');
+  } catch {
+    // column already exists
+  }
+
+  try {
+    db.exec('ALTER TABLE order_logs ADD COLUMN payment_provider TEXT');
+  } catch {
+    // column already exists
+  }
 }
 
 function formatActorName(user) {
@@ -44,7 +58,17 @@ function resolveActor(db, telegramId) {
 
 function logOrderEvent(
   db,
-  { orderId, action, actorTelegramId, actorPhone, actorName, orderAmount, clientPhone }
+  {
+    orderId,
+    action,
+    actorTelegramId,
+    actorPhone,
+    actorName,
+    orderAmount,
+    clientPhone,
+    additionalPhone,
+    paymentProvider,
+  }
 ) {
   ensureOrderLogsTable(db);
   const actor =
@@ -55,8 +79,8 @@ function logOrderEvent(
   db.prepare(
     `INSERT INTO order_logs (
       order_id, action, actor_telegram_id, actor_phone, actor_name,
-      order_amount, client_phone, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      order_amount, client_phone, additional_phone, payment_provider, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
   ).run(
     orderId,
     action,
@@ -64,7 +88,9 @@ function logOrderEvent(
     actor.actorPhone ?? null,
     actor.actorName ?? null,
     orderAmount ?? null,
-    clientPhone ?? null
+    clientPhone ?? null,
+    additionalPhone ?? null,
+    paymentProvider ?? null
   );
 }
 
@@ -74,7 +100,7 @@ function orderLogMatchesQuery(row, query) {
 
   const lower = trimmed.toLowerCase();
   const digits = lower.replace(/\D/g, '');
-  const phones = [row.client_phone, row.actor_phone].filter(Boolean);
+  const phones = [row.client_phone, row.additional_phone, row.actor_phone].filter(Boolean);
 
   if (digits && phones.some((phone) => String(phone).replace(/\D/g, '').includes(digits))) {
     return true;
@@ -83,10 +109,13 @@ function orderLogMatchesQuery(row, query) {
   const searchable = [
     row.order_id,
     row.client_phone,
+    row.additional_phone,
     row.actor_phone,
     row.actor_name,
     row.action,
     ACTION_LABELS[row.action],
+    row.payment_provider,
+    PAYMENT_PROVIDER_LABELS[row.payment_provider],
     row.actor_telegram_id != null ? String(row.actor_telegram_id) : '',
     row.order_amount != null ? String(row.order_amount) : '',
   ]
@@ -122,10 +151,22 @@ function listOrderLogs(db, { query, offset = 0, limit = 25 } = {}) {
 const ACTION_LABELS = {
   created: 'Создан',
   deleted: 'Удалён',
+  paid: 'Оплачен',
   paid_cash: 'Оплачен наличными',
   sms_sent: 'SMS отправлено',
   sms_failed: 'SMS ошибка',
 };
+
+const PAYMENT_PROVIDER_LABELS = {
+  payme: 'Payme',
+  click: 'CLICK',
+  cash: 'Наличные',
+};
+
+function formatPaymentProviderLabel(provider) {
+  if (!provider) return null;
+  return PAYMENT_PROVIDER_LABELS[provider] || String(provider);
+}
 
 function mapOrderLogRow(row) {
   return {
@@ -138,6 +179,9 @@ function mapOrderLogRow(row) {
     actor_name: row.actor_name,
     order_amount: row.order_amount,
     client_phone: row.client_phone,
+    additional_phone: row.additional_phone ?? null,
+    payment_provider: row.payment_provider ?? null,
+    payment_provider_label: formatPaymentProviderLabel(row.payment_provider),
     created_at: row.created_at,
   };
 }
@@ -148,4 +192,6 @@ module.exports = {
   listOrderLogs,
   mapOrderLogRow,
   ACTION_LABELS,
+  PAYMENT_PROVIDER_LABELS,
+  formatPaymentProviderLabel,
 };

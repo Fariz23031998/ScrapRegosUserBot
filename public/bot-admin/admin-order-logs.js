@@ -23,6 +23,10 @@ function formatActor(log) {
   return parts.length ? parts.join(' · ') : '—';
 }
 
+function formatPaymentType(log) {
+  return log.payment_provider_label || log.payment_provider || '—';
+}
+
 function formatDateTime(value) {
   if (!value) return '—';
   const date = new Date(String(value).replace(' ', 'T') + 'Z');
@@ -55,6 +59,8 @@ function renderOrderLogsTable() {
           <th>Заказ</th>
           <th class="cell-num">Сумма</th>
           <th>Клиент</th>
+          <th>Доп. номер</th>
+          <th>Оплата</th>
           <th>Сотрудник</th>
         </tr>
       </thead>
@@ -70,6 +76,8 @@ function renderOrderLogsTable() {
             <td class="cell-mono" data-label="Заказ" title="${escapeHtml(log.order_id)}">${escapeHtml(log.order_id)}</td>
             <td class="cell-num" data-label="Сумма">${escapeHtml(formatAmount(log.order_amount))}</td>
             <td class="cell-phone" data-label="Клиент">${escapeHtml(log.client_phone || '—')}</td>
+            <td class="cell-phone" data-label="Доп. номер">${escapeHtml(log.additional_phone || '—')}</td>
+            <td data-label="Оплата">${escapeHtml(formatPaymentType(log))}</td>
             <td data-label="Сотрудник">${escapeHtml(formatActor(log))}</td>
           </tr>`
           )

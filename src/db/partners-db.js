@@ -770,6 +770,7 @@ function createOrder(
     actorPhone: botUserPhone ?? null,
     orderAmount: amount,
     clientPhone,
+    additionalPhone,
   });
   return order;
 }
@@ -809,6 +810,15 @@ function markOrderPaid(
     const order = getOrderById(db, orderId);
     if (result.changes > 0 && order) {
       activateTechnicalSupportFromOrder(db, order, { paidAt: order.paid_at });
+      logOrderEvent(db, {
+        orderId,
+        action: 'paid',
+        actorTelegramId: order.telegram_id,
+        orderAmount: order.amount,
+        clientPhone: order.client_phone,
+        additionalPhone: order.additional_phone,
+        paymentProvider: order.payment_provider || provider || null,
+      });
     }
 
     db.exec('COMMIT');
