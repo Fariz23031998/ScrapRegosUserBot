@@ -33,13 +33,20 @@ body {
 
 .admin-nav {
   display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
   margin-top: 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
 .admin-nav__link {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 8px 14px;
   border-radius: 8px;
   background: #e4e7eb;

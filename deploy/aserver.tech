@@ -108,15 +108,24 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
     }
 
-    # Static assets: payment + prices pages (and future public CSS/JS)
+    # Static assets: payment + prices pages (and future public CSS/JS).
+    # Cache CSS/JS/images in browsers; HTML shells stay uncached via other locations.
     location /css/ {
         proxy_pass http://127.0.0.1:3000/css/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
     }
 
     location /js/ {
@@ -125,6 +134,10 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
     }
 
     location /images/ {
@@ -133,6 +146,38 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+    }
+
+    # Admin panel CSS/JS/images (matched before the /bot-admin/ HTML proxy).
+    location ~* ^/bot-admin/.+\.(?:css|js|png|jpe?g|gif|svg|webp|ico|woff2?)$ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+    }
+
+    # Do not cache HTML shells (index.html and other admin pages).
+    location ~* ^/bot-admin/.*\.html$ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        expires -1;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
     }
 
     # Payment page: https://aserver.tech/{order-uuid}
