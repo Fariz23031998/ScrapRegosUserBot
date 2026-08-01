@@ -155,7 +155,13 @@ async function notifyCustomersAboutOrder(bot, db, botUser, order, months) {
 
   const text = formatCustomerCreatedOrderMessage(order, months);
   for (const user of byTelegramId.values()) {
-    await bot.sendMessage(user.telegram_id, text);
+    try {
+      await bot.sendMessage(user.telegram_id, text);
+    } catch (err) {
+      console.warn(
+        `[tech-support] Skip Bot API notify for telegram_id=${user.telegram_id}: ${err.message}`
+      );
+    }
   }
 }
 
@@ -239,7 +245,11 @@ async function completeSupportPurchase(bot, chatId, telegramId, db, botUser, mon
     chatId,
     formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, price.months)
   );
-  await notifyCustomersAboutOrder(bot, db, botUser, order, price.months);
+  try {
+    await notifyCustomersAboutOrder(bot, db, botUser, order, price.months);
+  } catch (err) {
+    console.error('[tech-support] Customer Bot API notify failed:', err.message);
+  }
   await enqueueOrderPaymentSms(db, order, paymentPageUrl);
 }
 

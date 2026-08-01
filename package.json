@@ -19,6 +19,8 @@
     "sync:vcr1": "node cli/sync-vcr1.js",
     "bot": "node apps/bot/index.js",
     "server": "node apps/server/index.js",
+    "telegram:login": "node cli/telegram-mtproto-login.js",
+    "telegram:send": "node cli/telegram-mtproto-send.js",
     "service:install": "node scripts/install-bot-service.js",
     "service:uninstall": "node scripts/uninstall-bot-service.js",
     "task:install": "powershell -ExecutionPolicy Bypass -File scripts/install-sync-task.ps1",
@@ -37,6 +39,7 @@
     "node-telegram-bot-api": "^0.67.0",
     "node-windows": "^1.0.0-beta.8",
     "playwright": "^1.60.0",
+    "telegram": "^2.26.22",
     "ws": "^8.21.0"
   }
 }

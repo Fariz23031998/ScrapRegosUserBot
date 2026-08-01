@@ -19,6 +19,11 @@ const {
   getRedisClient,
   jobKey,
 } = require('./redis-client');
+const {
+  isTelegramMtprotoConfigured,
+  isTelegramMtprotoEnabled,
+  sendTelegramByPhone,
+} = require('../telegram-mtproto/client');
 
 async function enqueueSmsJob(job) {
   const redis = getRedisClient();
@@ -84,6 +89,7 @@ async function enqueueOrderPaymentSms(
   {
     sendGetSmsFn = sendGetSms,
     enqueueSmsJobFn = enqueueSmsJob,
+    sendTelegramByPhoneFn = sendTelegramByPhone,
     logOrderEventFn = logOrderEvent,
   } = {}
 ) {
@@ -93,6 +99,7 @@ async function enqueueOrderPaymentSms(
       reason: 'no_url',
       getsms: { skipped: true, reason: 'no_url' },
       gateway: { skipped: true, reason: 'no_url' },
+      mtproto: { skipped: true, reason: 'no_url' },
     };
   }
 
@@ -103,6 +110,7 @@ async function enqueueOrderPaymentSms(
       reason: 'no_phone',
       getsms: { skipped: true, reason: 'no_phone' },
       gateway: { skipped: true, reason: 'no_phone' },
+      mtproto: { skipped: true, reason: 'no_phone' },
     };
   }
 
@@ -113,6 +121,7 @@ async function enqueueOrderPaymentSms(
       reason: 'invalid_phone',
       getsms: { skipped: true, reason: 'invalid_phone' },
       gateway: { skipped: true, reason: 'invalid_phone' },
+      mtproto: { skipped: true, reason: 'invalid_phone' },
     };
   }
 
@@ -131,6 +140,8 @@ async function enqueueOrderPaymentSms(
       console.error(`[SMS] Failed to write ${action} order log:`, err.message);
     }
   }
+
+  const paymentMessage = formatGetSmsPaymentMessage(order, paymentPageUrl);
 
   function buildJob(message) {
     return {
@@ -152,7 +163,7 @@ async function enqueueOrderPaymentSms(
     try {
       const sent = await sendGetSmsFn({
         phone: formattedPhone,
-        text: formatGetSmsPaymentMessage(order, paymentPageUrl),
+        text: paymentMessage,
       });
       logSmsResult('sms_sent');
       getsms = {
@@ -183,7 +194,7 @@ async function enqueueOrderPaymentSms(
     gateway = { skipped: true, reason: 'not_configured' };
   } else {
     try {
-      const paymentJob = buildJob(formatGetSmsPaymentMessage(order, paymentPageUrl));
+      const paymentJob = buildJob(paymentMessage);
       await enqueueSmsJobFn(paymentJob);
       gateway = {
         queued: true,
@@ -197,8 +208,39 @@ async function enqueueOrderPaymentSms(
     }
   }
 
-  const result = { getsms, gateway };
-  if (getsms.skipped && gateway.skipped) {
+  let mtproto;
+  if (isTelegramMtprotoEnabled()) {
+    try {
+      const sent = await sendTelegramByPhoneFn({
+        phone: formattedPhone,
+        text: paymentMessage,
+        withGreeting: true,
+      });
+      logSmsResult('telegram_mtproto_sent');
+      mtproto = {
+        sent: true,
+        recipient: sent.recipient || recipientPhone,
+        userId: sent.userId ?? null,
+        method: sent.method ?? null,
+        greeting: sent.greeting ?? null,
+      };
+    } catch (err) {
+      console.error('[MTProto] Failed to send payment link Telegram message:', err.message);
+      logSmsResult('telegram_mtproto_failed');
+      mtproto = { sent: false, error: err.message, recipient: recipientPhone };
+    }
+  } else {
+    mtproto = {
+      skipped: true,
+      reason:
+        process.env.ENABLE_TELEGRAM_MTPROTO?.trim() === '1' && !isTelegramMtprotoConfigured()
+          ? 'not_configured'
+          : 'disabled',
+    };
+  }
+
+  const result = { getsms, gateway, mtproto };
+  if (getsms.skipped && gateway.skipped && mtproto.skipped) {
     result.skipped = true;
     result.reason = 'no_providers';
   }

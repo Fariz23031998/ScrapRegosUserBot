@@ -161,7 +161,11 @@ function formatCustomerCreatedOrderMessage(order) {
 }
 
 async function afterOrderCreated(bot, db, botUser, order, paymentPageUrl) {
-  await notifyCustomersAboutOrder(bot, db, botUser, order);
+  try {
+    await notifyCustomersAboutOrder(bot, db, botUser, order);
+  } catch (err) {
+    console.error('[service] Customer Bot API notify failed:', err.message);
+  }
   await enqueueOrderPaymentSms(db, order, paymentPageUrl);
 }
 
@@ -184,7 +188,14 @@ async function notifyCustomersAboutOrder(bot, db, botUser, order) {
 
   const text = formatCustomerCreatedOrderMessage(order);
   for (const u of byTelegramId.values()) {
-    await bot.sendMessage(u.telegram_id, text);
+    try {
+      await bot.sendMessage(u.telegram_id, text);
+    } catch (err) {
+      // Bot API cannot DM users who never started the bot / deleted the chat.
+      console.warn(
+        `[service] Skip Bot API notify for telegram_id=${u.telegram_id}: ${err.message}`
+      );
+    }
   }
 }
 

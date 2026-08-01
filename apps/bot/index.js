@@ -281,6 +281,14 @@ bot.onText(/\/help/, async (msg) => {
 });
 
 bot.on('message', async (msg) => {
+  try {
+    await handleIncomingMessage(msg);
+  } catch (err) {
+    console.error('[bot] message handler failed:', err.message);
+  }
+});
+
+async function handleIncomingMessage(msg) {
   const text = msg.text?.trim();
   if (text?.startsWith('/')) return;
 
@@ -374,7 +382,7 @@ bot.on('message', async (msg) => {
     console.error(`Failed to send search result to ${msg.chat.id}:`, err.message);
     await bot.sendMessage(msg.chat.id, 'Ошибка при отправке результата. Попробуйте ещё раз.');
   }
-});
+}
 
 console.log('Telegram bot is running.');
 

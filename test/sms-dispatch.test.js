@@ -22,6 +22,10 @@ const SMS_ENV = [
   'SMS_SUPPORT_TELEGRAM_URL',
   'SMS_WEBSITE_URL',
   'SMS_SUPPORT_PHONE',
+  'ENABLE_TELEGRAM_MTPROTO',
+  'TELEGRAM_API_ID',
+  'TELEGRAM_API_HASH',
+  'TELEGRAM_MTPROTO_SESSION',
 ];
 
 const order = {
@@ -154,6 +158,7 @@ describe('order SMS dispatch', () => {
   let previousEnv;
   let sent;
   let queued;
+  let mtprotoSent;
   let logs;
 
   before(() => {
@@ -171,10 +176,11 @@ describe('order SMS dispatch', () => {
     for (const key of SMS_ENV) delete process.env[key];
     sent = [];
     queued = [];
+    mtprotoSent = [];
     logs = [];
   });
 
-  function dependencies({ getsmsError, gatewayError } = {}) {
+  function dependencies({ getsmsError, gatewayError, mtprotoError } = {}) {
     return {
       sendGetSmsFn: async (payload) => {
         sent.push(payload);
@@ -185,6 +191,16 @@ describe('order SMS dispatch', () => {
         queued.push(job);
         if (gatewayError) throw new Error(gatewayError);
         return job;
+      },
+      sendTelegramByPhoneFn: async (payload) => {
+        mtprotoSent.push(payload);
+        if (mtprotoError) throw new Error(mtprotoError);
+        return {
+          sent: true,
+          recipient: `+${payload.phone}`,
+          userId: '42',
+          method: 'resolve_phone',
+        };
       },
       logOrderEventFn: (_db, event) => logs.push(event.action),
     };
@@ -201,6 +217,13 @@ describe('order SMS dispatch', () => {
     process.env.REDIS_URL = 'redis://example.test:6379';
   }
 
+  function enableMtproto() {
+    process.env.ENABLE_TELEGRAM_MTPROTO = '1';
+    process.env.TELEGRAM_API_ID = '12345';
+    process.env.TELEGRAM_API_HASH = 'hash';
+    process.env.TELEGRAM_MTPROTO_SESSION = 'session';
+  }
+
   it('dispatches through GETSMS only', async () => {
     enableGetSms();
     process.env.SMS_GATEWAY_ENABLED = '0';
@@ -214,8 +237,10 @@ describe('order SMS dispatch', () => {
 
     assert.equal(sent.length, 1);
     assert.equal(queued.length, 0);
+    assert.equal(mtprotoSent.length, 0);
     assert.equal(result.getsms.sent, true);
     assert.deepEqual(result.gateway, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(result.mtproto, { skipped: true, reason: 'disabled' });
     assert.deepEqual(logs, ['sms_sent']);
   });
 
@@ -236,6 +261,7 @@ describe('order SMS dispatch', () => {
     assert.equal(result.gateway.jobId, queued[0].id);
     assert.equal(queued[0].message, formatGetSmsPaymentMessage(order, paymentPageUrl));
     assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(result.mtproto, { skipped: true, reason: 'disabled' });
   });
 
   it('dispatches through both independently enabled providers', async () => {
@@ -256,6 +282,45 @@ describe('order SMS dispatch', () => {
     assert.equal(sent[0].text, queued[0].message);
   });
 
+  it('dispatches through MTProto only', async () => {
+    process.env.ENABLE_GETSMS = '0';
+    process.env.SMS_GATEWAY_ENABLED = '0';
+    enableMtproto();
+
+    const result = await enqueueOrderPaymentSms(
+      null,
+      order,
+      paymentPageUrl,
+      dependencies()
+    );
+
+    assert.equal(mtprotoSent.length, 1);
+    assert.equal(result.mtproto.sent, true);
+    assert.equal(result.mtproto.userId, '42');
+    assert.equal(mtprotoSent[0].text, formatGetSmsPaymentMessage(order, paymentPageUrl));
+    assert.equal(mtprotoSent[0].withGreeting, true);
+    assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(result.gateway, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(logs, ['telegram_mtproto_sent']);
+  });
+
+  it('continues SMS transports when MTProto fails', async () => {
+    enableGetSms();
+    process.env.SMS_GATEWAY_ENABLED = '0';
+    enableMtproto();
+
+    const result = await enqueueOrderPaymentSms(
+      null,
+      order,
+      paymentPageUrl,
+      dependencies({ mtprotoError: 'No Telegram user' })
+    );
+
+    assert.equal(result.getsms.sent, true);
+    assert.equal(result.mtproto.sent, false);
+    assert.deepEqual(logs, ['sms_sent', 'telegram_mtproto_failed']);
+  });
+
   it('skips when neither provider is applicable', async () => {
     process.env.ENABLE_GETSMS = '0';
     process.env.SMS_GATEWAY_ENABLED = '1';
@@ -272,6 +337,7 @@ describe('order SMS dispatch', () => {
     assert.equal(result.reason, 'no_providers');
     assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.gateway, { skipped: true, reason: 'not_configured' });
+    assert.deepEqual(result.mtproto, { skipped: true, reason: 'disabled' });
   });
 
   it('continues to the Android gateway when GETSMS fails', async () => {
