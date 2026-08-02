@@ -51,6 +51,18 @@ async function saveLoginErrorScreenshot(page, accountLabel) {
   }
 }
 
+function isAuthenticatedAppUrl(url) {
+  const href = typeof url === 'string' ? url : url.toString();
+  let hostname;
+  try {
+    hostname = new URL(href).hostname;
+  } catch {
+    return false;
+  }
+  if (isLoginUrl(href)) return false;
+  return /regos\.uz|easytrade\.uz/i.test(hostname);
+}
+
 async function performRegosIdLogin(page, { phone, password, accountLabel = 'account' }) {
   const loginLink = page.getByRole('link', { name: /войти через regos/i });
   if (!(await loginLink.count())) {
@@ -59,11 +71,20 @@ async function performRegosIdLogin(page, { phone, password, accountLabel = 'acco
   }
 
   await loginLink.click();
-  await page.waitForURL(/auth\.regos\.uz/i, { timeout: 120000 }).catch(async () => {
-    await page.waitForLoadState('networkidle', { timeout: 120000 }).catch(() => {});
-  });
+  // SSO may show the credential form, or silently complete and land on an app page.
+  await page
+    .waitForURL(
+      (url) => url.hostname.includes('auth.regos.uz') || isAuthenticatedAppUrl(url),
+      { timeout: 120000 }
+    )
+    .catch(async () => {
+      await page.waitForLoadState('networkidle', { timeout: 120000 }).catch(() => {});
+    });
 
   if (!page.url().includes('auth.regos.uz')) {
+    if (isAuthenticatedAppUrl(page.url())) {
+      return; // silent SSO auto-completed login
+    }
     const screenshot = await saveLoginErrorScreenshot(page, accountLabel);
     throw new Error(`Expected auth.regos.uz, got ${page.url()}${screenshot ? ` (screenshot: ${screenshot})` : ''}`);
   }
