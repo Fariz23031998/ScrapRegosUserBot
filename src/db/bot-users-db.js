@@ -14,6 +14,7 @@ const DEFAULT_RIGHTS = {
   mark_paid_cash: 0,
   open_admin_dashboard: 0,
   create_technical_support: 0,
+  renotify_order: 0,
 };
 
 const RIGHTS_COLUMNS = Object.keys(DEFAULT_RIGHTS);
@@ -64,6 +65,7 @@ function ensureUserRightsTable(db) {
       mark_paid_cash INTEGER NOT NULL DEFAULT 0,
       open_admin_dashboard INTEGER NOT NULL DEFAULT 0,
       create_technical_support INTEGER NOT NULL DEFAULT 0,
+      renotify_order INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
@@ -75,6 +77,9 @@ function ensureUserRightsTable(db) {
   }
   if (!columnExists(db, 'user_rights', 'create_technical_support')) {
     db.exec('ALTER TABLE user_rights ADD COLUMN create_technical_support INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!columnExists(db, 'user_rights', 'renotify_order')) {
+    db.exec('ALTER TABLE user_rights ADD COLUMN renotify_order INTEGER NOT NULL DEFAULT 0');
   }
 }
 
@@ -241,8 +246,8 @@ function upsertUserRights(db, userId, rights = {}) {
     `INSERT INTO user_rights (
       user_id, see_own_unpaid_orders, see_own_report, see_all_report,
       delete_unpaid_order, manage_vip, see_all_unpaid_orders, mark_paid_cash,
-      open_admin_dashboard, create_technical_support, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      open_admin_dashboard, create_technical_support, renotify_order, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(user_id) DO UPDATE SET
       see_own_unpaid_orders = excluded.see_own_unpaid_orders,
       see_own_report = excluded.see_own_report,
@@ -253,6 +258,7 @@ function upsertUserRights(db, userId, rights = {}) {
       mark_paid_cash = excluded.mark_paid_cash,
       open_admin_dashboard = excluded.open_admin_dashboard,
       create_technical_support = excluded.create_technical_support,
+      renotify_order = excluded.renotify_order,
       updated_at = datetime('now')`
   ).run(
     userId,
@@ -264,7 +270,8 @@ function upsertUserRights(db, userId, rights = {}) {
     merged.see_all_unpaid_orders ? 1 : 0,
     merged.mark_paid_cash ? 1 : 0,
     merged.open_admin_dashboard ? 1 : 0,
-    merged.create_technical_support ? 1 : 0
+    merged.create_technical_support ? 1 : 0,
+    merged.renotify_order ? 1 : 0
   );
 }
 

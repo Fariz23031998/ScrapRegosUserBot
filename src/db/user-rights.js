@@ -37,6 +37,10 @@ const RIGHTS = {
     column: 'create_technical_support',
     label: 'Создавать подписки технической поддержки',
   },
+  renotify_order: {
+    column: 'renotify_order',
+    label: 'Повторно уведомлять о заказах',
+  },
 };
 
 function hasRight(db, telegramId, rightKey) {

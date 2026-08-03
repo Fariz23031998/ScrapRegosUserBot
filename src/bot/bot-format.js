@@ -35,13 +35,19 @@ function formatUnpaidOrdersBlock(orders, { includeClientPhone = false } = {}) {
   return `${header}\n\n${blocks.join('\n\n')}`;
 }
 
-function buildOrderActionsKeyboard(orderId, { canDelete = false, canMarkPaidCash = false } = {}) {
+function buildOrderActionsKeyboard(
+  orderId,
+  { canDelete = false, canMarkPaidCash = false, canRenotify = false } = {}
+) {
   const row = [];
   if (canDelete) {
     row.push({ text: 'Удалить', callback_data: `order:delete:${orderId}` });
   }
   if (canMarkPaidCash) {
     row.push({ text: 'Оплачено наличными', callback_data: `order:paid_cash:${orderId}` });
+  }
+  if (canRenotify) {
+    row.push({ text: 'Повторно уведомить', callback_data: `order:renotify:${orderId}` });
   }
   if (!row.length) return undefined;
   return { reply_markup: { inline_keyboard: [row] } };

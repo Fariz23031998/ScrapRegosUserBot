@@ -4,7 +4,10 @@ const {
   deletePendingOrder,
   markPendingOrderPaidCash,
   getUnpaidOrdersByCreatorTelegramId,
+  getOrderById,
 } = require('../db/partners-db');
+const { formatPaymentPageUrl } = require('../payments/payments-api');
+const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { formatUnpaidOrderMessage, buildOrderActionsKeyboard } = require('./bot-format');
 const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
 const { enrichOrderParties } = require('./order-parties');
@@ -16,6 +19,29 @@ const DELETE_FAIL = 'Не удалось удалить заказ. Возмож
 const PAID_CASH_DENIED = 'Нет прав на отметку оплаты наличными.';
 const PAID_CASH_OK = 'Заказ закрыт: Оплачено наличными.';
 const PAID_CASH_FAIL = 'Не удалось закрыть заказ. Возможно, он уже оплачен или удалён.';
+const RENOTIFY_DENIED = 'Нет прав на повторное уведомление о заказе.';
+const RENOTIFY_FAIL = 'Не удалось уведомить. Заказ не найден или уже оплачен.';
+const RENOTIFY_NO_URL = 'Не удалось уведомить: не задан PUBLIC_BASE_URL.';
+const RENOTIFY_NO_PHONE = 'Не удалось уведомить: нет телефона клиента.';
+const RENOTIFY_NO_PROVIDERS = 'Не удалось уведомить: нет включённых каналов уведомления.';
+const RENOTIFY_OK = 'Уведомление о заказе отправлено повторно.';
+
+function formatRenotifyResultMessage(result) {
+  if (!result) return RENOTIFY_FAIL;
+  if (result.skipped) {
+    if (result.reason === 'no_url') return RENOTIFY_NO_URL;
+    if (result.reason === 'no_phone' || result.reason === 'invalid_phone') return RENOTIFY_NO_PHONE;
+    if (result.reason === 'no_providers') return RENOTIFY_NO_PROVIDERS;
+    return RENOTIFY_FAIL;
+  }
+
+  const parts = [];
+  if (result.getsms?.sent) parts.push('GETSMS');
+  if (result.gateway?.queued) parts.push('SMS gateway');
+  if (result.mtproto?.sent) parts.push('Telegram');
+  if (!parts.length) return RENOTIFY_NO_PROVIDERS;
+  return `${RENOTIFY_OK} (${parts.join(', ')})`;
+}
 
 async function sendOrdersWithActions(bot, chatId, orders, telegramId, db, { includeClientPhone = false } = {}) {
   if (!orders.length) {
@@ -25,11 +51,16 @@ async function sendOrdersWithActions(bot, chatId, orders, telegramId, db, { incl
 
   const canDelete = hasRight(db, telegramId, 'delete_unpaid_order');
   const canMarkPaidCash = hasRight(db, telegramId, 'mark_paid_cash');
+  const canRenotify = hasRight(db, telegramId, 'renotify_order');
 
   for (const order of orders) {
     const detailedOrder = enrichOrderParties(db, order);
     const text = formatUnpaidOrderMessage(detailedOrder, { includeClientPhone });
-    const options = buildOrderActionsKeyboard(order.id, { canDelete, canMarkPaidCash });
+    const options = buildOrderActionsKeyboard(order.id, {
+      canDelete,
+      canMarkPaidCash,
+      canRenotify,
+    });
     await bot.sendMessage(chatId, text, options);
   }
 }
@@ -69,7 +100,8 @@ function registerOrderActionHandlers(bot, { db }) {
     const data = query.data || '';
     const isDelete = data.startsWith('order:delete:');
     const isPaidCash = data.startsWith('order:paid_cash:');
-    if (!isDelete && !isPaidCash) return;
+    const isRenotify = data.startsWith('order:renotify:');
+    if (!isDelete && !isPaidCash && !isRenotify) return;
 
     const chatId = query.message?.chat?.id;
     const telegramId = query.from.id;
@@ -87,18 +119,38 @@ function registerOrderActionHandlers(bot, { db }) {
       return;
     }
 
-    if (!hasRight(db, telegramId, 'mark_paid_cash')) {
-      await bot.sendMessage(chatId, PAID_CASH_DENIED);
+    if (isPaidCash) {
+      if (!hasRight(db, telegramId, 'mark_paid_cash')) {
+        await bot.sendMessage(chatId, PAID_CASH_DENIED);
+        return;
+      }
+
+      const orderId = data.slice('order:paid_cash:'.length);
+      const closed = markPendingOrderPaidCash(db, orderId, telegramId);
+      await bot.sendMessage(chatId, closed ? PAID_CASH_OK : PAID_CASH_FAIL);
       return;
     }
 
-    const orderId = data.slice('order:paid_cash:'.length);
-    const closed = markPendingOrderPaidCash(db, orderId, telegramId);
-    await bot.sendMessage(chatId, closed ? PAID_CASH_OK : PAID_CASH_FAIL);
+    if (!hasRight(db, telegramId, 'renotify_order')) {
+      await bot.sendMessage(chatId, RENOTIFY_DENIED);
+      return;
+    }
+
+    const orderId = data.slice('order:renotify:'.length);
+    const order = getOrderById(db, orderId);
+    if (!order || order.status !== 'pending') {
+      await bot.sendMessage(chatId, RENOTIFY_FAIL);
+      return;
+    }
+
+    const paymentPageUrl = formatPaymentPageUrl(order.id);
+    const result = await enqueueOrderPaymentSms(db, order, paymentPageUrl);
+    await bot.sendMessage(chatId, formatRenotifyResultMessage(result));
   });
 }
 
 module.exports = {
   registerOrderActionHandlers,
   sendOrdersWithActions,
+  formatRenotifyResultMessage,
 };
