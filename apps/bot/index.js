@@ -26,6 +26,7 @@ const {
   registerTechnicalSupportHandlers,
   handleTechnicalSupportMessage,
 } = require('../../src/bot/technical-support-bot');
+const { registerTariffInfoHandlers } = require('../../src/bot/tariff-info-bot');
 const { registerPricesHandlers } = require('../../src/bot/prices-bot');
 const { formatUnpaidOrdersBlock } = require('../../src/bot/bot-format');
 const { enrichOrderParties } = require('../../src/bot/order-parties');
@@ -254,6 +255,9 @@ registerDashboardHandlers(bot, {
 });
 registerTechnicalSupportHandlers(bot, {
   db,
+  getBotUser: (telegramId) => getBotUser(db, telegramId),
+});
+registerTariffInfoHandlers(bot, {
   getBotUser: (telegramId) => getBotUser(db, telegramId),
 });
 registerPricesHandlers(bot);

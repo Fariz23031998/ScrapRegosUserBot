@@ -6,6 +6,7 @@ const { formatClickUrlSafe } = require('../payments/click');
 const { formatPaymentPageUrl, getDefaultPaymentProvider } = require('../payments/payments-api');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { createSupportDraft } = require('./technical-support-bot');
+const { createTariffInfoToken } = require('./tariff-info-bot');
 const { hasRight } = require('../db/user-rights');
 const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require('./telegram-safe');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
@@ -60,9 +61,15 @@ function makeServiceButtonForResult(result, telegramId, db = null) {
     row.push({ text: 'Добавить ТП', callback_data: `ts:start:${supportToken}` });
   }
 
+  const rows = [row];
+  const tariffToken = createTariffInfoToken(result, telegramId);
+  if (tariffToken) {
+    rows.push([{ text: 'О тарифе', callback_data: `tariff:info:${tariffToken}` }]);
+  }
+
   return {
     reply_markup: {
-      inline_keyboard: [row],
+      inline_keyboard: rows,
     },
   };
 }

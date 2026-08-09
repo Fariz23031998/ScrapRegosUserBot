@@ -578,6 +578,10 @@ async function searchUser(query, db = openDb()) {
               phone: partnerByLogin.phone,
               recordId: partnerByLogin.id,
               clientName: partnerByLogin.name,
+              accountId: account.id,
+              accountLabel: account._account || null,
+              apiLogin: account.api_login || null,
+              tariff: account.tariff || null,
               message: formatWithExpiry(
                 formatPartner(partnerByLogin, account),
                 partnerByLogin.registered_at

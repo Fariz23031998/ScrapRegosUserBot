@@ -79,6 +79,18 @@ Mapped fields: `status` → `moderation_status`, `create_date` → `registered_a
 
 **Search:** `search[value]` = exact/partial `api_login` (e.g. `DB800268-KF44Y4`).
 
+### `GET /PartnerAccounts/Detail/{id}`
+
+- **Referer:** `https://sb.regos.uz/PartnerAccounts/Index`
+- Full HTML page for one partner account (opened from the Index «view» button).
+- Overview tab («Информация об аккаунте») KPIs used by the bot «О тарифе» button:
+  - **Статус**
+  - **Используемый лимит**
+  - **Стоимость тарифа**
+  - **Лимиты тарифа** (Всего / По тарифу / Фактически for enterprises, warehouses, cash registers, users, disk MB, data period)
+
+Parsed by `src/sync/partner-accounts-detail.js`. Public plan prices for calculated totals come from `https://regos.uz/ru/price` (Redis key `regos:price:ru`, long TTL).
+
 ## Timeouts
 
 Default HTTP timeout for live search: 30s per request. Prefer `length` 20–50 for interactive queries.

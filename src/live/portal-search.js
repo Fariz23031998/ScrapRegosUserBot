@@ -2,6 +2,10 @@ const { getConfiguredAccounts, hasRposCredentials } = require('../sync/accounts'
 const { withRegosSession, withRposSession } = require('./session-manager');
 const { searchPartners } = require('../sync/partners-api');
 const { searchPartnerAccounts } = require('../sync/partner-accounts-api');
+const {
+  fetchPartnerAccountDetail,
+  parsePartnerAccountOverview,
+} = require('../sync/partner-accounts-detail');
 const { searchLicenses } = require('../sync/licenses-api');
 const { searchVcr1Partners } = require('../sync/vcr1-partners-api');
 const { searchVcr1Licenses } = require('../sync/vcr1-licenses-api');
@@ -189,6 +193,47 @@ async function liveGetPartnerById(id) {
   return rows.find((row) => String(row.id) === String(id)) || null;
 }
 
+/**
+ * Fetch PartnerAccounts Detail overview for an account id.
+ * Prefers the session that found the list row; falls back across configured accounts.
+ */
+async function liveGetPartnerAccountDetail(id, preferredAccountLabel = null) {
+  const accountId = String(id ?? '').trim();
+  if (!accountId) {
+    throw new Error('Partner account id is required');
+  }
+
+  const configured = getConfiguredAccounts();
+  if (!configured.length) {
+    throw new Error('No Regos accounts configured in .env');
+  }
+
+  const ordered = [];
+  if (preferredAccountLabel && configured.includes(preferredAccountLabel)) {
+    ordered.push(preferredAccountLabel);
+  }
+  for (const label of configured) {
+    if (!ordered.includes(label)) ordered.push(label);
+  }
+
+  const errors = [];
+  for (const accountLabel of ordered) {
+    try {
+      const overview = await withRegosSession(accountLabel, async (request) => {
+        const html = await fetchPartnerAccountDetail(request, accountId);
+        return parsePartnerAccountOverview(html);
+      });
+      return { ...overview, id: accountId, _account: accountLabel };
+    } catch (err) {
+      const message = err?.message || String(err);
+      console.error(`PartnerAccounts/Detail via ${accountLabel} failed:`, message);
+      errors.push(`${accountLabel}: ${message}`);
+    }
+  }
+
+  throw new Error(errors.join('; ') || 'PartnerAccounts/Detail failed');
+}
+
 async function liveGetLicenseById(id) {
   const rows = await liveSearchLicenses(String(id));
   return rows.find((row) => String(row.id) === String(id)) || null;
@@ -223,6 +268,7 @@ module.exports = {
   liveSearchRposClients,
   liveSearchRposAccounts,
   liveGetPartnerById,
+  liveGetPartnerAccountDetail,
   liveGetLicenseById,
   liveGetVcr1PartnerById,
   liveGetVcr1LicenseById,
