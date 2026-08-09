@@ -3,7 +3,8 @@ const { VCR1_BASE_URL } = require('./regos-auth');
 const LICENSES_GET_URL = `${VCR1_BASE_URL}/Licenses/Get`;
 const LICENSES_REFERER = `${VCR1_BASE_URL}/Licenses/Index`;
 const DEFAULT_PAGE_SIZE = 100;
-const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
+const LIVE_PAGE_SIZE = 50;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
 const COLUMNS = [
   'partner',
@@ -30,12 +31,12 @@ function vcr1AjaxHeaders(referer) {
   };
 }
 
-function buildFormData({ draw, start, length }) {
+function buildFormData({ draw, start, length, search = '' }) {
   const form = {
     draw: String(draw),
     start: String(start),
     length: String(length),
-    'search[value]': '',
+    'search[value]': String(search || ''),
     'search[regex]': 'false',
     'order[0][column]': '0',
     'order[0][dir]': 'DESC',
@@ -63,9 +64,12 @@ function assertLicensesResponse(payload) {
   return payload;
 }
 
-async function fetchVcr1LicensesPage(request, { start = 0, length = DEFAULT_PAGE_SIZE, draw = 1 } = {}) {
+async function fetchVcr1LicensesPage(
+  request,
+  { start = 0, length = DEFAULT_PAGE_SIZE, draw = 1, search = '' } = {}
+) {
   const response = await request.post(LICENSES_GET_URL, {
-    form: buildFormData({ draw, start, length }),
+    form: buildFormData({ draw, start, length, search }),
     headers: vcr1AjaxHeaders(LICENSES_REFERER),
     timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   });
@@ -74,11 +78,31 @@ async function fetchVcr1LicensesPage(request, { start = 0, length = DEFAULT_PAGE
     throw new Error(`vcr1 Licenses/Get failed with status ${response.status()}`);
   }
 
-  return assertLicensesResponse(await response.json());
+  const text = await response.text();
+  if (text.trimStart().startsWith('<!')) {
+    throw new Error('vcr1 Licenses/Get returned login/HTML (session expired)');
+  }
+  return assertLicensesResponse(JSON.parse(text));
 }
 
-async function fetchAllVcr1Licenses(request, { pageSize = DEFAULT_PAGE_SIZE, onPage } = {}) {
-  const first = await fetchVcr1LicensesPage(request, { start: 0, length: pageSize, draw: 1 });
+async function searchVcr1Licenses(request, search, { pageSize = LIVE_PAGE_SIZE } = {}) {
+  const payload = await fetchVcr1LicensesPage(request, {
+    start: 0,
+    length: pageSize,
+    draw: 1,
+    search: search || '',
+  });
+  return {
+    rows: payload.data ?? [],
+    total: payload.recordsFiltered ?? payload.recordsTotal ?? 0,
+  };
+}
+
+async function fetchAllVcr1Licenses(
+  request,
+  { pageSize = DEFAULT_PAGE_SIZE, onPage, search = '' } = {}
+) {
+  const first = await fetchVcr1LicensesPage(request, { start: 0, length: pageSize, draw: 1, search });
   const total = first.recordsFiltered ?? first.recordsTotal ?? first.data?.length ?? 0;
   const allRows = [...(first.data ?? [])];
 
@@ -92,7 +116,7 @@ async function fetchAllVcr1Licenses(request, { pageSize = DEFAULT_PAGE_SIZE, onP
 
   while (start < total) {
     pagesFetched += 1;
-    const next = await fetchVcr1LicensesPage(request, { start, length: pageSize, draw });
+    const next = await fetchVcr1LicensesPage(request, { start, length: pageSize, draw, search });
     const batch = next.data ?? [];
     if (batch.length === 0) break;
 
@@ -110,6 +134,8 @@ async function fetchAllVcr1Licenses(request, { pageSize = DEFAULT_PAGE_SIZE, onP
 
 module.exports = {
   DEFAULT_PAGE_SIZE,
+  LIVE_PAGE_SIZE,
   fetchAllVcr1Licenses,
   fetchVcr1LicensesPage,
+  searchVcr1Licenses,
 };

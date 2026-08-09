@@ -14,7 +14,6 @@ const {
 } = require('../src/db/technical-support');
 const { addLink, ensureClientFirmLinksTable } = require('../src/db/client-firm-links');
 const { enrichTicketsWithLocalData } = require('../src/admin/ticket-local-enrichment');
-const { getFirmCardByTypeAndId } = require('../src/bot/search-user');
 
 function makeTempDbPath() {
   return path.join(
@@ -57,7 +56,6 @@ describe('ticket local enrichment', () => {
     db.exec('DELETE FROM orders');
     db.exec('DELETE FROM technical_support_subscriptions');
     db.exec('DELETE FROM client_firm_links');
-    db.exec('DELETE FROM partners');
   });
 
   it('maps unpaid orders, TS status, and firm links onto tickets', () => {
@@ -231,18 +229,35 @@ describe('ticket local enrichment', () => {
     assert.equal(status.ends_at, null);
   });
 
-  it('loads a partner firm card by type and id', () => {
-    db.prepare(
-      `INSERT INTO partners (
-         id, name, legal_status, phone, contacts, description, moderation_status,
-         balance, registered_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(77, 'Demo Partner', 'ООО', '998901112233', '', '', 'ok', 0, '2026-01-01');
+  it('loads a partner firm card by type and id', async () => {
+    const portalSearch = require('../src/live/portal-search');
+    const originalGet = portalSearch.liveGetPartnerById;
+    portalSearch.liveGetPartnerById = async (id) => {
+      if (String(id) !== '77') return null;
+      return {
+        id: 77,
+        name: 'Demo Partner',
+        legal_status: 'ООО',
+        phone: '998901112233',
+        contacts: '',
+        description: '',
+        moderation_status: 'ok',
+        balance: 0,
+        registered_at: '2026-01-01',
+      };
+    };
 
-    const firm = getFirmCardByTypeAndId(db, 'partner', 77);
-    assert.ok(firm);
-    assert.equal(firm.type, 'partner');
-    assert.equal(Number(firm.recordId), 77);
-    assert.match(firm.message, /Demo Partner/);
+    try {
+      delete require.cache[require.resolve('../src/bot/search-user')];
+      const { getFirmCardByTypeAndId: getFirm } = require('../src/bot/search-user');
+      const firm = await getFirm(db, 'partner', 77);
+      assert.ok(firm);
+      assert.equal(firm.type, 'partner');
+      assert.equal(Number(firm.recordId), 77);
+      assert.match(firm.message, /Demo Partner/);
+    } finally {
+      portalSearch.liveGetPartnerById = originalGet;
+      delete require.cache[require.resolve('../src/bot/search-user')];
+    }
   });
 });

@@ -589,10 +589,15 @@ async function calculateDurationAwareSummary(durationSummary, threshold, generat
       recordingDurationCache.set(String(call.id), cached);
       continue;
     }
+    const memoryCached = recordingDurationCache.get(String(call.id));
+    if (Number.isFinite(memoryCached) && memoryCached > 0) {
+      durationsByTicketId[String(call.id)] = memoryCached;
+      continue;
+    }
     missing.push(call);
   }
 
-  // Only probe Audio for calls that are not already in SQL cache.
+  // Only probe Audio for calls that are not already in SQL / memory cache.
   await mapWithConcurrency(missing, 4, async (call) => {
     const duration = await loadRecordingDuration(call.id);
     if (Number.isFinite(duration) && duration > 0) {
@@ -601,6 +606,9 @@ async function calculateDurationAwareSummary(durationSummary, threshold, generat
   });
 
   if (generation !== summaryCalculationGeneration) return;
+  if (typeof TicketSummary?.summarizeByDuration !== 'function') {
+    throw new Error('TicketSummary.summarizeByDuration is unavailable');
+  }
   summary = TicketSummary.summarizeByDuration(
     durationSummary,
     durationsByTicketId,
@@ -1307,7 +1315,16 @@ async function loadTickets({ silent = false } = {}) {
   currentPage = data.page ?? currentPage;
   pageLimit = data.limit ?? pageLimit;
   summary = data.summary || { count: totalTickets, slaBreached: 0, rated: 0 };
-  summaryCalculating = Boolean(data.duration_summary);
+  const durationSummary = data.duration_summary || null;
+  const needsClientDuration = Boolean(durationSummary) &&
+    (typeof TicketSummary?.hasPendingCallDurations === 'function'
+      ? TicketSummary.hasPendingCallDurations(durationSummary)
+      : (durationSummary.calls || []).some((call) => {
+          if (!call?.hasRecording) return false;
+          const duration = Number(call.duration_seconds);
+          return !(Number.isFinite(duration) && duration > 0);
+        }));
+  summaryCalculating = needsClientDuration;
   activeTicket = data.active_ticket || null;
   activeTicketUserId =
     data.active_ticket_user_id != null ? Number(data.active_ticket_user_id) : null;
@@ -1318,9 +1335,9 @@ async function loadTickets({ silent = false } = {}) {
   renderTicketsTable();
   renderTicketsPagination();
 
-  if (data.duration_summary) {
+  if (needsClientDuration) {
     const threshold = Number(minimumCallDuration);
-    calculateDurationAwareSummary(data.duration_summary, threshold, summaryGeneration).catch(
+    calculateDurationAwareSummary(durationSummary, threshold, summaryGeneration).catch(
       (error) => {
         if (summaryGeneration !== summaryCalculationGeneration) return;
         console.warn('Не удалось рассчитать итоги по длительности звонков:', error);

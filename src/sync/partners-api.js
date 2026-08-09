@@ -1,6 +1,7 @@
 const PARTNERS_GET_URL = 'https://sb.regos.uz/Partners/Get';
 const DEFAULT_PAGE_SIZE = 100;
-const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
+const LIVE_PAGE_SIZE = 50;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 const PARTNERS_REFERER = 'https://sb.regos.uz/Partners/Index';
 
 function regosAjaxHeaders(referer) {
@@ -10,18 +11,29 @@ function regosAjaxHeaders(referer) {
   };
 }
 
-function buildFormData({ draw, start, length }) {
+function buildFormData({ draw, start, length, search = '' }) {
   const form = {
     draw: String(draw),
     start: String(start),
     length: String(length),
-    'search[value]': '',
+    'search[value]': String(search || ''),
     'search[regex]': 'false',
     'order[0][column]': '0',
     'order[0][dir]': 'desc',
   };
 
-  const columns = ['id', 'name', 'legal_status', 'phone', 'contacts', 'description', 'status', 'balance', 'create_date', 'id'];
+  const columns = [
+    'id',
+    'name',
+    'legal_status',
+    'phone',
+    'contacts',
+    'description',
+    'status',
+    'balance',
+    'create_date',
+    'id',
+  ];
   columns.forEach((data, index) => {
     form[`columns[${index}][data]`] = data;
     form[`columns[${index}][name]`] = '';
@@ -34,9 +46,12 @@ function buildFormData({ draw, start, length }) {
   return form;
 }
 
-async function fetchPartnersPage(request, { start = 0, length = DEFAULT_PAGE_SIZE, draw = 1 } = {}) {
+async function fetchPartnersPage(
+  request,
+  { start = 0, length = DEFAULT_PAGE_SIZE, draw = 1, search = '' } = {}
+) {
   const response = await request.post(PARTNERS_GET_URL, {
-    form: buildFormData({ draw, start, length }),
+    form: buildFormData({ draw, start, length, search }),
     headers: regosAjaxHeaders(PARTNERS_REFERER),
     timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   });
@@ -45,12 +60,29 @@ async function fetchPartnersPage(request, { start = 0, length = DEFAULT_PAGE_SIZ
     throw new Error(`Partners/Get failed with status ${response.status()}`);
   }
 
-  return response.json();
+  const text = await response.text();
+  if (text.trimStart().startsWith('<!')) {
+    throw new Error('Partners/Get returned login/HTML (session expired)');
+  }
+  return JSON.parse(text);
 }
 
-async function fetchAllPartners(request, { pageSize = DEFAULT_PAGE_SIZE, onPage } = {}) {
-  const first = await fetchPartnersPage(request, { start: 0, length: pageSize, draw: 1 });
-  const total = first.recordsTotal ?? first.data?.length ?? 0;
+async function searchPartners(request, search, { pageSize = LIVE_PAGE_SIZE } = {}) {
+  const payload = await fetchPartnersPage(request, {
+    start: 0,
+    length: pageSize,
+    draw: 1,
+    search: search || '',
+  });
+  return {
+    rows: payload.data ?? [],
+    total: payload.recordsFiltered ?? payload.recordsTotal ?? 0,
+  };
+}
+
+async function fetchAllPartners(request, { pageSize = DEFAULT_PAGE_SIZE, onPage, search = '' } = {}) {
+  const first = await fetchPartnersPage(request, { start: 0, length: pageSize, draw: 1, search });
+  const total = first.recordsFiltered ?? first.recordsTotal ?? first.data?.length ?? 0;
   const allRows = [...(first.data ?? [])];
 
   if (onPage) {
@@ -63,7 +95,7 @@ async function fetchAllPartners(request, { pageSize = DEFAULT_PAGE_SIZE, onPage 
 
   while (start < total) {
     pagesFetched += 1;
-    const next = await fetchPartnersPage(request, { start, length: pageSize, draw });
+    const next = await fetchPartnersPage(request, { start, length: pageSize, draw, search });
     const batch = next.data ?? [];
     if (batch.length === 0) break;
 
@@ -81,6 +113,8 @@ async function fetchAllPartners(request, { pageSize = DEFAULT_PAGE_SIZE, onPage 
 
 module.exports = {
   DEFAULT_PAGE_SIZE,
+  LIVE_PAGE_SIZE,
   fetchAllPartners,
   fetchPartnersPage,
+  searchPartners,
 };

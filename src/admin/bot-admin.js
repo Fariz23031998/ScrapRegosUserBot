@@ -109,6 +109,10 @@ const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
 const { getTicketRecordingUrl } = require('./ticket-recording');
+const {
+  summarizeByDuration,
+  buildDurationsByTicketId,
+} = require('../../public/bot-admin/admin-ticket-summary');
 const crypto = require('crypto');
 
 const RECORDING_URL_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -396,10 +400,11 @@ async function loadActiveTicketForRequest(db, req) {
 }
 
 function buildDurationSummary(tickets, channelSettings, db = null) {
-  const callChannelIds = new Set(
-    (channelSettings || [])
-      .filter((setting) => setting.interaction_mode === 'call')
-      .map((setting) => String(setting.channel_id))
+  const modeByChannelId = new Map(
+    (channelSettings || []).map((setting) => [
+      String(setting.channel_id),
+      String(setting.interaction_mode || ''),
+    ])
   );
   const messageTickets = [];
   const calls = [];
@@ -412,13 +417,20 @@ function buildDurationSummary(tickets, channelSettings, db = null) {
 
   for (const ticket of tickets || []) {
     const channelId = ticket?.channel_id == null ? '' : String(ticket.channel_id);
-    if (!callChannelIds.has(channelId)) {
-      messageTickets.push(ticket);
-      continue;
-    }
+    const channelMode = modeByChannelId.get(channelId) || null;
     const ticketId = Number(ticket?.id);
     const recording =
       Number.isInteger(ticketId) && ticketId > 0 ? recordingsById.get(ticketId) : null;
+    const hasRecording = Boolean(getTicketRecordingUrl(ticket) || recording?.recording_url);
+    // Explicit message channels stay in the base. Call channels are always evaluated.
+    // Unconfigured channels with a recording are treated as calls so the duration
+    // filter works before channel settings are saved.
+    const isCallTicket =
+      channelMode === 'call' || (channelMode !== 'message_only' && hasRecording);
+    if (!isCallTicket) {
+      messageTickets.push(ticket);
+      continue;
+    }
     const cachedDuration = Number(recording?.duration_seconds);
     const durationSeconds =
       Number.isFinite(cachedDuration) && cachedDuration > 0 ? cachedDuration : null;
@@ -426,7 +438,7 @@ function buildDurationSummary(tickets, channelSettings, db = null) {
       id: ticket.id,
       slaBreached: Boolean(ticket.sla_breached),
       rated: ticket.rating != null,
-      hasRecording: Boolean(getTicketRecordingUrl(ticket) || recording?.recording_url),
+      hasRecording,
       duration_seconds: durationSeconds,
     });
   }
@@ -1340,13 +1352,16 @@ function createBotAdminRouter(db) {
   router.get(
     '/api/firm-search',
     requireAnyRight(db, ['tickets_read', 'clients_link_firm']),
-    (req, res) => {
+    async (req, res) => {
       const q = String(req.query.q || '').trim();
       if (!q) {
         return res.status(400).json({ message: 'Укажите поисковый запрос.' });
       }
       try {
-        const result = searchFirmAdmin(q, db);
+        const result = await searchFirmAdmin(q, db);
+        if (result.error) {
+          return res.status(502).json({ message: result.message || 'Не удалось выполнить поиск.' });
+        }
         if (!result.found) {
           return res.json({ found: false, results: [] });
         }
@@ -1365,9 +1380,9 @@ function createBotAdminRouter(db) {
     }
   );
 
-  router.get('/api/firms/:type/:recordId', requireRight(db, 'tickets_read'), (req, res) => {
+  router.get('/api/firms/:type/:recordId', requireRight(db, 'tickets_read'), async (req, res) => {
     try {
-      const firm = getFirmCardByTypeAndId(db, req.params.type, req.params.recordId);
+      const firm = await getFirmCardByTypeAndId(db, req.params.type, req.params.recordId);
       if (!firm) {
         return res.status(404).json({ message: 'Фирма не найдена.' });
       }
@@ -1635,13 +1650,22 @@ function createBotAdminRouter(db) {
         tickets = dedupeTickets(tickets, duplicateIntervalMinutes);
       }
 
-      const summary = summarizeTickets(tickets);
       const durationSummary = durationFilterActive
         ? buildDurationSummary(tickets, listRegosChannelSettings(db), db)
         : null;
       if (durationSummary) {
         tickets.forEach(cacheTicketRecordingUrl);
       }
+      // When the duration filter is active, totals use SQL-known call durations
+      // immediately (message channels stay in the base). The browser may refine
+      // further once it probes recordings that are not cached yet.
+      const summary = durationSummary
+        ? summarizeByDuration(
+            durationSummary,
+            buildDurationsByTicketId(durationSummary),
+            minimumCallDuration
+          )
+        : summarizeTickets(tickets);
       const total = tickets.length;
       const totalPages = Math.max(1, Math.ceil(total / limit) || 1);
       if (page > totalPages) {

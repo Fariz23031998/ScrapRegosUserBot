@@ -317,14 +317,51 @@ describe('POST /bot-admin/api/orders', () => {
   }
 
   it('searches firm data and stores firm metadata on create', async () => {
-    db.prepare(
-      `INSERT INTO partners (id, name, phone, registered_at)
-       VALUES (?, ?, ?, datetime('now'))`
-    ).run(501, 'Acme Firm', '998901112233');
-    db.prepare(
-      `INSERT INTO vcr1_partners (id, name, inn, phone, company, registered_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))`
-    ).run(601, 'VCR Partner', '305123456', '998909998877', 'Omega Company LLC');
+    const portalSearch = require('../src/live/portal-search');
+    const partner = {
+      id: 501,
+      name: 'Acme Firm',
+      phone: '998901112233',
+      legal_status: null,
+      contacts: null,
+      description: null,
+      moderation_status: null,
+      balance: null,
+      registered_at: '01.01.2026',
+    };
+    const vcr1Partner = {
+      id: 601,
+      name: 'VCR Partner',
+      inn: '305123456',
+      phone: '998909998877',
+      company: 'Omega Company LLC',
+      legal_status: null,
+      contacts: null,
+      balance: null,
+      registered_at: '01.01.2026',
+    };
+    const originals = { ...portalSearch };
+    portalSearch.liveSearchPartners = async (query) => {
+      const q = String(query || '').toLowerCase();
+      if (q.includes('901112233') || q.includes('acme')) return [partner];
+      return [];
+    };
+    portalSearch.liveSearchVcr1Partners = async (query) => {
+      const q = String(query || '').toLowerCase();
+      if (q.includes('omega') || q.includes('909998877') || q.includes('305123456')) {
+        return [vcr1Partner];
+      }
+      return [];
+    };
+    portalSearch.liveSearchPartnerAccounts = async () => [];
+    portalSearch.liveSearchLicenses = async () => [];
+    portalSearch.liveSearchVcr1Licenses = async () => [];
+    portalSearch.liveSearchRposClients = async () => [];
+    portalSearch.liveSearchRposAccounts = async () => [];
+
+    delete require.cache[require.resolve('../src/bot/search-user')];
+    delete require.cache[require.resolve('../src/admin/bot-admin')];
+    const { createBotAdminRouter: createAdmin } = require('../src/admin/bot-admin');
 
     const employee = createEmployeeUser(db, {
       phone: '+998905559900',
@@ -336,7 +373,7 @@ describe('POST /bot-admin/api/orders', () => {
     db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555002, employee.id);
 
     const app = express();
-    app.use('/bot-admin', createBotAdminRouter(db));
+    app.use('/bot-admin', createAdmin(db));
     const server = await new Promise((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
@@ -412,6 +449,9 @@ describe('POST /bot-admin/api/orders', () => {
       assert.equal(meta.message, 'Acme Firm block');
       assert.equal(meta.type, 'partner');
     } finally {
+      Object.assign(portalSearch, originals);
+      delete require.cache[require.resolve('../src/bot/search-user')];
+      delete require.cache[require.resolve('../src/admin/bot-admin')];
       await new Promise((resolve) => server.close(resolve));
     }
   });
@@ -439,21 +479,58 @@ describe('searchUser vs searchFirmAdmin', () => {
     if (dbPath) removeDbFiles(dbPath);
   });
 
-  it('keeps searchUser phone/code-only while searchFirmAdmin finds by name', () => {
-    const { searchUser, searchFirmAdmin } = require('../src/bot/search-user');
-    db.prepare(
-      `INSERT INTO partners (id, name, phone, registered_at)
-       VALUES (?, ?, ?, datetime('now'))`
-    ).run(701, 'UniqueName Corp', '998901234000');
+  it('keeps searchUser phone/code-only while searchFirmAdmin finds by name', async () => {
+    const portalSearch = require('../src/live/portal-search');
+    const partner = {
+      id: 701,
+      name: 'UniqueName Corp',
+      phone: '998901234000',
+      legal_status: null,
+      contacts: null,
+      description: null,
+      moderation_status: null,
+      balance: null,
+      registered_at: '01.01.2026',
+    };
 
-    const botResult = searchUser('UniqueName', db);
-    assert.equal(botResult.found, false);
+    const original = {
+      liveSearchPartners: portalSearch.liveSearchPartners,
+      liveSearchPartnerAccounts: portalSearch.liveSearchPartnerAccounts,
+      liveSearchLicenses: portalSearch.liveSearchLicenses,
+      liveSearchVcr1Partners: portalSearch.liveSearchVcr1Partners,
+      liveSearchVcr1Licenses: portalSearch.liveSearchVcr1Licenses,
+      liveSearchRposClients: portalSearch.liveSearchRposClients,
+      liveSearchRposAccounts: portalSearch.liveSearchRposAccounts,
+    };
 
-    const adminResult = searchFirmAdmin('UniqueName', db);
-    assert.equal(adminResult.found, true);
-    assert.ok(adminResult.results.some((row) => row.recordId === 701 && row.type === 'partner'));
+    portalSearch.liveSearchPartners = async (query) => {
+      const q = String(query || '').toLowerCase();
+      if (q.includes('uniquename') || q.includes('901234000')) return [partner];
+      return [];
+    };
+    portalSearch.liveSearchPartnerAccounts = async () => [];
+    portalSearch.liveSearchLicenses = async () => [];
+    portalSearch.liveSearchVcr1Partners = async () => [];
+    portalSearch.liveSearchVcr1Licenses = async () => [];
+    portalSearch.liveSearchRposClients = async () => [];
+    portalSearch.liveSearchRposAccounts = async () => [];
 
-    const phoneResult = searchUser('998901234000', db);
-    assert.equal(phoneResult.found, true);
+    try {
+      delete require.cache[require.resolve('../src/bot/search-user')];
+      const { searchUser, searchFirmAdmin } = require('../src/bot/search-user');
+
+      const botResult = await searchUser('UniqueName', db);
+      assert.equal(botResult.found, false);
+
+      const adminResult = await searchFirmAdmin('UniqueName', db);
+      assert.equal(adminResult.found, true);
+      assert.ok(adminResult.results.some((row) => row.recordId === 701 && row.type === 'partner'));
+
+      const phoneResult = await searchUser('998901234000', db);
+      assert.equal(phoneResult.found, true);
+    } finally {
+      Object.assign(portalSearch, original);
+      delete require.cache[require.resolve('../src/bot/search-user')];
+    }
   });
 });

@@ -366,7 +366,7 @@ async function handleIncomingMessage(msg) {
 
   try {
     await sendChatActionSafe(bot, msg.chat.id);
-    const result = searchUser(text, db);
+    const result = await searchUser(text, db);
     if (result.found && Array.isArray(result.results) && result.results.length > 0) {
       const shownUnpaidForPhones = new Set();
       for (const entry of result.results) {

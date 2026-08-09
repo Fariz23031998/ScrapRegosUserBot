@@ -118,11 +118,11 @@ Set in `.env`:
 - `PUBLIC_BASE_URL=https://aserver.tech` (payment page links like `https://aserver.tech/{order_id}`)
 - `PAYME_MERCHANT_ID`, `PAYME_SECRET_KEY`, `PAYME_TEST_KEY`, `PAYME_TEST_MODE`, `PAYME_RETURN_URL` (optional Payme)
 - `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (web admin at `/bot-admin/`)
-- `REDIS_URL`, `SMS_GATEWAY_TOKEN` (SMS gateway; see [SMS gateway](sms-gateway.md))
+- `REDIS_URL`, `SMS_GATEWAY_TOKEN` (SMS gateway; see [SMS gateway](sms-gateway.md)). Same `REDIS_URL` also backs short-TTL live portal search cache (`PORTAL_CACHE_*`; see `.env.example`).
 
 Both `npm run server` and `npm run bot` need `REDIS_URL` in `.env`.
 
-## 5.1) Redis (SMS queue)
+## 5.1) Redis (SMS queue + portal search cache)
 
 Install and enable Redis on the host:
 
@@ -133,6 +133,8 @@ sudo systemctl start redis-server
 ```
 
 Default bind is localhost (`127.0.0.1:6379`). Set `REDIS_URL=redis://127.0.0.1:6379` in `.env`.
+
+Optional portal cache knobs (defaults apply when unset): `PORTAL_CACHE_ENABLED=0` to disable, `PORTAL_CACHE_TTL_BALANCE_SEC=60` for partner balances, `PORTAL_CACHE_TTL_SEC=120` for licenses/accounts/RPOS.
 
 ## 6) Bot admin and employees
 
