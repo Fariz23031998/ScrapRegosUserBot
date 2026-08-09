@@ -3,7 +3,8 @@ const { logOrderEvent } = require('../db/order-logs');
 const {
   formatPhoneForSms,
   resolveSmsRecipientPhone,
-  formatGetSmsPaymentMessage,
+  formatPaymentMessage,
+  PAYMENT_MESSAGE_CHANNELS,
 } = require('./sms-message');
 const {
   isGetSmsConfigured,
@@ -141,8 +142,6 @@ async function enqueueOrderPaymentSms(
     }
   }
 
-  const paymentMessage = formatGetSmsPaymentMessage(order, paymentPageUrl);
-
   function buildJob(message) {
     return {
       id: crypto.randomUUID(),
@@ -163,7 +162,7 @@ async function enqueueOrderPaymentSms(
     try {
       const sent = await sendGetSmsFn({
         phone: formattedPhone,
-        text: paymentMessage,
+        text: formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.GETSMS),
       });
       logSmsResult('sms_sent');
       getsms = {
@@ -194,7 +193,9 @@ async function enqueueOrderPaymentSms(
     gateway = { skipped: true, reason: 'not_configured' };
   } else {
     try {
-      const paymentJob = buildJob(paymentMessage);
+      const paymentJob = buildJob(
+        formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY)
+      );
       await enqueueSmsJobFn(paymentJob);
       gateway = {
         queued: true,
@@ -213,7 +214,7 @@ async function enqueueOrderPaymentSms(
     try {
       const sent = await sendTelegramByPhoneFn({
         phone: formattedPhone,
-        text: paymentMessage,
+        text: formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.MTPROTO),
         withGreeting: true,
       });
       logSmsResult('telegram_mtproto_sent');

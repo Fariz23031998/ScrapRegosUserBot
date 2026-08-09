@@ -1,27 +1,17 @@
 const { RPOS_BASE_URL } = require('./rpos-auth');
 const { scrapeAdminTable, hasNextAdminPage, buildPageUrl } = require('./rpos-scraper');
+const { parseAdminTableHtml, isRposLoginHtml } = require('./rpos-html');
+const { rposClientFromRow, rposAccountFromRow } = require('../live/mappers');
 
 const CLIENTS_URL = `${RPOS_BASE_URL}/admin/license/client/`;
 const ACCOUNTS_URL = `${RPOS_BASE_URL}/admin/license/account/`;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
-function rposClientFromRow(cells, sourceAccount) {
-  return {
-    id: Number(cells[0]),
-    name: cells[1] ?? '',
-    phone: cells[2] || null,
-    created_at: cells[4] || null,
-    source_account: sourceAccount,
-  };
-}
-
-function rposAccountFromRow(cells, sourceAccount) {
-  return {
-    id: Number(cells[0]),
-    code: cells[1] || null,
-    client_name: cells[2] || null,
-    created_at: cells[5] || null,
-    source_account: sourceAccount,
-  };
+function buildSearchUrl(baseUrl, query) {
+  const url = new URL(baseUrl);
+  if (query) url.searchParams.set('q', String(query));
+  else url.searchParams.delete('q');
+  return url.toString();
 }
 
 async function fetchAdminListPage(page, url) {
@@ -94,6 +84,39 @@ async function fetchAllRposAccounts(page, { sourceAccount, onPage } = {}) {
   });
 }
 
+async function searchRposChangelist(request, baseUrl, query, { mapRow } = {}) {
+  const url = buildSearchUrl(baseUrl, query);
+  const response = await request.get(url, {
+    headers: { Accept: 'text/html', Referer: baseUrl },
+    timeout: DEFAULT_REQUEST_TIMEOUT_MS,
+  });
+  const html = await response.text();
+  const finalUrl = typeof response.url === 'function' ? response.url() : url;
+  if (!response.ok()) {
+    throw new Error(`RPOS ${baseUrl} failed with status ${response.status()}`);
+  }
+  if (isRposLoginHtml(html, finalUrl)) {
+    throw new Error('RPOS session expired (login page)');
+  }
+  const { rows } = parseAdminTableHtml(html);
+  return {
+    rows: rows.map((cells) => mapRow(cells)),
+    total: rows.length,
+  };
+}
+
+async function searchRposClients(request, query, { sourceAccount } = {}) {
+  return searchRposChangelist(request, CLIENTS_URL, query, {
+    mapRow: (cells) => rposClientFromRow(cells, sourceAccount),
+  });
+}
+
+async function searchRposAccounts(request, query, { sourceAccount } = {}) {
+  return searchRposChangelist(request, ACCOUNTS_URL, query, {
+    mapRow: (cells) => rposAccountFromRow(cells, sourceAccount),
+  });
+}
+
 module.exports = {
   CLIENTS_URL,
   ACCOUNTS_URL,
@@ -101,4 +124,7 @@ module.exports = {
   rposAccountFromRow,
   fetchAllRposClients,
   fetchAllRposAccounts,
+  searchRposClients,
+  searchRposAccounts,
+  buildSearchUrl,
 };

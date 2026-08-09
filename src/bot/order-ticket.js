@@ -1,3 +1,5 @@
+const { field, link } = require('./telegram-html');
+
 function getPublicBaseUrl() {
   return (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
 }
@@ -14,7 +16,10 @@ function formatOrderTicketLine(order) {
   const ticketId = order?.ticket_id;
   if (ticketId == null || ticketId === '') return null;
   const url = formatTicketAdminUrl(ticketId);
-  return url ? `Тикет: ${url}` : `Тикет: #${ticketId}`;
+  if (url) {
+    return `🎫 ${link(url, `Тикет #${ticketId}`)}`;
+  }
+  return field('🎫', 'Тикет', `#${ticketId}`);
 }
 
 module.exports = {

@@ -1,4 +1,5 @@
 const ORDER_DATETIME_TIME_ZONE = 'Asia/Tashkent';
+const { field } = require('./telegram-html');
 
 function parseSqliteUtcDate(value) {
   if (value == null || value === '') return null;
@@ -38,7 +39,7 @@ function formatOrderDateTimeLine(orderOrCreatedAt) {
       ? orderOrCreatedAt.created_at
       : orderOrCreatedAt;
   const formatted = formatOrderDateTimeValue(value);
-  return formatted ? `Дата заказа: ${formatted}` : null;
+  return formatted ? field('📅', 'Дата заказа', formatted) : null;
 }
 
 module.exports = {

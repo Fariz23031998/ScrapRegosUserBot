@@ -23,6 +23,7 @@ const {
   isAuthenticated,
   getSessionActor,
   getSessionPermissions,
+  actorHasPermission,
   setSessionCookie,
   clearSessionCookie,
   requireAdminAuth,
@@ -104,11 +105,16 @@ const {
 const { enrichOrderParties } = require('../bot/order-parties');
 const { formatRenotifyResultMessage } = require('../bot/order-actions-bot');
 const { getOutboundBot } = require('../bot/payment-notification');
+const { TELEGRAM_HTML } = require('../bot/telegram-html');
 const { formatPaymentPageUrl, getDefaultPaymentProvider } = require('../payments/payments-api');
 const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
 const { getTicketRecordingUrl } = require('./ticket-recording');
+const {
+  summarizeByDuration,
+  buildDurationsByTicketId,
+} = require('../../public/bot-admin/admin-ticket-summary');
 const crypto = require('crypto');
 
 const RECORDING_URL_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -396,10 +402,11 @@ async function loadActiveTicketForRequest(db, req) {
 }
 
 function buildDurationSummary(tickets, channelSettings, db = null) {
-  const callChannelIds = new Set(
-    (channelSettings || [])
-      .filter((setting) => setting.interaction_mode === 'call')
-      .map((setting) => String(setting.channel_id))
+  const modeByChannelId = new Map(
+    (channelSettings || []).map((setting) => [
+      String(setting.channel_id),
+      String(setting.interaction_mode || ''),
+    ])
   );
   const messageTickets = [];
   const calls = [];
@@ -412,13 +419,20 @@ function buildDurationSummary(tickets, channelSettings, db = null) {
 
   for (const ticket of tickets || []) {
     const channelId = ticket?.channel_id == null ? '' : String(ticket.channel_id);
-    if (!callChannelIds.has(channelId)) {
-      messageTickets.push(ticket);
-      continue;
-    }
+    const channelMode = modeByChannelId.get(channelId) || null;
     const ticketId = Number(ticket?.id);
     const recording =
       Number.isInteger(ticketId) && ticketId > 0 ? recordingsById.get(ticketId) : null;
+    const hasRecording = Boolean(getTicketRecordingUrl(ticket) || recording?.recording_url);
+    // Explicit message channels stay in the base. Call channels are always evaluated.
+    // Unconfigured channels with a recording are treated as calls so the duration
+    // filter works before channel settings are saved.
+    const isCallTicket =
+      channelMode === 'call' || (channelMode !== 'message_only' && hasRecording);
+    if (!isCallTicket) {
+      messageTickets.push(ticket);
+      continue;
+    }
     const cachedDuration = Number(recording?.duration_seconds);
     const durationSeconds =
       Number.isFinite(cachedDuration) && cachedDuration > 0 ? cachedDuration : null;
@@ -426,7 +440,7 @@ function buildDurationSummary(tickets, channelSettings, db = null) {
       id: ticket.id,
       slaBreached: Boolean(ticket.sla_breached),
       rated: ticket.rating != null,
-      hasRecording: Boolean(getTicketRecordingUrl(ticket) || recording?.recording_url),
+      hasRecording,
       duration_seconds: durationSeconds,
     });
   }
@@ -1340,13 +1354,16 @@ function createBotAdminRouter(db) {
   router.get(
     '/api/firm-search',
     requireAnyRight(db, ['tickets_read', 'clients_link_firm']),
-    (req, res) => {
+    async (req, res) => {
       const q = String(req.query.q || '').trim();
       if (!q) {
         return res.status(400).json({ message: 'Укажите поисковый запрос.' });
       }
       try {
-        const result = searchFirmAdmin(q, db);
+        const result = await searchFirmAdmin(q, db);
+        if (result.error) {
+          return res.status(502).json({ message: result.message || 'Не удалось выполнить поиск.' });
+        }
         if (!result.found) {
           return res.json({ found: false, results: [] });
         }
@@ -1365,9 +1382,9 @@ function createBotAdminRouter(db) {
     }
   );
 
-  router.get('/api/firms/:type/:recordId', requireRight(db, 'tickets_read'), (req, res) => {
+  router.get('/api/firms/:type/:recordId', requireRight(db, 'tickets_read'), async (req, res) => {
     try {
-      const firm = getFirmCardByTypeAndId(db, req.params.type, req.params.recordId);
+      const firm = await getFirmCardByTypeAndId(db, req.params.type, req.params.recordId);
       if (!firm) {
         return res.status(404).json({ message: 'Фирма не найдена.' });
       }
@@ -1515,10 +1532,19 @@ function createBotAdminRouter(db) {
       const clientType = req.body?.client_type != null ? String(req.body.client_type).trim() : '';
       const firmMessage =
         req.body?.firm_message != null ? String(req.body.firm_message).trim() : '';
+      const firmPhoneRaw =
+        req.body?.firm_phone != null ? String(req.body.firm_phone).trim() : '';
       const recordIdRaw = req.body?.record_id;
       const recordId =
         recordIdRaw == null || recordIdRaw === '' ? null : recordIdRaw;
       const hasFirm = Boolean(clientType || recordId != null || firmMessage);
+
+      const clientIdRaw = req.body?.client_id;
+      const clientId =
+        clientIdRaw == null || clientIdRaw === '' ? null : Number(clientIdRaw);
+      if (clientIdRaw != null && clientIdRaw !== '' && (!Number.isInteger(clientId) || clientId <= 0)) {
+        return res.status(400).json({ message: 'Некорректный client_id.' });
+      }
 
       const metadata = JSON.stringify({
         type: clientType || null,
@@ -1549,12 +1575,45 @@ function createBotAdminRouter(db) {
       const paymentUrl = formatClickUrlSafe(detailedOrder.id, detailedOrder.amount);
       const paymentPageUrl = formatPaymentPageUrl(order.id);
 
+      let firmLink = { linked: false, reason: 'skipped' };
+      const actor = getSessionActor(req);
+      const canLinkFirm = actorHasPermission(db, actor, 'clients_link_firm');
+      const firmType = clientType || null;
+      const firmRecordId = recordId;
+      if (!canLinkFirm) {
+        firmLink = { linked: false, reason: 'no_permission' };
+      } else if (clientId == null) {
+        firmLink = { linked: false, reason: 'no_client_id' };
+      } else if (!firmType || firmRecordId == null || firmRecordId === '') {
+        firmLink = { linked: false, reason: 'no_firm' };
+      } else {
+        try {
+          const link = addClientFirmLink(db, {
+            regos_client_id: clientId,
+            type: firmType,
+            recordId: firmRecordId,
+            clientName: clientName || null,
+            phone: firmPhoneRaw || clientPhone,
+            message: firmMessage || null,
+          });
+          firmLink = { linked: true, id: link?.id ?? null };
+        } catch (err) {
+          if (err?.code === 'DUPLICATE_LINK') {
+            firmLink = { linked: true, reason: 'already_linked' };
+          } else {
+            console.warn('[bot-admin] Auto firm link failed:', err.message);
+            firmLink = { linked: false, reason: 'error', message: err.message };
+          }
+        }
+      }
+
       const outboundBot = getOutboundBot();
       if (outboundBot) {
         try {
           await outboundBot.sendMessage(
             botUser.telegram_id,
-            formatOrderPaymentMessage(detailedOrder, paymentPageUrl, paymentUrl)
+            formatOrderPaymentMessage(detailedOrder, paymentPageUrl, paymentUrl),
+            TELEGRAM_HTML
           );
         } catch (err) {
           console.warn('[bot-admin] Creator notify failed:', err.message);
@@ -1575,6 +1634,7 @@ function createBotAdminRouter(db) {
       return res.status(201).json({
         order: detailedOrder,
         payment_page_url: paymentPageUrl,
+        firm_link: firmLink,
       });
     } catch (error) {
       console.error('Create order error:', error);
@@ -1635,13 +1695,22 @@ function createBotAdminRouter(db) {
         tickets = dedupeTickets(tickets, duplicateIntervalMinutes);
       }
 
-      const summary = summarizeTickets(tickets);
       const durationSummary = durationFilterActive
         ? buildDurationSummary(tickets, listRegosChannelSettings(db), db)
         : null;
       if (durationSummary) {
         tickets.forEach(cacheTicketRecordingUrl);
       }
+      // When the duration filter is active, totals use SQL-known call durations
+      // immediately (message channels stay in the base). The browser may refine
+      // further once it probes recordings that are not cached yet.
+      const summary = durationSummary
+        ? summarizeByDuration(
+            durationSummary,
+            buildDurationsByTicketId(durationSummary),
+            minimumCallDuration
+          )
+        : summarizeTickets(tickets);
       const total = tickets.length;
       const totalPages = Math.max(1, Math.ceil(total / limit) || 1);
       if (page > totalPages) {

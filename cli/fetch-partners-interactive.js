@@ -97,37 +97,12 @@ async function main() {
   await savePageData(page, 'partners');
   console.log('Data saved to output/partners-*');
 
-  const {
-    openDb,
-    partnerFromApiRow,
-    upsertPartners,
-    startFetchRun,
-    finishFetchRun,
-    countPartners,
-  } = require('../src/db/partners-db');
-  const { fetchAllPartners, DEFAULT_PAGE_SIZE } = require('../src/sync/partners-api');
-
-  const pageSize = Number(process.env.PAGE_SIZE) || DEFAULT_PAGE_SIZE;
-  const db = openDb();
-  const runId = startFetchRun(db, 'api:/Partners/Get', pageSize);
-
-  console.log(`\nSyncing all partners to SQLite (${pageSize} per page)...`);
-  const { rows, total, pages } = await fetchAllPartners(page.request, {
-    pageSize,
-    onPage: ({ page: pageNum, fetched, total: totalRecords }) => {
-      console.log(`  page ${pageNum}: ${fetched}/${totalRecords}`);
-    },
-  });
-
-  const saved = upsertPartners(db, rows.map(partnerFromApiRow));
-  finishFetchRun(db, runId, {
-    pagesFetched: pages,
-    recordsFetched: saved,
-    recordsTotal: total,
-  });
-
-  console.log(`SQLite: saved ${saved} partner(s), ${countPartners(db)} total in data/regos.db`);
-  db.close();
+  const { persistRegosAuthState } = require('../src/sync/regos-auth');
+  const { searchPartners } = require('../src/sync/partners-api');
+  const sample = await searchPartners(page.request, '', { pageSize: 5 });
+  console.log(`Live Partners/Get sample: ${sample.rows.length} row(s), filtered ${sample.total}`);
+  await persistRegosAuthState(context);
+  console.log('Auth session saved. Prefer: npm run login:sessions');
 
   await browser.close();
 }

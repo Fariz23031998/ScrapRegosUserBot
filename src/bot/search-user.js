@@ -4,9 +4,28 @@ const {
   getActiveTechnicalSupportSubscription,
   formatSupportUntilLabel,
 } = require('../db/technical-support');
+const {
+  liveSearchPartners,
+  liveSearchPartnerAccounts,
+  liveSearchLicenses,
+  liveSearchVcr1Partners,
+  liveSearchVcr1Licenses,
+  liveSearchRposClients,
+  liveSearchRposAccounts,
+  liveGetPartnerById,
+  liveGetLicenseById,
+  liveGetVcr1PartnerById,
+  liveGetVcr1LicenseById,
+  liveGetRposClientById,
+  liveGetRposAccountById,
+} = require('../live/portal-search');
+const { bold, field } = require('./telegram-html');
 
 const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
-const EXPIRED_MESSAGE = 'Срок технической поддержки истёк';
+const EXPIRED_MESSAGE = `⚠️ ${bold('Срок технической поддержки истёк')}`;
+const PORTAL_ERROR_MESSAGE = 'Ошибка загрузки данных с портала. Попробуйте ещё раз.';
+const TEXT_SEARCH_MIN_LENGTH = 2;
+const TEXT_SEARCH_LIMIT = 20;
 
 const RUSSIAN_MONTHS = {
   января: 0,
@@ -107,97 +126,102 @@ function formatWithExpiry(formatted, dateValue) {
   return `${EXPIRED_MESSAGE}\n\n${formatted}`;
 }
 
-function formatPartner(partner) {
-  return [
-    'Regos',
-    `ID: ${partner.id}`,
-    `Имя: ${partner.name}`,
-    `Правовой статус: ${partner.legal_status || '-'}`,
-    `Телефон: ${partner.phone || '-'}`,
-    `Контакты: ${partner.contacts || '-'}`,
-    `Примечание: ${partner.description || '-'}`,
-    `Модерация: ${partner.moderation_status || '-'}`,
-    `Баланс: ${partner.balance ?? '-'}`,
-    `Зарегистрирован: ${partner.registered_at || '-'}`,
-  ].join('\n');
+function formatPartner(partner, account = null) {
+  const lines = [
+    `🏢 ${bold('Regos')}`,
+    field('🆔', 'ID', partner.id),
+    field('👤', 'Имя', partner.name),
+    field('📋', 'Правовой статус', partner.legal_status || '-'),
+    field('📞', 'Телефон', partner.phone || '-'),
+    field('📇', 'Контакты', partner.contacts || '-'),
+    field('📝', 'Примечание', partner.description || '-'),
+    field('✅', 'Модерация', partner.moderation_status || '-'),
+    field('💰', 'Баланс', partner.balance ?? '-'),
+    field('📅', 'Зарегистрирован', partner.registered_at || '-'),
+  ];
+  if (account) {
+    lines.push(field('📦', 'Тариф', account.tariff || '-'));
+    lines.push(field('📆', 'Оплачено до', account.paid_until || '-'));
+  }
+  return lines.join('\n');
 }
 
 function formatRposClient(client) {
   return [
-    'RPOS',
-    `ID: ${client.id}`,
-    `Имя: ${client.name}`,
-    `Телефон: ${client.phone || '-'}`,
-    `Код: -`,
-    `Создано: ${client.created_at || '-'}`,
-    `Источник: RPOS`,
+    `🖥️ ${bold('RPOS')}`,
+    field('🆔', 'ID', client.id),
+    field('👤', 'Имя', client.name),
+    field('📞', 'Телефон', client.phone || '-'),
+    field('🔑', 'Код', '-'),
+    field('📅', 'Создано', client.created_at || '-'),
+    field('📡', 'Источник', 'RPOS'),
   ].join('\n');
 }
 
 function formatRposAccount(account) {
   return [
-    'RPOS',
-    `ID: ${account.id}`,
-    `Имя: ${account.client_name || '-'}`,
-    `Телефон: -`,
-    `Код: ${account.code || '-'}`,
-    `Создано: ${account.created_at || '-'}`,
-    `Источник: RPOS`,
+    `🖥️ ${bold('RPOS')}`,
+    field('🆔', 'ID', account.id),
+    field('👤', 'Имя', account.client_name || '-'),
+    field('📞', 'Телефон', '-'),
+    field('🔑', 'Код', account.code || '-'),
+    field('📅', 'Создано', account.created_at || '-'),
+    field('📡', 'Источник', 'RPOS'),
   ].join('\n');
 }
 
 function formatLicense(license) {
   return [
-    'EasyTrade',
-    `ID: ${license.id}`,
-    `Имя: ${license.fio}`,
-    `Телефон: ${license.phone || '-'}`,
-    `Код: ${license.code || '-'}`,
-    `Тип: ${license.type || '-'}`,
-    `Договор: ${license.contract || '-'}`,
-    `Статус: ${license.active || '-'}`,
-    `Создано: ${license.generated || '-'}`,
-    `Поддержка: ${license.support || '-'}`,
-    `Партнёр: ${license.partner || '-'}`,
-    `Телефон партнёра: ${license.partner_phone || '-'}`,
-    `Адрес: ${license.adr || '-'}`,
-    `Примечание: ${license.note || '-'}`,
+    `🧾 ${bold('EasyTrade')}`,
+    field('🆔', 'ID', license.id),
+    field('👤', 'Имя', license.fio),
+    field('📞', 'Телефон', license.phone || '-'),
+    field('🔑', 'Код', license.code || '-'),
+    field('📦', 'Тип', license.type || '-'),
+    field('📄', 'Договор', license.contract || '-'),
+    field('📌', 'Статус', license.active || '-'),
+    field('📅', 'Создано', license.generated || '-'),
+    field('🛠', 'Поддержка', license.support || '-'),
+    field('🤝', 'Партнёр', license.partner || '-'),
+    field('📞', 'Телефон партнёра', license.partner_phone || '-'),
+    field('📍', 'Адрес', license.adr || '-'),
+    field('📝', 'Примечание', license.note || '-'),
   ].join('\n');
 }
 
 function formatVcr1Partner(partner) {
   return [
-    'VCR1',
-    `ID: ${partner.id}`,
-    `Имя: ${partner.name}`,
-    `ИНН/ПИНФЛ: ${partner.inn || '-'}`,
-    `Правовой статус: ${partner.legal_status || '-'}`,
-    `Телефон: ${partner.phone || '-'}`,
-    `Контакты: ${partner.contacts || '-'}`,
-    `Компания: ${partner.company || '-'}`,
-    `Баланс: ${partner.balance ?? '-'}`,
-    `Зарегистрирован: ${partner.registered_at || '-'}`,
+    `📟 ${bold('VCR')}`,
+    field('🆔', 'ID', partner.id),
+    field('👤', 'Имя', partner.name),
+    field('🔢', 'ИНН/ПИНФЛ', partner.inn || '-'),
+    field('📋', 'Правовой статус', partner.legal_status || '-'),
+    field('📞', 'Телефон', partner.phone || '-'),
+    field('📇', 'Контакты', partner.contacts || '-'),
+    field('🏛', 'Компания', partner.company || '-'),
+    field('💰', 'Баланс', partner.balance ?? '-'),
+    field('📅', 'Зарегистрирован', partner.registered_at || '-'),
   ].join('\n');
 }
 
 function formatVcr1License(license, partner = null) {
   return [
-    'VCR1',
-    `ID: ${license.id}`,
-    `Партнёр: ${license.partner || '-'}`,
-    `Баланс: ${partner?.balance ?? '-'}`,
-    `Договор: ${license.contract || '-'}`,
-    `Создано: ${license.created_at || '-'}`,
-    `Статус: ${license.status || '-'}`,
-    `Фискальный модуль: ${license.fm || '-'}`,
-    `Серийный номер: ${license.serial || '-'}`,
-    `Лицензия: ${license.license || '-'}`,
-    `FDA: ${license.fda_version || '-'}`,
-    `Дата сборки: ${license.app_build_time || '-'}`,
-    `Версия БД: ${license.db_version || '-'}`,
-    `Последний чек: ${license.last_receipt_date || '-'}`,
-    `Последняя попытка проверки: ${license.last_check_attempt || '-'}`,
-    `Последняя синхронизация: ${license.last_sync || '-'}`,
+    `📟 ${bold('VCR')}`,
+    field('🆔', 'ID', license.id),
+    field('🤝', 'Партнёр', license.partner || '-'),
+    field('💰', 'Баланс', partner?.balance ?? '-'),
+    field('📄', 'Договор', license.contract || '-'),
+    field('📅', 'Создано', license.created_at || '-'),
+    field('📌', 'Статус', license.status || '-'),
+    field('🖨', 'Фискальный модуль', license.fm || '-'),
+    field('🔢', 'Серийный номер', license.serial || '-'),
+    field('🔑', 'Лицензия', license.license || '-'),
+    field('📦', 'FDA', license.fda_version || '-'),
+    field('🏗', 'Дата сборки', license.app_build_time || '-'),
+    field('🗄', 'Версия БД', license.db_version || '-'),
+    field('🧾', 'Последний чек', license.last_receipt_date || '-'),
+    field('🔍', 'Последняя попытка проверки', license.last_check_attempt || '-'),
+    field('🔄', 'Последняя синхронизация', license.last_sync || '-'),
   ].join('\n');
 }
 
@@ -225,69 +249,6 @@ function namesLooselyMatch(left, right) {
   return a === b || a.includes(b) || b.includes(a);
 }
 
-function findVcr1PartnerForLicense(db, license, preferredPhone = null) {
-  const partnerLabel = license?.partner;
-  if (!partnerLabel && !preferredPhone) return null;
-
-  const partners = db.prepare('SELECT * FROM vcr1_partners').all();
-
-  if (preferredPhone) {
-    const byPhone = partners.find((partner) => phonesMatch(partner.phone, preferredPhone));
-    if (byPhone) return byPhone;
-  }
-
-  const inn = extractInnFromPartnerLabel(partnerLabel);
-  if (inn) {
-    const byInn = partners.find((partner) => String(partner.inn || '').trim() === inn);
-    if (byInn) return byInn;
-  }
-
-  const target = partnerLabelWithoutInn(partnerLabel);
-  if (!target) return null;
-
-  return (
-    partners.find(
-      (partner) =>
-        namesLooselyMatch(partner.name, target) || namesLooselyMatch(partner.company, target)
-    ) ?? null
-  );
-}
-
-function resolveVcr1LicenseSupportDate(db, license, preferredPhone = null) {
-  const partner = findVcr1PartnerForLicense(db, license, preferredPhone);
-  // Support status comes only from the matched Partners row (registered_at / 90-day rule).
-  // Licenses create/support fields are never used here.
-  return partner ? partner.registered_at : null;
-}
-
-function findAllPartnersByPhone(db, query) {
-  if (!looksLikePhone(query)) return [];
-  const partners = db.prepare("SELECT * FROM partners WHERE phone IS NOT NULL AND phone != ''").all();
-  return partners.filter((row) => phonesMatch(row.phone, query));
-}
-
-function findAllVcr1PartnersByPhone(db, query) {
-  if (!looksLikePhone(query)) return [];
-  const partners = db
-    .prepare("SELECT * FROM vcr1_partners WHERE phone IS NOT NULL AND phone != ''")
-    .all();
-  return partners.filter((row) => phonesMatch(row.phone, query));
-}
-
-function findAllVcr1PartnersByInn(db, query) {
-  if (!looksLikeInn(query)) return [];
-  const inn = normalizeQuery(query);
-  return db
-    .prepare('SELECT * FROM vcr1_partners WHERE TRIM(inn) = ?')
-    .all(inn);
-}
-
-function findAllLicensesByPhone(db, query) {
-  if (!looksLikePhone(query)) return [];
-  const licenses = db.prepare("SELECT * FROM licenses WHERE phone IS NOT NULL AND phone != ''").all();
-  return licenses.filter((row) => phonesMatch(row.phone, query));
-}
-
 function vcr1LicenseMatchesPartner(license, partner) {
   if (!license || !partner) return false;
 
@@ -300,67 +261,56 @@ function vcr1LicenseMatchesPartner(license, partner) {
   );
 }
 
-function findAllVcr1LicensesForPartner(db, partner) {
-  if (!partner) return [];
-  const licenses = db.prepare('SELECT * FROM vcr1_licenses').all();
-  return licenses.filter((license) => vcr1LicenseMatchesPartner(license, partner));
-}
+async function findVcr1PartnerForLicense(license, preferredPhone = null) {
+  const partnerLabel = license?.partner;
+  if (!partnerLabel && !preferredPhone) return null;
 
-function findAllRposClientsByPhone(db, query) {
-  if (!looksLikePhone(query)) return [];
-  const clients = db.prepare("SELECT * FROM rpos_clients WHERE phone IS NOT NULL AND phone != ''").all();
-  return clients.filter((row) => phonesMatch(row.phone, query));
-}
+  const searches = [];
+  if (preferredPhone) searches.push(normalizePhone(preferredPhone).slice(-9));
+  const inn = extractInnFromPartnerLabel(partnerLabel);
+  if (inn) searches.push(inn);
+  const namePart = partnerLabelWithoutInn(partnerLabel);
+  if (namePart) searches.push(namePart.split(' ').slice(0, 3).join(' '));
 
-function findLicenseByCode(db, query) {
-  const code = normalizeQuery(query);
-  if (!code) return null;
+  const partners = [];
+  for (const term of searches.filter(Boolean)) {
+    const found = await liveSearchVcr1Partners(term);
+    partners.push(...found);
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const partner of partners) {
+    const key = String(partner.id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(partner);
+  }
+
+  if (preferredPhone) {
+    const byPhone = unique.find((partner) => phonesMatch(partner.phone, preferredPhone));
+    if (byPhone) return byPhone;
+  }
+
+  if (inn) {
+    const byInn = unique.find((partner) => String(partner.inn || '').trim() === inn);
+    if (byInn) return byInn;
+  }
+
+  const target = partnerLabelWithoutInn(partnerLabel);
+  if (!target) return null;
+
   return (
-    db
-      .prepare('SELECT * FROM licenses WHERE LOWER(TRIM(code)) = LOWER(TRIM(?))')
-      .get(code) ?? null
+    unique.find(
+      (partner) =>
+        namesLooselyMatch(partner.name, target) || namesLooselyMatch(partner.company, target)
+    ) ?? null
   );
 }
 
-function findVcr1LicenseByCode(db, query) {
-  const code = normalizeQuery(query);
-  if (!code) return null;
-  return (
-    db
-      .prepare(
-        `SELECT * FROM vcr1_licenses
-         WHERE LOWER(TRIM(serial)) = LOWER(TRIM(?))
-            OR LOWER(TRIM(license)) = LOWER(TRIM(?))
-            OR LOWER(TRIM(fm)) = LOWER(TRIM(?))`
-      )
-      .get(code, code, code) ?? null
-  );
-}
-
-function findRposAccountByCode(db, query) {
-  const code = normalizeQuery(query);
-  if (!code) return null;
-  return (
-    db
-      .prepare('SELECT * FROM rpos_accounts WHERE LOWER(TRIM(code)) = LOWER(TRIM(?))')
-      .get(code) ?? null
-  );
-}
-
-function findPartnerByAccountLogin(db, apiLogin) {
-  const login = normalizeQuery(apiLogin);
-  if (!login) return null;
-
-  const account = db
-    .prepare('SELECT * FROM partner_accounts WHERE LOWER(TRIM(api_login)) = LOWER(TRIM(?))')
-    .get(login);
-  if (!account) return null;
-
-  return (
-    db
-      .prepare('SELECT * FROM partners WHERE TRIM(name) = TRIM(?) COLLATE NOCASE')
-      .get(account.partner) ?? null
-  );
+async function resolveVcr1LicenseSupportDate(license, preferredPhone = null) {
+  const partner = await findVcr1PartnerForLicense(license, preferredPhone);
+  return partner ? partner.registered_at : null;
 }
 
 function stripExpiredSupportBanner(message) {
@@ -391,7 +341,8 @@ function applyTechnicalSupportToMessage(message, phone, db) {
   const label = formatSupportUntilLabel(subscription.ends_at);
   const withoutExpired = stripExpiredSupportBanner(message);
   if (!label) return withoutExpired;
-  return withoutExpired ? `${withoutExpired}\n\n${label}` : label;
+  const badge = `🛠 ${bold(label)}`;
+  return withoutExpired ? `${withoutExpired}\n\n${badge}` : badge;
 }
 
 function buildSearchResult(results, db = null) {
@@ -417,16 +368,267 @@ function buildSearchResult(results, db = null) {
   };
 }
 
-function searchUser(query, db = openDb()) {
+function portalErrorResult(err) {
+  console.error('Live portal search failed:', err?.message || err);
+  return { found: false, message: PORTAL_ERROR_MESSAGE, error: true };
+}
+
+function takeLimited(rows, limit = TEXT_SEARCH_LIMIT) {
+  return (rows || []).slice(0, limit);
+}
+
+async function searchUser(query, db = openDb()) {
   const normalized = normalizeQuery(query);
   if (!normalized) {
     return { found: false, message: 'Не найдено' };
   }
 
-  const results = [];
+  try {
+    const results = [];
 
-  if (looksLikePhone(normalized)) {
-    for (const partner of findAllPartnersByPhone(db, normalized)) {
+    if (looksLikePhone(normalized) || looksLikeInn(normalized)) {
+      const searchTerm = looksLikePhone(normalized)
+        ? normalizePhone(normalized).slice(-9)
+        : normalized;
+
+      const settled = await Promise.allSettled([
+        liveSearchPartners(searchTerm),
+        liveSearchVcr1Partners(searchTerm),
+        looksLikePhone(normalized) ? liveSearchLicenses(searchTerm) : Promise.resolve([]),
+        looksLikePhone(normalized) ? liveSearchRposClients(searchTerm) : Promise.resolve([]),
+      ]);
+      const values = settled.map((item) => (item.status === 'fulfilled' ? item.value : []));
+      const failures = settled
+        .filter((item) => item.status === 'rejected')
+        .map((item) => item.reason?.message || String(item.reason));
+      if (failures.length) {
+        console.error('Partial live search failures:', failures.join('; '));
+      }
+      const [partners, vcr1PartnersRaw, licenses, rposClients] = values;
+      if (failures.length === settled.length) {
+        throw new Error(failures.join('; '));
+      }
+
+      const partnersByPhone = looksLikePhone(normalized)
+        ? partners.filter((row) => phonesMatch(row.phone, normalized))
+        : partners;
+
+      for (const partner of partnersByPhone) {
+        results.push({
+          type: 'partner',
+          phone: partner.phone,
+          recordId: partner.id,
+          clientName: partner.name,
+          message: formatWithExpiry(formatPartner(partner), partner.registered_at),
+        });
+      }
+
+      const vcr1Filtered = [];
+      const seenVcr1 = new Set();
+      for (const partner of vcr1PartnersRaw) {
+        if (seenVcr1.has(partner.id)) continue;
+        const phoneOk = looksLikePhone(normalized) && phonesMatch(partner.phone, normalized);
+        const innOk = looksLikeInn(normalized) && String(partner.inn || '').trim() === normalized;
+        if (!phoneOk && !innOk) continue;
+        seenVcr1.add(partner.id);
+        vcr1Filtered.push(partner);
+      }
+
+      for (const partner of vcr1Filtered) {
+        results.push({
+          type: 'vcr1_partner',
+          phone: partner.phone,
+          recordId: partner.id,
+          clientName: partner.name,
+          message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
+        });
+
+        const licenseHits = await liveSearchVcr1Licenses(
+          partner.inn || partner.name || searchTerm
+        );
+        for (const license of licenseHits.filter((lic) => vcr1LicenseMatchesPartner(lic, partner))) {
+          results.push({
+            type: 'vcr1_license',
+            phone: partner.phone,
+            recordId: license.id,
+            clientName: license.partner || partner.name,
+            message: formatWithExpiry(
+              formatVcr1License(license, partner),
+              partner.registered_at
+            ),
+          });
+        }
+      }
+
+      if (looksLikePhone(normalized)) {
+        for (const license of licenses.filter((row) => phonesMatch(row.phone, normalized))) {
+          results.push({
+            type: 'license',
+            phone: license.phone,
+            recordId: license.id,
+            clientName: license.fio,
+            message: formatWithExpiry(formatLicense(license), license.generated),
+          });
+        }
+
+        for (const client of rposClients.filter((row) => phonesMatch(row.phone, normalized))) {
+          results.push({
+            type: 'rpos_client',
+            phone: client.phone,
+            recordId: client.id,
+            clientName: client.name,
+            message: formatWithExpiry(formatRposClient(client), client.created_at),
+          });
+        }
+      }
+
+      if (results.length > 0) {
+        return buildSearchResult(results, db);
+      }
+    }
+
+    const codeSettled = await Promise.allSettled([
+      liveSearchLicenses(normalized),
+      liveSearchVcr1Licenses(normalized),
+      liveSearchRposAccounts(normalized),
+      liveSearchPartnerAccounts(normalized),
+    ]);
+    const codeValues = codeSettled.map((item) =>
+      item.status === 'fulfilled' ? item.value : []
+    );
+    const codeFailures = codeSettled
+      .filter((item) => item.status === 'rejected')
+      .map((item) => item.reason?.message || String(item.reason));
+    if (codeFailures.length) {
+      console.error('Partial live code-search failures:', codeFailures.join('; '));
+    }
+    const [licensesByCode, vcr1ByCode, rposByCode, accountsByLogin] = codeValues;
+    if (codeFailures.length === codeSettled.length) {
+      throw new Error(codeFailures.join('; '));
+    }
+
+    const licenseByCode =
+      licensesByCode.find(
+        (row) => String(row.code || '').trim().toLowerCase() === normalized.toLowerCase()
+      ) || null;
+    if (licenseByCode) {
+      results.push({
+        type: 'license',
+        phone: licenseByCode.phone,
+        recordId: licenseByCode.id,
+        clientName: licenseByCode.fio,
+        message: formatWithExpiry(formatLicense(licenseByCode), licenseByCode.generated),
+      });
+    }
+
+    const vcr1LicenseByCode =
+      vcr1ByCode.find((row) => {
+        const code = normalized.toLowerCase();
+        return [row.serial, row.license, row.fm].some(
+          (value) => String(value || '').trim().toLowerCase() === code
+        );
+      }) || null;
+    if (vcr1LicenseByCode) {
+      const partner = await findVcr1PartnerForLicense(vcr1LicenseByCode);
+      results.push({
+        type: 'vcr1_license',
+        phone: partner?.phone ?? null,
+        recordId: vcr1LicenseByCode.id,
+        clientName: vcr1LicenseByCode.partner,
+        message: formatWithExpiry(
+          formatVcr1License(vcr1LicenseByCode, partner),
+          partner?.registered_at || null
+        ),
+      });
+    }
+
+    const rposAccountByCode =
+      rposByCode.find(
+        (row) => String(row.code || '').trim().toLowerCase() === normalized.toLowerCase()
+      ) || null;
+    if (rposAccountByCode) {
+      results.push({
+        type: 'rpos_account',
+        phone: extractPhoneFromText(rposAccountByCode.client_name),
+        recordId: rposAccountByCode.id,
+        clientName: rposAccountByCode.client_name,
+        message: formatWithExpiry(formatRposAccount(rposAccountByCode), rposAccountByCode.created_at),
+      });
+    }
+
+    if (results.length > 0) {
+      return buildSearchResult(results, db);
+    }
+
+    const account =
+      accountsByLogin.find(
+        (row) => String(row.api_login || '').trim().toLowerCase() === normalized.toLowerCase()
+      ) || null;
+    if (account?.partner) {
+      const partners = await liveSearchPartners(account.partner);
+      const partnerByLogin =
+        partners.find(
+          (row) => String(row.name || '').trim().toLowerCase() === String(account.partner).trim().toLowerCase()
+        ) || partners[0];
+      if (partnerByLogin) {
+        return buildSearchResult(
+          [
+            {
+              type: 'partner',
+              phone: partnerByLogin.phone,
+              recordId: partnerByLogin.id,
+              clientName: partnerByLogin.name,
+              accountId: account.id,
+              accountLabel: account._account || null,
+              apiLogin: account.api_login || null,
+              tariff: account.tariff || null,
+              message: formatWithExpiry(
+                formatPartner(partnerByLogin, account),
+                partnerByLogin.registered_at
+              ),
+            },
+          ],
+          db
+        );
+      }
+    }
+
+    return { found: false, message: 'Не найдено' };
+  } catch (err) {
+    return portalErrorResult(err);
+  }
+}
+
+async function searchFirmByText(query, db) {
+  const normalized = normalizeQuery(query);
+  if (normalized.length < TEXT_SEARCH_MIN_LENGTH) {
+    return { found: false, message: 'Не найдено' };
+  }
+
+  try {
+    const results = [];
+    const textSettled = await Promise.allSettled([
+      liveSearchPartners(normalized),
+      liveSearchVcr1Partners(normalized),
+      liveSearchLicenses(normalized),
+      liveSearchRposClients(normalized),
+      liveSearchRposAccounts(normalized),
+    ]);
+    const textValues = textSettled.map((item) =>
+      item.status === 'fulfilled' ? item.value : []
+    );
+    const textFailures = textSettled
+      .filter((item) => item.status === 'rejected')
+      .map((item) => item.reason?.message || String(item.reason));
+    if (textFailures.length) {
+      console.error('Partial live text-search failures:', textFailures.join('; '));
+    }
+    const [partners, vcr1Partners, licenses, rposClients, rposAccounts] = textValues;
+    if (textFailures.length === textSettled.length) {
+      throw new Error(textFailures.join('; '));
+    }
+
+    for (const partner of takeLimited(partners)) {
       results.push({
         type: 'partner',
         phone: partner.phone,
@@ -436,15 +638,7 @@ function searchUser(query, db = openDb()) {
       });
     }
 
-    const vcr1Partners = [
-      ...findAllVcr1PartnersByPhone(db, normalized),
-      ...findAllVcr1PartnersByInn(db, normalized),
-    ].filter(
-      (partner, index, partners) =>
-        partners.findIndex((candidate) => candidate.id === partner.id) === index
-    );
-
-    for (const partner of vcr1Partners) {
+    for (const partner of takeLimited(vcr1Partners)) {
       results.push({
         type: 'vcr1_partner',
         phone: partner.phone,
@@ -453,21 +647,21 @@ function searchUser(query, db = openDb()) {
         message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
       });
 
-      for (const license of findAllVcr1LicensesForPartner(db, partner)) {
+      const licenseHits = await liveSearchVcr1Licenses(partner.inn || partner.name || normalized);
+      for (const license of takeLimited(
+        licenseHits.filter((lic) => vcr1LicenseMatchesPartner(lic, partner))
+      )) {
         results.push({
           type: 'vcr1_license',
           phone: partner.phone,
           recordId: license.id,
           clientName: license.partner || partner.name,
-          message: formatWithExpiry(
-            formatVcr1License(license, partner),
-            resolveVcr1LicenseSupportDate(db, license, partner.phone)
-          ),
+          message: formatWithExpiry(formatVcr1License(license, partner), partner.registered_at),
         });
       }
     }
 
-    for (const license of findAllLicensesByPhone(db, normalized)) {
+    for (const license of takeLimited(licenses)) {
       results.push({
         type: 'license',
         phone: license.phone,
@@ -477,7 +671,7 @@ function searchUser(query, db = openDb()) {
       });
     }
 
-    for (const client of findAllRposClientsByPhone(db, normalized)) {
+    for (const client of takeLimited(rposClients)) {
       results.push({
         type: 'rpos_client',
         phone: client.phone,
@@ -487,304 +681,109 @@ function searchUser(query, db = openDb()) {
       });
     }
 
-    if (results.length > 0) {
-      return buildSearchResult(results, db);
-    }
-  }
-
-  const licenseByCode = findLicenseByCode(db, normalized);
-  if (licenseByCode) {
-    results.push({
-      type: 'license',
-      phone: licenseByCode.phone,
-      recordId: licenseByCode.id,
-      clientName: licenseByCode.fio,
-      message: formatWithExpiry(formatLicense(licenseByCode), licenseByCode.generated),
-    });
-  }
-
-  const vcr1LicenseByCode = findVcr1LicenseByCode(db, normalized);
-  if (vcr1LicenseByCode) {
-    const partner = findVcr1PartnerForLicense(db, vcr1LicenseByCode);
-    results.push({
-      type: 'vcr1_license',
-      phone: partner?.phone ?? null,
-      recordId: vcr1LicenseByCode.id,
-      clientName: vcr1LicenseByCode.partner,
-      message: formatWithExpiry(
-        formatVcr1License(vcr1LicenseByCode, partner),
-        resolveVcr1LicenseSupportDate(db, vcr1LicenseByCode)
-      ),
-    });
-  }
-
-  const rposAccountByCode = findRposAccountByCode(db, normalized);
-  if (rposAccountByCode) {
-    results.push({
-      type: 'rpos_account',
-      phone: extractPhoneFromText(rposAccountByCode.client_name),
-      recordId: rposAccountByCode.id,
-      clientName: rposAccountByCode.client_name,
-      message: formatWithExpiry(formatRposAccount(rposAccountByCode), rposAccountByCode.created_at),
-    });
-  }
-
-  if (results.length > 0) {
-    return buildSearchResult(results, db);
-  }
-
-  const partnerByLogin = findPartnerByAccountLogin(db, normalized);
-  if (partnerByLogin) {
-    return buildSearchResult(
-      [
-        {
-          type: 'partner',
-          phone: partnerByLogin.phone,
-          recordId: partnerByLogin.id,
-          clientName: partnerByLogin.name,
-          message: formatWithExpiry(formatPartner(partnerByLogin), partnerByLogin.registered_at),
-        },
-      ],
-      db
-    );
-  }
-
-  return { found: false, message: 'Не найдено' };
-}
-
-const TEXT_SEARCH_MIN_LENGTH = 2;
-const TEXT_SEARCH_LIMIT = 20;
-
-function escapeLikePattern(value) {
-  return String(value || '').replace(/([%_\\])/g, '\\$1');
-}
-
-function likePattern(query) {
-  return `%${escapeLikePattern(normalizeQuery(query))}%`;
-}
-
-function findPartnersByNameText(db, query) {
-  const pattern = likePattern(query);
-  return db
-    .prepare(
-      `SELECT * FROM partners
-       WHERE name COLLATE NOCASE LIKE ? ESCAPE '\\'
-       LIMIT ?`
-    )
-    .all(pattern, TEXT_SEARCH_LIMIT);
-}
-
-function findVcr1PartnersByText(db, query) {
-  const pattern = likePattern(query);
-  return db
-    .prepare(
-      `SELECT * FROM vcr1_partners
-       WHERE name COLLATE NOCASE LIKE ? ESCAPE '\\'
-          OR company COLLATE NOCASE LIKE ? ESCAPE '\\'
-          OR inn COLLATE NOCASE LIKE ? ESCAPE '\\'
-       LIMIT ?`
-    )
-    .all(pattern, pattern, pattern, TEXT_SEARCH_LIMIT);
-}
-
-function findLicensesByText(db, query) {
-  const pattern = likePattern(query);
-  return db
-    .prepare(
-      `SELECT * FROM licenses
-       WHERE fio COLLATE NOCASE LIKE ? ESCAPE '\\'
-          OR partner COLLATE NOCASE LIKE ? ESCAPE '\\'
-       LIMIT ?`
-    )
-    .all(pattern, pattern, TEXT_SEARCH_LIMIT);
-}
-
-function findRposClientsByNameText(db, query) {
-  const pattern = likePattern(query);
-  return db
-    .prepare(
-      `SELECT * FROM rpos_clients
-       WHERE name COLLATE NOCASE LIKE ? ESCAPE '\\'
-       LIMIT ?`
-    )
-    .all(pattern, TEXT_SEARCH_LIMIT);
-}
-
-function findRposAccountsByNameText(db, query) {
-  const pattern = likePattern(query);
-  return db
-    .prepare(
-      `SELECT * FROM rpos_accounts
-       WHERE client_name COLLATE NOCASE LIKE ? ESCAPE '\\'
-       LIMIT ?`
-    )
-    .all(pattern, TEXT_SEARCH_LIMIT);
-}
-
-function searchFirmByText(query, db) {
-  const normalized = normalizeQuery(query);
-  if (normalized.length < TEXT_SEARCH_MIN_LENGTH) {
-    return { found: false, message: 'Не найдено' };
-  }
-
-  const results = [];
-
-  for (const partner of findPartnersByNameText(db, normalized)) {
-    results.push({
-      type: 'partner',
-      phone: partner.phone,
-      recordId: partner.id,
-      clientName: partner.name,
-      message: formatWithExpiry(formatPartner(partner), partner.registered_at),
-    });
-  }
-
-  for (const partner of findVcr1PartnersByText(db, normalized)) {
-    results.push({
-      type: 'vcr1_partner',
-      phone: partner.phone,
-      recordId: partner.id,
-      clientName: partner.name,
-      message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
-    });
-
-    for (const license of findAllVcr1LicensesForPartner(db, partner)) {
+    for (const account of takeLimited(rposAccounts)) {
       results.push({
-        type: 'vcr1_license',
-        phone: partner.phone,
-        recordId: license.id,
-        clientName: license.partner || partner.name,
-        message: formatWithExpiry(
-          formatVcr1License(license, partner),
-          resolveVcr1LicenseSupportDate(db, license, partner.phone)
-        ),
+        type: 'rpos_account',
+        phone: extractPhoneFromText(account.client_name),
+        recordId: account.id,
+        clientName: account.client_name,
+        message: formatWithExpiry(formatRposAccount(account), account.created_at),
       });
     }
-  }
 
-  for (const license of findLicensesByText(db, normalized)) {
-    results.push({
-      type: 'license',
-      phone: license.phone,
-      recordId: license.id,
-      clientName: license.fio,
-      message: formatWithExpiry(formatLicense(license), license.generated),
-    });
+    return buildSearchResult(results, db);
+  } catch (err) {
+    return portalErrorResult(err);
   }
-
-  for (const client of findRposClientsByNameText(db, normalized)) {
-    results.push({
-      type: 'rpos_client',
-      phone: client.phone,
-      recordId: client.id,
-      clientName: client.name,
-      message: formatWithExpiry(formatRposClient(client), client.created_at),
-    });
-  }
-
-  for (const account of findRposAccountsByNameText(db, normalized)) {
-    results.push({
-      type: 'rpos_account',
-      phone: extractPhoneFromText(account.client_name),
-      recordId: account.id,
-      clientName: account.client_name,
-      message: formatWithExpiry(formatRposAccount(account), account.created_at),
-    });
-  }
-
-  return buildSearchResult(results, db);
 }
 
-/**
- * Admin firm search: same as searchUser first, then name/company/text fallback.
- * Does not change Telegram bot search behavior (bots call searchUser only).
- */
-function getFirmCardByTypeAndId(db, type, recordId) {
+async function getFirmCardByTypeAndId(db, type, recordId) {
   const firmType = String(type || '').trim();
   const id = String(recordId ?? '').trim();
   if (!firmType || !id) return null;
 
-  let entry = null;
+  try {
+    let entry = null;
 
-  if (firmType === 'partner') {
-    const partner = db.prepare('SELECT * FROM partners WHERE CAST(id AS TEXT) = ?').get(id);
-    if (!partner) return null;
-    entry = {
-      type: 'partner',
-      phone: partner.phone,
-      recordId: partner.id,
-      clientName: partner.name,
-      message: formatWithExpiry(formatPartner(partner), partner.registered_at),
-    };
-  } else if (firmType === 'vcr1_partner') {
-    const partner = db.prepare('SELECT * FROM vcr1_partners WHERE CAST(id AS TEXT) = ?').get(id);
-    if (!partner) return null;
-    entry = {
-      type: 'vcr1_partner',
-      phone: partner.phone,
-      recordId: partner.id,
-      clientName: partner.name,
-      message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
-    };
-  } else if (firmType === 'vcr1_license') {
-    const license = db.prepare('SELECT * FROM vcr1_licenses WHERE CAST(id AS TEXT) = ?').get(id);
-    if (!license) return null;
-    const partner = findVcr1PartnerForLicense(db, license, null);
-    entry = {
-      type: 'vcr1_license',
-      phone: partner?.phone || null,
-      recordId: license.id,
-      clientName: license.partner || partner?.name || null,
-      message: formatWithExpiry(
-        formatVcr1License(license, partner),
-        resolveVcr1LicenseSupportDate(db, license, partner?.phone)
-      ),
-    };
-  } else if (firmType === 'license') {
-    const license = db.prepare('SELECT * FROM licenses WHERE CAST(id AS TEXT) = ?').get(id);
-    if (!license) return null;
-    entry = {
-      type: 'license',
-      phone: license.phone,
-      recordId: license.id,
-      clientName: license.fio,
-      message: formatWithExpiry(formatLicense(license), license.generated),
-    };
-  } else if (firmType === 'rpos_client') {
-    const client = db.prepare('SELECT * FROM rpos_clients WHERE CAST(id AS TEXT) = ?').get(id);
-    if (!client) return null;
-    entry = {
-      type: 'rpos_client',
-      phone: client.phone,
-      recordId: client.id,
-      clientName: client.name,
-      message: formatWithExpiry(formatRposClient(client), client.created_at),
-    };
-  } else if (firmType === 'rpos_account') {
-    const account = db.prepare('SELECT * FROM rpos_accounts WHERE CAST(id AS TEXT) = ?').get(id);
-    if (!account) return null;
-    entry = {
-      type: 'rpos_account',
-      phone: null,
-      recordId: account.id,
-      clientName: account.client_name,
-      message: formatWithExpiry(formatRposAccount(account), account.created_at),
-    };
-  } else {
+    if (firmType === 'partner') {
+      const partner = await liveGetPartnerById(id);
+      if (!partner) return null;
+      entry = {
+        type: 'partner',
+        phone: partner.phone,
+        recordId: partner.id,
+        clientName: partner.name,
+        message: formatWithExpiry(formatPartner(partner), partner.registered_at),
+      };
+    } else if (firmType === 'vcr1_partner') {
+      const partner = await liveGetVcr1PartnerById(id);
+      if (!partner) return null;
+      entry = {
+        type: 'vcr1_partner',
+        phone: partner.phone,
+        recordId: partner.id,
+        clientName: partner.name,
+        message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
+      };
+    } else if (firmType === 'vcr1_license') {
+      const license = await liveGetVcr1LicenseById(id);
+      if (!license) return null;
+      const partner = await findVcr1PartnerForLicense(license, null);
+      entry = {
+        type: 'vcr1_license',
+        phone: partner?.phone || null,
+        recordId: license.id,
+        clientName: license.partner || partner?.name || null,
+        message: formatWithExpiry(
+          formatVcr1License(license, partner),
+          partner?.registered_at || null
+        ),
+      };
+    } else if (firmType === 'license') {
+      const license = await liveGetLicenseById(id);
+      if (!license) return null;
+      entry = {
+        type: 'license',
+        phone: license.phone,
+        recordId: license.id,
+        clientName: license.fio,
+        message: formatWithExpiry(formatLicense(license), license.generated),
+      };
+    } else if (firmType === 'rpos_client') {
+      const client = await liveGetRposClientById(id);
+      if (!client) return null;
+      entry = {
+        type: 'rpos_client',
+        phone: client.phone,
+        recordId: client.id,
+        clientName: client.name,
+        message: formatWithExpiry(formatRposClient(client), client.created_at),
+      };
+    } else if (firmType === 'rpos_account') {
+      const account = await liveGetRposAccountById(id);
+      if (!account) return null;
+      entry = {
+        type: 'rpos_account',
+        phone: null,
+        recordId: account.id,
+        clientName: account.client_name,
+        message: formatWithExpiry(formatRposAccount(account), account.created_at),
+      };
+    } else {
+      return null;
+    }
+
+    const built = buildSearchResult([entry], db);
+    return built.found ? built.results[0] : entry;
+  } catch (err) {
+    console.error('Live firm card failed:', err?.message || err);
     return null;
   }
-
-  const built = buildSearchResult([entry], db);
-  return built.found ? built.results[0] : entry;
 }
 
-/**
- * Admin firm search: same as searchUser first, then name/company/text fallback.
- * Does not change Telegram bot search behavior (bots call searchUser only).
- */
-function searchFirmAdmin(query, db = openDb()) {
-  const exact = searchUser(query, db);
-  if (exact.found) {
+async function searchFirmAdmin(query, db = openDb()) {
+  const exact = await searchUser(query, db);
+  if (exact.found || exact.error) {
     return exact;
   }
   return searchFirmByText(query, db);
@@ -809,4 +808,5 @@ module.exports = {
   findVcr1PartnerForLicense,
   resolveVcr1LicenseSupportDate,
   EXPIRED_MESSAGE,
+  PORTAL_ERROR_MESSAGE,
 };

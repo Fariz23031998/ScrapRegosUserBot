@@ -157,6 +157,38 @@ describe('channel-aware duration totals', () => {
     });
   });
 
+  it('treats unconfigured channels with recordings as calls', () => {
+    const durationSummary = buildDurationSummary(
+      [
+        {
+          id: 9,
+          channel_id: 'unknown-phone',
+          sla_breached: false,
+          rating: null,
+          fields: [
+            {
+              key: 'field_recording_link',
+              value: 'http://rofeev.7x.uz/recordings/9.wav',
+            },
+          ],
+        },
+        { id: 10, channel_id: 'chat', sla_breached: true, rating: 5, fields: [] },
+      ],
+      [{ channel_id: 'chat', interaction_mode: 'message_only' }]
+    );
+
+    assert.deepEqual(durationSummary.base, { count: 1, slaBreached: 1, rated: 1 });
+    assert.deepEqual(durationSummary.calls, [
+      {
+        id: 9,
+        slaBreached: false,
+        rated: false,
+        hasRecording: true,
+        duration_seconds: null,
+      },
+    ]);
+  });
+
   it('attaches SQL-cached durations to duration_summary calls', () => {
     const fs = require('fs');
     const os = require('os');
@@ -228,6 +260,27 @@ describe('channel-aware duration totals', () => {
       count: 3,
       slaBreached: 1,
       rated: 2,
+    });
+  });
+
+  it('falls back to call.duration_seconds when the durations map omits a ticket', () => {
+    const durationSummary = {
+      base: { count: 1, slaBreached: 0, rated: 0 },
+      calls: [
+        {
+          id: 7,
+          slaBreached: true,
+          rated: true,
+          hasRecording: true,
+          duration_seconds: 45,
+        },
+      ],
+    };
+
+    assert.deepEqual(summarizeByDuration(durationSummary, {}, 30), {
+      count: 2,
+      slaBreached: 1,
+      rated: 1,
     });
   });
 });

@@ -2,7 +2,8 @@ const { EASYTRADE_BASE_URL } = require('./easytrade-auth');
 
 const LICENSES_GET_URL = `${EASYTRADE_BASE_URL}/Licenses/Get`;
 const DEFAULT_PAGE_SIZE = 100;
-const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
+const LIVE_PAGE_SIZE = 50;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 const LICENSES_REFERER = `${EASYTRADE_BASE_URL}/Licenses/Index`;
 
 function easyTradeAjaxHeaders(referer) {
@@ -26,12 +27,12 @@ const COLUMNS = [
 ];
 const ORDERABLE = [true, true, true, true, true, true, true, false, true, false];
 
-function buildFormData({ draw, start, length }) {
+function buildFormData({ draw, start, length, search = '' }) {
   const form = {
     draw: String(draw),
     start: String(start),
     length: String(length),
-    'search[value]': '',
+    'search[value]': String(search || ''),
     'search[regex]': 'false',
     'order[0][column]': '2',
     'order[0][dir]': 'desc',
@@ -50,9 +51,12 @@ function buildFormData({ draw, start, length }) {
   return form;
 }
 
-async function fetchLicensesPage(request, { start = 0, length = DEFAULT_PAGE_SIZE, draw = 1 } = {}) {
+async function fetchLicensesPage(
+  request,
+  { start = 0, length = DEFAULT_PAGE_SIZE, draw = 1, search = '' } = {}
+) {
   const response = await request.post(LICENSES_GET_URL, {
-    form: buildFormData({ draw, start, length }),
+    form: buildFormData({ draw, start, length, search }),
     headers: easyTradeAjaxHeaders(LICENSES_REFERER),
     timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   });
@@ -61,11 +65,28 @@ async function fetchLicensesPage(request, { start = 0, length = DEFAULT_PAGE_SIZ
     throw new Error(`Licenses/Get failed with status ${response.status()}`);
   }
 
-  return response.json();
+  const text = await response.text();
+  if (text.trimStart().startsWith('<!')) {
+    throw new Error('Licenses/Get returned login/HTML (session expired)');
+  }
+  return JSON.parse(text);
 }
 
-async function fetchAllLicenses(request, { pageSize = DEFAULT_PAGE_SIZE, onPage } = {}) {
-  const first = await fetchLicensesPage(request, { start: 0, length: pageSize, draw: 1 });
+async function searchLicenses(request, search, { pageSize = LIVE_PAGE_SIZE } = {}) {
+  const payload = await fetchLicensesPage(request, {
+    start: 0,
+    length: pageSize,
+    draw: 1,
+    search: search || '',
+  });
+  return {
+    rows: payload.data ?? [],
+    total: payload.recordsFiltered ?? payload.recordsTotal ?? 0,
+  };
+}
+
+async function fetchAllLicenses(request, { pageSize = DEFAULT_PAGE_SIZE, onPage, search = '' } = {}) {
+  const first = await fetchLicensesPage(request, { start: 0, length: pageSize, draw: 1, search });
   const total = first.recordsFiltered ?? first.recordsTotal ?? first.data?.length ?? 0;
   const allRows = [...(first.data ?? [])];
 
@@ -79,7 +100,7 @@ async function fetchAllLicenses(request, { pageSize = DEFAULT_PAGE_SIZE, onPage 
 
   while (start < total) {
     pagesFetched += 1;
-    const next = await fetchLicensesPage(request, { start, length: pageSize, draw });
+    const next = await fetchLicensesPage(request, { start, length: pageSize, draw, search });
     const batch = next.data ?? [];
     if (batch.length === 0) break;
 
@@ -97,6 +118,8 @@ async function fetchAllLicenses(request, { pageSize = DEFAULT_PAGE_SIZE, onPage 
 
 module.exports = {
   DEFAULT_PAGE_SIZE,
+  LIVE_PAGE_SIZE,
   fetchAllLicenses,
   fetchLicensesPage,
+  searchLicenses,
 };

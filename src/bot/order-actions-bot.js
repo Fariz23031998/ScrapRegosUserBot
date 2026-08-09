@@ -11,6 +11,7 @@ const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { formatUnpaidOrderMessage, buildOrderActionsKeyboard } = require('./bot-format');
 const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require('./telegram-safe');
 const { enrichOrderParties } = require('./order-parties');
+const { withHtml } = require('./telegram-html');
 
 const ORDER_DENIED = 'Нет доступа к неоплаченным заказам.';
 const DELETE_DENIED = 'Нет прав на удаление заказов.';
@@ -61,7 +62,7 @@ async function sendOrdersWithActions(bot, chatId, orders, telegramId, db, { incl
       canMarkPaidCash,
       canRenotify,
     });
-    await bot.sendMessage(chatId, text, options);
+    await bot.sendMessage(chatId, text, withHtml(options));
   }
 }
 

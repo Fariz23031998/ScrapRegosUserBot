@@ -97,21 +97,25 @@ describe('Telegram order party details', () => {
 
     const detailed = enrichOrderParties(db, order);
     assert.deepEqual(formatOrderPartyLines(detailed), [
-      'Сотрудник: John - +998 (99) 333-23-23',
-      'Клиент: Acme Customer - +998 (90) 111-22-33',
+      '👤 <b>Сотрудник:</b> John - +998 (99) 333-23-23',
+      '👥 <b>Клиент:</b> Acme Customer - +998 (90) 111-22-33',
     ]);
     assert.doesNotMatch(formatUnpaidOrderMessage(detailed), /Доп\. номер:/);
 
     const unpaid = formatUnpaidOrderMessage(detailed);
-    assert.match(unpaid, /Сотрудник: John - \+998 \(99\) 333-23-23/);
-    assert.match(unpaid, /Клиент: Acme Customer - \+998 \(90\) 111-22-33/);
-    assert.match(unpaid, /^Дата заказа: \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/m);
-    assert.equal(formatOrderDateTimeLine(detailed), `Дата заказа: ${formatOrderDateTimeValue(detailed.created_at)}`);
+    assert.match(unpaid, /👤 <b>Сотрудник:<\/b> John - \+998 \(99\) 333-23-23/);
+    assert.match(unpaid, /👥 <b>Клиент:<\/b> Acme Customer - \+998 \(90\) 111-22-33/);
+    assert.match(unpaid, /^📅 <b>Дата заказа:<\/b> \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/m);
+    assert.equal(
+      formatOrderDateTimeLine(detailed),
+      `📅 <b>Дата заказа:</b> ${formatOrderDateTimeValue(detailed.created_at)}`
+    );
 
     const paid = formatOrderPaidMessage(detailed, { provider: 'payme' });
-    assert.match(paid, /Сотрудник: John - \+998 \(99\) 333-23-23/);
-    assert.match(paid, /Клиент: Acme Customer - \+998 \(90\) 111-22-33/);
-    assert.match(paid, /^Дата заказа: \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/m);
+    assert.match(paid, /✅ <b>Заказ оплачен\.<\/b>/);
+    assert.match(paid, /👤 <b>Сотрудник:<\/b> John - \+998 \(99\) 333-23-23/);
+    assert.match(paid, /👥 <b>Клиент:<\/b> Acme Customer - \+998 \(90\) 111-22-33/);
+    assert.match(paid, /^📅 <b>Дата заказа:<\/b> \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/m);
     assert.doesNotMatch(paid, /Доп\. номер:/);
   });
 
@@ -141,16 +145,16 @@ describe('Telegram order party details', () => {
 
     const detailed = enrichOrderParties(db, order);
     assert.deepEqual(formatOrderPartyLines(detailed), [
-      'Сотрудник: John - +998 (99) 333-23-23',
-      'Клиент: Acme Customer - +998 (90) 111-22-33',
-      'Доп. номер: +998 (93) 555-44-33',
+      '👤 <b>Сотрудник:</b> John - +998 (99) 333-23-23',
+      '👥 <b>Клиент:</b> Acme Customer - +998 (90) 111-22-33',
+      '📱 <b>Доп. номер:</b> +998 (93) 555-44-33',
     ]);
 
     const unpaid = formatUnpaidOrderMessage(detailed);
-    assert.match(unpaid, /^Доп\. номер: \+998 \(93\) 555-44-33$/m);
+    assert.match(unpaid, /^📱 <b>Доп\. номер:<\/b> \+998 \(93\) 555-44-33$/m);
 
     const paid = formatOrderPaidMessage(detailed, { provider: 'payme' });
-    assert.match(paid, /^Доп\. номер: \+998 \(93\) 555-44-33$/m);
+    assert.match(paid, /^📱 <b>Доп\. номер:<\/b> \+998 \(93\) 555-44-33$/m);
 
     const createdLogs = listOrderLogs(db, { query: '5554433' });
     assert.equal(createdLogs.total, 1);
@@ -232,7 +236,7 @@ describe('Telegram order party details', () => {
   it('formats order datetime in Asia/Tashkent as dd.MM.yyyy HH:mm', () => {
     assert.equal(formatOrderDateTimeValue('2026-07-30 16:05:00'), '30.07.2026 21:05');
     assert.equal(formatOrderDateTimeValue('2026-01-15 20:30:00'), '16.01.2026 01:30');
-    assert.equal(formatOrderDateTimeLine({ created_at: '2026-07-30 16:05:00' }), 'Дата заказа: 30.07.2026 21:05');
+    assert.equal(formatOrderDateTimeLine({ created_at: '2026-07-30 16:05:00' }), '📅 <b>Дата заказа:</b> 30.07.2026 21:05');
     assert.equal(formatOrderDateTimeValue(null), null);
   });
 
@@ -261,8 +265,8 @@ describe('Telegram order party details', () => {
 
     const detailed = enrichOrderParties(db, order);
     assert.deepEqual(formatOrderPartyLines(detailed), [
-      'Сотрудник: Alex Kim - +998 (97) 123-45-67',
-      'Клиент: Имя не указано - +998 (93) 555-66-77',
+      '👤 <b>Сотрудник:</b> Alex Kim - +998 (97) 123-45-67',
+      '👥 <b>Клиент:</b> Имя не указано - +998 (93) 555-66-77',
     ]);
   });
 });

@@ -4,8 +4,10 @@ const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  DEFAULT_HELLO_SENTENCES,
   HELLO_SENTENCES,
   formatPhoneForTelegram,
+  getHelloSentences,
   isTelegramMtprotoConfigured,
   isTelegramMtprotoEnabled,
   pickRandomHello,
@@ -17,6 +19,7 @@ const MTPROTO_ENV = [
   'TELEGRAM_API_ID',
   'TELEGRAM_API_HASH',
   'TELEGRAM_MTPROTO_SESSION',
+  'HELLO_SENTENCES',
 ];
 
 describe('Telegram MTProto client helpers', () => {
@@ -86,14 +89,27 @@ describe('Telegram MTProto client helpers', () => {
     assert.equal(sent.length, 1);
     assert.equal(String(sent[0].peer.userId), '42');
     assert.equal(String(sent[0].peer.accessHash), '99');
-    assert.deepEqual(sent[0].options, { message: 'Pay here' });
+    assert.deepEqual(sent[0].options, { message: 'Pay here', parseMode: 'html' });
   });
 
-  it('pickRandomHello returns one of the ten Russian greetings', () => {
-    assert.equal(HELLO_SENTENCES.length, 10);
+  it('pickRandomHello returns one of the default Russian greetings', () => {
+    assert.equal(DEFAULT_HELLO_SENTENCES.length, 10);
+    assert.deepEqual(HELLO_SENTENCES, DEFAULT_HELLO_SENTENCES);
+    assert.deepEqual(getHelloSentences(), [...DEFAULT_HELLO_SENTENCES]);
     for (let i = 0; i < 20; i += 1) {
-      assert.equal(HELLO_SENTENCES.includes(pickRandomHello()), true);
+      assert.equal(DEFAULT_HELLO_SENTENCES.includes(pickRandomHello()), true);
     }
+  });
+
+  it('reads HELLO_SENTENCES from env when set (one greeting per line)', () => {
+    process.env.HELLO_SENTENCES = 'Привет!\n\n Добрый вечер! \n';
+    assert.deepEqual(getHelloSentences(), ['Привет!', 'Добрый вечер!']);
+    for (let i = 0; i < 10; i += 1) {
+      assert.equal(['Привет!', 'Добрый вечер!'].includes(pickRandomHello()), true);
+    }
+
+    process.env.HELLO_SENTENCES = '   \n  ';
+    assert.deepEqual(getHelloSentences(), [...DEFAULT_HELLO_SENTENCES]);
   });
 
   it('sends a random greeting then the payment text when withGreeting is true', async () => {
@@ -122,11 +138,30 @@ describe('Telegram MTProto client helpers', () => {
     );
 
     assert.equal(sent.length, 2);
-    assert.deepEqual(sent[0].options, { message: greeting });
-    assert.deepEqual(sent[1].options, { message: 'Pay here' });
+    assert.deepEqual(sent[0].options, { message: greeting, parseMode: false });
+    assert.deepEqual(sent[1].options, { message: 'Pay here', parseMode: 'html' });
     assert.deepEqual(delays, [1500]);
     assert.equal(result.greeting, greeting);
     assert.equal(result.sent, true);
+  });
+
+  it('allows disabling HTML parse mode for the payment text', async () => {
+    const sent = [];
+    await sendTelegramByPhone(
+      { phone: '998901112233', text: 'plain <b>text</b>', parseMode: false },
+      {
+        getClientFn: async () => ({
+          sendMessage: async (_peer, options) => {
+            sent.push(options);
+          },
+        }),
+        resolveUserByPhoneFn: async () => ({
+          user: { id: 1, accessHash: 2 },
+          method: 'resolve_phone',
+        }),
+      }
+    );
+    assert.deepEqual(sent[0], { message: 'plain <b>text</b>', parseMode: false });
   });
 
   it('rejects invalid phone and empty text', async () => {

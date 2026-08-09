@@ -1,4 +1,5 @@
 const { getBotUserByTelegramId, findUserByPhone } = require('../db/bot-users-db');
+const { field } = require('./telegram-html');
 
 function parseOrderMetadata(value) {
   if (!value) return {};
@@ -52,12 +53,12 @@ function formatPerson(name, phone) {
 
 function formatOrderPartyLines(order) {
   const lines = [
-    `Сотрудник: ${formatPerson(order.employee_name, order.employee_phone || order.bot_user_phone)}`,
-    `Клиент: ${formatPerson(order.customer_name, order.customer_phone || order.client_phone)}`,
+    field('👤', 'Сотрудник', formatPerson(order.employee_name, order.employee_phone || order.bot_user_phone)),
+    field('👥', 'Клиент', formatPerson(order.customer_name, order.customer_phone || order.client_phone)),
   ];
   const additionalPhone = String(order.additional_phone || '').trim();
   if (additionalPhone) {
-    lines.push(`Доп. номер: ${formatTelegramPhone(additionalPhone)}`);
+    lines.push(field('📱', 'Доп. номер', formatTelegramPhone(additionalPhone)));
   }
   return lines;
 }

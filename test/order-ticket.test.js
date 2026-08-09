@@ -14,6 +14,7 @@ const {
   formatTicketAdminUrl,
   formatOrderTicketLine,
 } = require('../src/bot/order-ticket');
+const { addLink, listLinksByClient } = require('../src/db/client-firm-links');
 
 function makeTempDbPath() {
   return path.join(
@@ -50,7 +51,7 @@ describe('order ticket helpers', () => {
     assert.equal(formatTicketAdminUrl(null), null);
     assert.equal(
       formatOrderTicketLine({ ticket_id: 123 }),
-      'Тикет: http://localhost:3000/bot-admin/tickets/123'
+      '🎫 <a href="http://localhost:3000/bot-admin/tickets/123">Тикет #123</a>'
     );
     assert.equal(formatOrderTicketLine({}), null);
     assert.equal(formatOrderTicketLine({ ticket_id: null }), null);
@@ -261,6 +262,177 @@ describe('POST /bot-admin/api/orders', () => {
     }
   });
 
+  async function loginEmployee(server, { login, password }) {
+    const loginRes = await postJson(server, '/bot-admin/api/login', { login, password });
+    assert.equal(loginRes.statusCode, 200);
+    const cookie = cookieFromSetCookie(loginRes.headers['set-cookie']);
+    assert.ok(cookie);
+    return cookie;
+  }
+
+  function firmOrderPayload(overrides = {}) {
+    return {
+      amount: 25000,
+      client_phone: '998901234567',
+      ticket_id: 42,
+      client_id: 777,
+      client_name: 'Acme Firm',
+      client_type: 'partner',
+      record_id: 501,
+      firm_message: 'Partner card',
+      firm_phone: '998909998877',
+      ...overrides,
+    };
+  }
+
+  it('auto-links selected firm to client when user has clients_link_firm', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551200',
+      displayName: 'Linker',
+      rights: { tickets_read: 1, clients_link_firm: 1 },
+      adminLogin: 'order.linker',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555200, employee.id);
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.linker',
+        password: 'panel-secret',
+      });
+      const res = await postJson(server, '/bot-admin/api/orders', firmOrderPayload(), {
+        Cookie: cookie,
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, true);
+      assert.ok(body.firm_link?.id);
+
+      const links = listLinksByClient(db, 777);
+      assert.equal(links.length, 1);
+      assert.equal(links[0].firm_type, 'partner');
+      assert.equal(links[0].firm_record_id, '501');
+      assert.equal(links[0].firm_name, 'Acme Firm');
+      assert.equal(links[0].firm_phone, '998909998877');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('does not auto-link firm without clients_link_firm permission', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551201',
+      displayName: 'No Link Right',
+      rights: { tickets_read: 1 },
+      adminLogin: 'order.nolink',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555201, employee.id);
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.nolink',
+        password: 'panel-secret',
+      });
+      const res = await postJson(server, '/bot-admin/api/orders', firmOrderPayload(), {
+        Cookie: cookie,
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, false);
+      assert.equal(body.firm_link?.reason, 'no_permission');
+      assert.equal(listLinksByClient(db, 777).length, 0);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('treats already-linked firm as success when creating an order', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551202',
+      displayName: 'Dup Linker',
+      rights: { tickets_read: 1, clients_link_firm: 1 },
+      adminLogin: 'order.duplink',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555202, employee.id);
+    addLink(db, {
+      regos_client_id: 777,
+      type: 'partner',
+      recordId: 501,
+      clientName: 'Acme Firm',
+      phone: '998909998877',
+    });
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.duplink',
+        password: 'panel-secret',
+      });
+      const res = await postJson(server, '/bot-admin/api/orders', firmOrderPayload(), {
+        Cookie: cookie,
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, true);
+      assert.equal(body.firm_link?.reason, 'already_linked');
+      assert.equal(listLinksByClient(db, 777).length, 1);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('skips auto-link when firm is selected but client_id is missing', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551203',
+      displayName: 'No Client Id',
+      rights: { tickets_read: 1, clients_link_firm: 1 },
+      adminLogin: 'order.noclient',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555203, employee.id);
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.noclient',
+        password: 'panel-secret',
+      });
+      const { client_id: _ignored, ...payload } = firmOrderPayload();
+      const res = await postJson(server, '/bot-admin/api/orders', payload, { Cookie: cookie });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, false);
+      assert.equal(body.firm_link?.reason, 'no_client_id');
+      assert.equal(listLinksByClient(db, 777).length, 0);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it('rejects password-only admin without bot user telegram', async () => {
     const app = express();
     app.use('/bot-admin', createBotAdminRouter(db));
@@ -317,14 +489,51 @@ describe('POST /bot-admin/api/orders', () => {
   }
 
   it('searches firm data and stores firm metadata on create', async () => {
-    db.prepare(
-      `INSERT INTO partners (id, name, phone, registered_at)
-       VALUES (?, ?, ?, datetime('now'))`
-    ).run(501, 'Acme Firm', '998901112233');
-    db.prepare(
-      `INSERT INTO vcr1_partners (id, name, inn, phone, company, registered_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))`
-    ).run(601, 'VCR Partner', '305123456', '998909998877', 'Omega Company LLC');
+    const portalSearch = require('../src/live/portal-search');
+    const partner = {
+      id: 501,
+      name: 'Acme Firm',
+      phone: '998901112233',
+      legal_status: null,
+      contacts: null,
+      description: null,
+      moderation_status: null,
+      balance: null,
+      registered_at: '01.01.2026',
+    };
+    const vcr1Partner = {
+      id: 601,
+      name: 'VCR Partner',
+      inn: '305123456',
+      phone: '998909998877',
+      company: 'Omega Company LLC',
+      legal_status: null,
+      contacts: null,
+      balance: null,
+      registered_at: '01.01.2026',
+    };
+    const originals = { ...portalSearch };
+    portalSearch.liveSearchPartners = async (query) => {
+      const q = String(query || '').toLowerCase();
+      if (q.includes('901112233') || q.includes('acme')) return [partner];
+      return [];
+    };
+    portalSearch.liveSearchVcr1Partners = async (query) => {
+      const q = String(query || '').toLowerCase();
+      if (q.includes('omega') || q.includes('909998877') || q.includes('305123456')) {
+        return [vcr1Partner];
+      }
+      return [];
+    };
+    portalSearch.liveSearchPartnerAccounts = async () => [];
+    portalSearch.liveSearchLicenses = async () => [];
+    portalSearch.liveSearchVcr1Licenses = async () => [];
+    portalSearch.liveSearchRposClients = async () => [];
+    portalSearch.liveSearchRposAccounts = async () => [];
+
+    delete require.cache[require.resolve('../src/bot/search-user')];
+    delete require.cache[require.resolve('../src/admin/bot-admin')];
+    const { createBotAdminRouter: createAdmin } = require('../src/admin/bot-admin');
 
     const employee = createEmployeeUser(db, {
       phone: '+998905559900',
@@ -336,7 +545,7 @@ describe('POST /bot-admin/api/orders', () => {
     db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555002, employee.id);
 
     const app = express();
-    app.use('/bot-admin', createBotAdminRouter(db));
+    app.use('/bot-admin', createAdmin(db));
     const server = await new Promise((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
@@ -412,6 +621,9 @@ describe('POST /bot-admin/api/orders', () => {
       assert.equal(meta.message, 'Acme Firm block');
       assert.equal(meta.type, 'partner');
     } finally {
+      Object.assign(portalSearch, originals);
+      delete require.cache[require.resolve('../src/bot/search-user')];
+      delete require.cache[require.resolve('../src/admin/bot-admin')];
       await new Promise((resolve) => server.close(resolve));
     }
   });
@@ -439,21 +651,58 @@ describe('searchUser vs searchFirmAdmin', () => {
     if (dbPath) removeDbFiles(dbPath);
   });
 
-  it('keeps searchUser phone/code-only while searchFirmAdmin finds by name', () => {
-    const { searchUser, searchFirmAdmin } = require('../src/bot/search-user');
-    db.prepare(
-      `INSERT INTO partners (id, name, phone, registered_at)
-       VALUES (?, ?, ?, datetime('now'))`
-    ).run(701, 'UniqueName Corp', '998901234000');
+  it('keeps searchUser phone/code-only while searchFirmAdmin finds by name', async () => {
+    const portalSearch = require('../src/live/portal-search');
+    const partner = {
+      id: 701,
+      name: 'UniqueName Corp',
+      phone: '998901234000',
+      legal_status: null,
+      contacts: null,
+      description: null,
+      moderation_status: null,
+      balance: null,
+      registered_at: '01.01.2026',
+    };
 
-    const botResult = searchUser('UniqueName', db);
-    assert.equal(botResult.found, false);
+    const original = {
+      liveSearchPartners: portalSearch.liveSearchPartners,
+      liveSearchPartnerAccounts: portalSearch.liveSearchPartnerAccounts,
+      liveSearchLicenses: portalSearch.liveSearchLicenses,
+      liveSearchVcr1Partners: portalSearch.liveSearchVcr1Partners,
+      liveSearchVcr1Licenses: portalSearch.liveSearchVcr1Licenses,
+      liveSearchRposClients: portalSearch.liveSearchRposClients,
+      liveSearchRposAccounts: portalSearch.liveSearchRposAccounts,
+    };
 
-    const adminResult = searchFirmAdmin('UniqueName', db);
-    assert.equal(adminResult.found, true);
-    assert.ok(adminResult.results.some((row) => row.recordId === 701 && row.type === 'partner'));
+    portalSearch.liveSearchPartners = async (query) => {
+      const q = String(query || '').toLowerCase();
+      if (q.includes('uniquename') || q.includes('901234000')) return [partner];
+      return [];
+    };
+    portalSearch.liveSearchPartnerAccounts = async () => [];
+    portalSearch.liveSearchLicenses = async () => [];
+    portalSearch.liveSearchVcr1Partners = async () => [];
+    portalSearch.liveSearchVcr1Licenses = async () => [];
+    portalSearch.liveSearchRposClients = async () => [];
+    portalSearch.liveSearchRposAccounts = async () => [];
 
-    const phoneResult = searchUser('998901234000', db);
-    assert.equal(phoneResult.found, true);
+    try {
+      delete require.cache[require.resolve('../src/bot/search-user')];
+      const { searchUser, searchFirmAdmin } = require('../src/bot/search-user');
+
+      const botResult = await searchUser('UniqueName', db);
+      assert.equal(botResult.found, false);
+
+      const adminResult = await searchFirmAdmin('UniqueName', db);
+      assert.equal(adminResult.found, true);
+      assert.ok(adminResult.results.some((row) => row.recordId === 701 && row.type === 'partner'));
+
+      const phoneResult = await searchUser('998901234000', db);
+      assert.equal(phoneResult.found, true);
+    } finally {
+      Object.assign(portalSearch, original);
+      delete require.cache[require.resolve('../src/bot/search-user')];
+    }
   });
 });

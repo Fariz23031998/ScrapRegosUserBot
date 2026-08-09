@@ -26,10 +26,12 @@ const {
   registerTechnicalSupportHandlers,
   handleTechnicalSupportMessage,
 } = require('../../src/bot/technical-support-bot');
+const { registerTariffInfoHandlers } = require('../../src/bot/tariff-info-bot');
 const { registerPricesHandlers } = require('../../src/bot/prices-bot');
 const { formatUnpaidOrdersBlock } = require('../../src/bot/bot-format');
 const { enrichOrderParties } = require('../../src/bot/order-parties');
 const { sendChatActionSafe } = require('../../src/bot/telegram-safe');
+const { TELEGRAM_HTML, withHtml } = require('../../src/bot/telegram-html');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -167,7 +169,7 @@ async function sendCustomerPaymentLinks(chatId, phone) {
     await sendBotMessage(chatId, CUSTOMER_NO_ORDERS, REMOVE_KEYBOARD);
     return;
   }
-  await sendBotMessage(chatId, unpaidBlock, REMOVE_KEYBOARD);
+  await sendBotMessage(chatId, unpaidBlock, withHtml(REMOVE_KEYBOARD));
 }
 
 async function sendEmployeeStartMessage(chatId, telegramId) {
@@ -183,9 +185,13 @@ async function sendSearchResultWithAction(chatId, telegramId, entry, { appendUnp
   for (let i = 0; i < chunks.length; i += 1) {
     const isLast = i === chunks.length - 1;
     if (isLast) {
-      await bot.sendMessage(chatId, chunks[i], makeServiceButtonForResult(entry, telegramId, db));
+      await bot.sendMessage(
+        chatId,
+        chunks[i],
+        withHtml(makeServiceButtonForResult(entry, telegramId, db))
+      );
     } else {
-      await bot.sendMessage(chatId, chunks[i]);
+      await bot.sendMessage(chatId, chunks[i], TELEGRAM_HTML);
     }
   }
 
@@ -249,6 +255,9 @@ registerDashboardHandlers(bot, {
 });
 registerTechnicalSupportHandlers(bot, {
   db,
+  getBotUser: (telegramId) => getBotUser(db, telegramId),
+});
+registerTariffInfoHandlers(bot, {
   getBotUser: (telegramId) => getBotUser(db, telegramId),
 });
 registerPricesHandlers(bot);
@@ -366,7 +375,7 @@ async function handleIncomingMessage(msg) {
 
   try {
     await sendChatActionSafe(bot, msg.chat.id);
-    const result = searchUser(text, db);
+    const result = await searchUser(text, db);
     if (result.found && Array.isArray(result.results) && result.results.length > 0) {
       const shownUnpaidForPhones = new Set();
       for (const entry of result.results) {
