@@ -76,6 +76,8 @@ function applyNavPermissions(session) {
       }
     });
   }
+
+  nav.classList.add('admin-nav--ready');
 }
 
 function showNoSectionAccess() {

@@ -186,6 +186,19 @@ describe('Bot admin static assets and API auth', () => {
     }
   });
 
+  it('keeps admin navigation hidden until permissions are applied', () => {
+    const publicDir = botAdminPublicDir();
+    const css = fs.readFileSync(path.join(publicDir, 'admin.css'), 'utf8');
+    const commonScript = fs.readFileSync(path.join(publicDir, 'admin-common.js'), 'utf8');
+
+    assert.match(css, /\.admin-nav\s*\{[^}]*visibility:\s*hidden;/s);
+    assert.match(css, /\.admin-nav--ready\s*\{[^}]*visibility:\s*visible;/s);
+    assert.match(
+      commonScript,
+      /function applyNavPermissions[\s\S]*nav\.classList\.add\('admin-nav--ready'\)/
+    );
+  });
+
   it('defines every table class the renderers use', () => {
     const publicDir = botAdminPublicDir();
     const css = fs.readFileSync(path.join(publicDir, 'admin.css'), 'utf8');
