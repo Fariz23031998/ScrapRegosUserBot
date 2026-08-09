@@ -48,7 +48,7 @@ function showPricesMessage(text, isError = false) {
   el.className = `message ${isError ? 'error' : 'success'}`;
 }
 
-function renderPricesForm(prices) {
+function renderPricesForm(prices, { canEdit = true } = {}) {
   const grid = document.getElementById('prices-grid');
   const byMonths = new Map((prices || []).map((row) => [Number(row.months), row]));
   grid.innerHTML = DURATIONS.map((months) => {
@@ -67,6 +67,7 @@ function renderPricesForm(prices) {
           data-months="${months}"
           value="${Number(row.amount || 0)}"
           required
+          ${canEdit ? '' : 'readonly disabled'}
         />
         <small class="field-hint ${row.configured ? 'field-hint--ok' : 'field-hint--warn'}">${hint}</small>
       </label>
@@ -74,9 +75,9 @@ function renderPricesForm(prices) {
   }).join('');
 }
 
-async function loadPrices() {
+async function loadPrices(canEdit = true) {
   const data = await api('/bot-admin/api/technical-support/prices');
-  renderPricesForm(data.prices || []);
+  renderPricesForm(data.prices || [], { canEdit });
 }
 
 async function savePrices(event) {
@@ -188,12 +189,18 @@ async function loadSubscriptions() {
 }
 
 async function init() {
-  await ensureSession();
+  const session = await ensureSession({ requiredPermission: 'technical_support_read' });
+  const canEdit = Boolean(session.permissions?.technical_support_edit);
   setupLogout();
-  await loadPrices();
+  await loadPrices(canEdit);
   await loadSubscriptions();
 
-  document.getElementById('prices-form').addEventListener('submit', savePrices);
+  const submitBtn = document.getElementById('prices-submit');
+  if (!canEdit) {
+    submitBtn.hidden = true;
+  } else {
+    document.getElementById('prices-form').addEventListener('submit', savePrices);
+  }
   document.getElementById('refresh-subscriptions-btn').addEventListener('click', () => {
     loadSubscriptions().catch((error) => {
       document.getElementById('subscriptions-wrap').innerHTML =

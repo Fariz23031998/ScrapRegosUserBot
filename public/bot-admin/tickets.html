@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Тикеты — админ-панель бота</title>
+    <link rel="stylesheet" href="/bot-admin/admin.css" />
+  </head>
+  <body>
+    <main class="page page--wide">
+      <header class="header">
+        <div class="header-top">
+          <div>
+            <h1>Тикеты REGOS</h1>
+            <p>Просмотр тикетов CRM через Integration API. Нажмите на строку, чтобы открыть карточку тикета.</p>
+          </div>
+          <div class="account-menu" id="account-menu">
+            <button type="button" class="account-menu__avatar" id="account-menu-toggle" aria-haspopup="true" aria-expanded="false" aria-label="Аккаунт">
+              <span class="account-menu__initials" id="account-menu-initials">?</span>
+            </button>
+            <div class="account-menu__dropdown" id="account-menu-dropdown" hidden>
+              <div class="account-menu__identity" id="account-menu-identity"></div>
+              <button type="button" class="account-menu__item" id="account-credentials-btn" hidden>Сменить логин и пароль</button>
+              <button type="button" class="account-menu__item account-menu__item--danger" id="logout-btn">Выйти</button>
+            </div>
+          </div>
+        </div>
+        <nav class="admin-nav" aria-label="Разделы админ-панели">
+          <a class="admin-nav__link" href="/bot-admin/">Пользователи</a>
+          <a class="admin-nav__link" href="/bot-admin/orders">Заказы</a>
+          <a class="admin-nav__link" href="/bot-admin/order-logs">Журнал заказов</a>
+          <a class="admin-nav__link admin-nav__link--active" href="/bot-admin/tickets" aria-current="page">Тикеты</a>
+          <a class="admin-nav__link" href="/bot-admin/technical-support">Техподдержка</a>
+          <a class="admin-nav__link" href="/bot-admin/prices">Прайс</a>
+        </nav>
+      </header>
+
+      <section class="card">
+        <div class="card-toolbar">
+          <h2>Фильтры</h2>
+        </div>
+        <form id="ticket-filters" class="ticket-filters">
+          <div class="ticket-filters__row">
+            <div class="search-box" id="search-box">
+              <span class="search-box__icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <input
+                type="search"
+                id="ticket-search"
+                class="search-box__input"
+                placeholder="Поиск по теме, клиенту, телефону…"
+                autocomplete="off"
+                enterkeyhint="search"
+              />
+              <button type="button" class="search-box__clear" id="search-clear" aria-label="Очистить поиск" hidden>&times;</button>
+            </div>
+
+            <label class="field field-inline">
+              <span>Статус</span>
+              <select id="status-filter">
+                <option value="">Все статусы</option>
+                <option value="Open">Открыт</option>
+                <option value="Closed">Закрыт</option>
+                <option value="WaitingClient">Ожидание клиента</option>
+                <option value="WaitingStaff">Ожидание сотрудника</option>
+              </select>
+            </label>
+
+            <label class="field field-inline">
+              <span>Ответственный</span>
+              <select id="user-filter">
+                <option value="">Все</option>
+              </select>
+            </label>
+
+            <label class="field field-inline">
+              <span>Канал</span>
+              <select id="channel-filter">
+                <option value="">Все каналы</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="ticket-filters__row">
+            <label class="field field-inline">
+              <span>с</span>
+              <input type="datetime-local" id="date-from" />
+            </label>
+            <label class="field field-inline">
+              <span>по</span>
+              <input type="datetime-local" id="date-to" />
+            </label>
+
+            <label class="field field-inline field-checkbox">
+              <input type="checkbox" id="without-duplicates" />
+              <span>Без дубликатов</span>
+            </label>
+
+            <label class="field field-inline" id="duplicate-interval-wrap" hidden>
+              <span>Интервал, мин</span>
+              <select id="duplicate-interval">
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+                <option value="15">15</option>
+                <option value="30">30</option>
+                <option value="60">60</option>
+              </select>
+            </label>
+
+            <div class="ticket-filters__actions">
+              <button type="submit" class="btn btn-primary btn-sm" id="apply-filters-btn">Применить</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="refresh-tickets-btn">Обновить</button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="card-toolbar">
+          <div class="card-toolbar-left">
+            <h2>Тикеты</h2>
+            <div id="active-ticket" class="active-ticket" hidden></div>
+          </div>
+          <div class="card-toolbar-right">
+            <div id="tickets-summary" class="tickets-summary" hidden></div>
+          </div>
+        </div>
+        <p id="tickets-error" class="message error" hidden></p>
+        <div id="tickets-wrap"></div>
+        <div id="tickets-pagination" class="pagination-wrap"></div>
+      </section>
+    </main>
+
+    <script src="/bot-admin/admin-common.js"></script>
+    <script src="/bot-admin/admin-tickets.js"></script>
+  </body>
+</html>

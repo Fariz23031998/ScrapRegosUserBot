@@ -13,6 +13,7 @@ const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
+const { formatOrderTicketLine } = require('./order-ticket');
 
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const ACCESS_DENIED = 'Сначала пройдите регистрацию: отправьте свой номер телефона.';
@@ -111,6 +112,7 @@ function formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, months) {
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
+    formatOrderTicketLine(order),
     `Срок: ${durationLabel(months)}`,
     `Сумма: ${order.amount} UZS`,
     '',
@@ -131,6 +133,7 @@ function formatCustomerCreatedOrderMessage(order, months) {
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
+    formatOrderTicketLine(order),
     `Срок: ${durationLabel(months)}`,
     `Сумма: ${order.amount} ${order.currency || 'UZS'}`,
     '',

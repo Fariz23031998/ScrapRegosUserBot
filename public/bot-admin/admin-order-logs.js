@@ -125,7 +125,7 @@ async function loadOrderLogs() {
 }
 
 async function init() {
-  await ensureSession();
+  await ensureSession({ requiredPermission: 'order_logs_read' });
   await loadOrderLogs();
 }
 

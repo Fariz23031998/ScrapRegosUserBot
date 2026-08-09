@@ -19,6 +19,11 @@ function formatPaymentPageUrl(orderId) {
   return `${base}/pay?order_id=${encodeURIComponent(orderId)}`;
 }
 
+function formatTicketAdminUrl(ticketId) {
+  const { formatTicketAdminUrl: formatUrl } = require('../bot/order-ticket');
+  return formatUrl(ticketId);
+}
+
 function getDefaultPaymentProvider() {
   return isClickPaymentEnabled() ? 'click' : 'payme';
 }
@@ -99,6 +104,7 @@ module.exports = {
   getPublicBaseUrl,
   isOrderId,
   formatPaymentPageUrl,
+  formatTicketAdminUrl,
   getDefaultPaymentProvider,
   getPaymentOptionsForOrder,
   getPublicDir,

@@ -14,11 +14,22 @@
             <h1>Техподдержка</h1>
             <p>Цены на подписки 1/3/6/12 месяцев и история оплаченных подписок.</p>
           </div>
-          <button type="button" class="btn btn-secondary" id="logout-btn">Выйти</button>
+          <div class="account-menu" id="account-menu">
+            <button type="button" class="account-menu__avatar" id="account-menu-toggle" aria-haspopup="true" aria-expanded="false" aria-label="Аккаунт">
+              <span class="account-menu__initials" id="account-menu-initials">?</span>
+            </button>
+            <div class="account-menu__dropdown" id="account-menu-dropdown" hidden>
+              <div class="account-menu__identity" id="account-menu-identity"></div>
+              <button type="button" class="account-menu__item" id="account-credentials-btn" hidden>Сменить логин и пароль</button>
+              <button type="button" class="account-menu__item account-menu__item--danger" id="logout-btn">Выйти</button>
+            </div>
+          </div>
         </div>
         <nav class="admin-nav" aria-label="Разделы админ-панели">
           <a class="admin-nav__link" href="/bot-admin/">Пользователи</a>
+          <a class="admin-nav__link" href="/bot-admin/orders">Заказы</a>
           <a class="admin-nav__link" href="/bot-admin/order-logs">Журнал заказов</a>
+          <a class="admin-nav__link" href="/bot-admin/tickets">Тикеты</a>
           <a class="admin-nav__link admin-nav__link--active" href="/bot-admin/technical-support" aria-current="page">Техподдержка</a>
           <a class="admin-nav__link" href="/bot-admin/prices">Прайс</a>
         </nav>

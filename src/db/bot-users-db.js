@@ -1,6 +1,10 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const { usersPhonesPath } = require('../paths');
 const { logOrderEvent } = require('./order-logs');
+
+const ADMIN_PASSWORD_HASH_PREFIX = 'scrypt';
+const ADMIN_PASSWORD_KEYLEN = 64;
 
 const DEFAULT_ALLOWLIST_PATH = usersPhonesPath();
 
@@ -15,9 +19,44 @@ const DEFAULT_RIGHTS = {
   open_admin_dashboard: 0,
   create_technical_support: 0,
   renotify_order: 0,
+  users_read: 0,
+  users_create: 0,
+  users_edit: 0,
+  users_delete: 0,
+  order_logs_read: 0,
+  orders_read: 0,
+  orders_manage: 0,
+  tickets_read: 0,
+  technical_support_read: 0,
+  technical_support_create: 0,
+  technical_support_edit: 0,
+  technical_support_delete: 0,
+  prices_read: 0,
+  prices_create: 0,
+  prices_edit: 0,
+  prices_delete: 0,
 };
 
 const RIGHTS_COLUMNS = Object.keys(DEFAULT_RIGHTS);
+
+const ADMIN_RIGHTS_COLUMNS = [
+  'users_read',
+  'users_create',
+  'users_edit',
+  'users_delete',
+  'order_logs_read',
+  'orders_read',
+  'orders_manage',
+  'tickets_read',
+  'technical_support_read',
+  'technical_support_create',
+  'technical_support_edit',
+  'technical_support_delete',
+  'prices_read',
+  'prices_create',
+  'prices_edit',
+  'prices_delete',
+];
 
 function normalizePhoneKey(phone) {
   return String(phone || '').replace(/\D/g, '');
@@ -69,22 +108,74 @@ function ensureUserRightsTable(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-  if (!columnExists(db, 'user_rights', 'mark_paid_cash')) {
-    db.exec('ALTER TABLE user_rights ADD COLUMN mark_paid_cash INTEGER NOT NULL DEFAULT 0');
+
+  const legacyColumns = [
+    'mark_paid_cash',
+    'open_admin_dashboard',
+    'create_technical_support',
+    'renotify_order',
+    'view_tickets',
+  ];
+  for (const column of legacyColumns) {
+    if (!columnExists(db, 'user_rights', column)) {
+      db.exec(`ALTER TABLE user_rights ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    }
   }
-  if (!columnExists(db, 'user_rights', 'open_admin_dashboard')) {
-    db.exec('ALTER TABLE user_rights ADD COLUMN open_admin_dashboard INTEGER NOT NULL DEFAULT 0');
+
+  for (const column of ADMIN_RIGHTS_COLUMNS) {
+    if (!columnExists(db, 'user_rights', column)) {
+      db.exec(`ALTER TABLE user_rights ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    }
   }
-  if (!columnExists(db, 'user_rights', 'create_technical_support')) {
-    db.exec('ALTER TABLE user_rights ADD COLUMN create_technical_support INTEGER NOT NULL DEFAULT 0');
-  }
-  if (!columnExists(db, 'user_rights', 'renotify_order')) {
-    db.exec('ALTER TABLE user_rights ADD COLUMN renotify_order INTEGER NOT NULL DEFAULT 0');
+
+  // One-time copy: view_tickets → tickets_read (orphan view_tickets column kept).
+  if (
+    columnExists(db, 'user_rights', 'view_tickets') &&
+    columnExists(db, 'user_rights', 'tickets_read')
+  ) {
+    db.exec(`
+      UPDATE user_rights
+      SET tickets_read = 1
+      WHERE IFNULL(view_tickets, 0) = 1 AND IFNULL(tickets_read, 0) = 0
+    `);
   }
 }
 
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(name));
+}
+
+function ensureAdminCredentialColumns(db) {
+  if (!tableExists(db, 'bot_users')) return;
+  if (!columnExists(db, 'bot_users', 'admin_login')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN admin_login TEXT');
+  }
+  if (!columnExists(db, 'bot_users', 'password_hash')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN password_hash TEXT');
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_users_admin_login
+    ON bot_users(admin_login)
+    WHERE admin_login IS NOT NULL
+  `);
+}
+
+function ensureRegosLinkColumns(db) {
+  if (!tableExists(db, 'bot_users')) return;
+  if (!columnExists(db, 'bot_users', 'regos_user_id')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN regos_user_id INTEGER');
+  }
+  if (!columnExists(db, 'bot_users', 'regos_login')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN regos_login TEXT');
+  }
+  if (!columnExists(db, 'bot_users', 'regos_full_name')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN regos_full_name TEXT');
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_users_regos_user_id
+    ON bot_users(regos_user_id)
+    WHERE regos_user_id IS NOT NULL
+  `);
 }
 
 function finishBotUsersMigration(db) {
@@ -93,8 +184,68 @@ function finishBotUsersMigration(db) {
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_bot_users_phone ON bot_users(phone)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_bot_users_telegram_id ON bot_users(telegram_id)');
+  ensureAdminCredentialColumns(db);
+  ensureRegosLinkColumns(db);
   ensureUserRightsTable(db);
   seedMissingEmployeeRights(db);
+}
+
+function normalizeAdminLogin(login) {
+  const value = String(login || '').trim();
+  return value || null;
+}
+
+function hashAdminPassword(password) {
+  const plain = String(password || '');
+  if (!plain) {
+    throw new Error('PASSWORD_REQUIRED');
+  }
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(plain, salt, ADMIN_PASSWORD_KEYLEN);
+  return `${ADMIN_PASSWORD_HASH_PREFIX}$${salt.toString('base64url')}$${derived.toString('base64url')}`;
+}
+
+function verifyAdminPassword(password, storedHash) {
+  if (!storedHash || typeof storedHash !== 'string') return false;
+  const parts = storedHash.split('$');
+  if (parts.length !== 3 || parts[0] !== ADMIN_PASSWORD_HASH_PREFIX) return false;
+  const [, saltB64, hashB64] = parts;
+  let salt;
+  let expected;
+  try {
+    salt = Buffer.from(saltB64, 'base64url');
+    expected = Buffer.from(hashB64, 'base64url');
+  } catch {
+    return false;
+  }
+  if (!salt.length || !expected.length) return false;
+  const actual = crypto.scryptSync(String(password || ''), salt, expected.length);
+  if (actual.length !== expected.length) return false;
+  try {
+    return crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+function findEmployeeByAdminLogin(db, login) {
+  const normalized = normalizeAdminLogin(login);
+  if (!normalized) return null;
+  return (
+    db
+      .prepare("SELECT * FROM bot_users WHERE role = 'employee' AND lower(admin_login) = lower(?)")
+      .get(normalized) ?? null
+  );
+}
+
+function assertAdminLoginAvailable(db, login, excludeUserId = null) {
+  const normalized = normalizeAdminLogin(login);
+  if (!normalized) return null;
+  const existing = findEmployeeByAdminLogin(db, normalized);
+  if (existing && existing.id !== excludeUserId) {
+    throw new Error('LOGIN_EXISTS');
+  }
+  return normalized;
 }
 
 function seedMissingEmployeeRights(db) {
@@ -111,6 +262,8 @@ function seedMissingEmployeeRights(db) {
 
 function migrateBotUsersSchema(db) {
   if (columnExists(db, 'bot_users', 'id')) {
+    ensureAdminCredentialColumns(db);
+    ensureRegosLinkColumns(db);
     ensureUserRightsTable(db);
     if (tableExists(db, 'bot_users_new')) {
       db.exec('DROP TABLE bot_users_new');
@@ -134,6 +287,11 @@ function migrateBotUsersSchema(db) {
         username TEXT,
         first_name TEXT,
         last_name TEXT,
+        admin_login TEXT,
+        password_hash TEXT,
+        regos_user_id INTEGER,
+        regos_login TEXT,
+        regos_full_name TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         linked_at TEXT
       );
@@ -214,6 +372,8 @@ function migrateBotUsersSchema(db) {
   db.exec('ALTER TABLE bot_users_new RENAME TO bot_users');
   db.exec('CREATE INDEX IF NOT EXISTS idx_bot_users_phone ON bot_users(phone)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_bot_users_telegram_id ON bot_users(telegram_id)');
+  ensureAdminCredentialColumns(db);
+  ensureRegosLinkColumns(db);
   ensureUserRightsTable(db);
 
   const employees = db.prepare("SELECT id, phone FROM bot_users WHERE role = 'employee'").all();
@@ -242,42 +402,27 @@ function mapRightsRow(row) {
 
 function upsertUserRights(db, userId, rights = {}) {
   const merged = { ...DEFAULT_RIGHTS, ...rights };
+  const cols = RIGHTS_COLUMNS;
+  const placeholders = cols.map(() => '?').join(', ');
+  const updates = cols.map((column) => `${column} = excluded.${column}`).join(',\n      ');
   db.prepare(
     `INSERT INTO user_rights (
-      user_id, see_own_unpaid_orders, see_own_report, see_all_report,
-      delete_unpaid_order, manage_vip, see_all_unpaid_orders, mark_paid_cash,
-      open_admin_dashboard, create_technical_support, renotify_order, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      user_id, ${cols.join(', ')}, updated_at
+    ) VALUES (?, ${placeholders}, datetime('now'))
     ON CONFLICT(user_id) DO UPDATE SET
-      see_own_unpaid_orders = excluded.see_own_unpaid_orders,
-      see_own_report = excluded.see_own_report,
-      see_all_report = excluded.see_all_report,
-      delete_unpaid_order = excluded.delete_unpaid_order,
-      manage_vip = excluded.manage_vip,
-      see_all_unpaid_orders = excluded.see_all_unpaid_orders,
-      mark_paid_cash = excluded.mark_paid_cash,
-      open_admin_dashboard = excluded.open_admin_dashboard,
-      create_technical_support = excluded.create_technical_support,
-      renotify_order = excluded.renotify_order,
+      ${updates},
       updated_at = datetime('now')`
-  ).run(
-    userId,
-    merged.see_own_unpaid_orders ? 1 : 0,
-    merged.see_own_report ? 1 : 0,
-    merged.see_all_report ? 1 : 0,
-    merged.delete_unpaid_order ? 1 : 0,
-    merged.manage_vip ? 1 : 0,
-    merged.see_all_unpaid_orders ? 1 : 0,
-    merged.mark_paid_cash ? 1 : 0,
-    merged.open_admin_dashboard ? 1 : 0,
-    merged.create_technical_support ? 1 : 0,
-    merged.renotify_order ? 1 : 0
-  );
+  ).run(userId, ...cols.map((column) => (merged[column] ? 1 : 0)));
 }
 
 function getUserRights(db, userId) {
   const row = db.prepare('SELECT * FROM user_rights WHERE user_id = ?').get(userId);
-  return mapRightsRow(row);
+  const mapped = mapRightsRow(row);
+  // Fallback if migration copy has not run yet on a stale row shape.
+  if (!mapped.tickets_read && row && Number(row.view_tickets)) {
+    mapped.tickets_read = 1;
+  }
+  return mapped;
 }
 
 function getBotUserByTelegramId(db, telegramId) {
@@ -367,25 +512,83 @@ function normalizeStoredPhone(phone) {
   return String(phone || '').trim();
 }
 
-function createEmployeeUser(db, { phone, displayName, rights = {} }) {
+function applyEmployeeAdminCredentials(db, userId, { adminLogin, password } = {}, { requirePair = false } = {}) {
+  const loginProvided = adminLogin !== undefined;
+  const passwordProvided = password !== undefined && String(password) !== '';
+
+  if (!loginProvided && !passwordProvided) {
+    return;
+  }
+
+  const current = getBotUserById(db, userId);
+  if (!current || current.role !== 'employee') {
+    throw new Error('NOT_FOUND');
+  }
+
+  let nextLogin = current.admin_login || null;
+  if (loginProvided) {
+    nextLogin = assertAdminLoginAvailable(db, adminLogin, userId);
+  }
+
+  if (requirePair && nextLogin && !passwordProvided && !current.password_hash) {
+    throw new Error('PASSWORD_REQUIRED');
+  }
+  if (requirePair && passwordProvided && !nextLogin) {
+    throw new Error('LOGIN_REQUIRED');
+  }
+  if (passwordProvided && !nextLogin) {
+    throw new Error('LOGIN_REQUIRED');
+  }
+  if (nextLogin && !passwordProvided && !current.password_hash) {
+    throw new Error('PASSWORD_REQUIRED');
+  }
+
+  let nextHash = current.password_hash || null;
+  if (!nextLogin) {
+    nextHash = null;
+  } else if (passwordProvided) {
+    nextHash = hashAdminPassword(password);
+  }
+
+  db.prepare('UPDATE bot_users SET admin_login = ?, password_hash = ? WHERE id = ?').run(
+    nextLogin,
+    nextHash,
+    userId
+  );
+}
+
+function createEmployeeUser(db, { phone, displayName, rights = {}, adminLogin, password } = {}) {
   const normalized = normalizeStoredPhone(phone);
   const existing = findUserByPhone(db, normalized);
   if (existing) {
     throw new Error('PHONE_EXISTS');
   }
 
+  const login = assertAdminLoginAvailable(db, adminLogin);
+  if (login && (password === undefined || String(password) === '')) {
+    throw new Error('PASSWORD_REQUIRED');
+  }
+  if (!login && password !== undefined && String(password) !== '') {
+    throw new Error('LOGIN_REQUIRED');
+  }
+
   const result = db
     .prepare(
-      `INSERT INTO bot_users (phone, role, display_name)
-       VALUES (?, 'employee', ?)`
+      `INSERT INTO bot_users (phone, role, display_name, admin_login, password_hash)
+       VALUES (?, 'employee', ?, ?, ?)`
     )
-    .run(normalized, displayName?.trim() || null);
+    .run(
+      normalized,
+      displayName?.trim() || null,
+      login,
+      login ? hashAdminPassword(password) : null
+    );
   const userId = Number(result.lastInsertRowid);
   upsertUserRights(db, userId, { ...DEFAULT_RIGHTS, ...rights });
   return getEmployeeWithRights(db, userId);
 }
 
-function updateEmployeeUser(db, userId, { phone, displayName, rights }) {
+function updateEmployeeUser(db, userId, { phone, displayName, rights, adminLogin, password } = {}) {
   const user = getBotUserById(db, userId);
   if (!user || user.role !== 'employee') {
     throw new Error('NOT_FOUND');
@@ -403,6 +606,8 @@ function updateEmployeeUser(db, userId, { phone, displayName, rights }) {
     db.prepare('UPDATE bot_users SET display_name = ? WHERE id = ?').run(displayName?.trim() || null, userId);
   }
 
+  applyEmployeeAdminCredentials(db, userId, { adminLogin, password });
+
   if (rights) {
     upsertUserRights(db, userId, rights);
   }
@@ -410,7 +615,7 @@ function updateEmployeeUser(db, userId, { phone, displayName, rights }) {
   return getEmployeeWithRights(db, userId);
 }
 
-function convertCustomerToEmployee(db, userId, { displayName, rights = {} } = {}) {
+function convertCustomerToEmployee(db, userId, { displayName, rights = {}, adminLogin, password } = {}) {
   const user = getBotUserById(db, userId);
   if (!user) {
     throw new Error('NOT_FOUND');
@@ -425,6 +630,7 @@ function convertCustomerToEmployee(db, userId, { displayName, rights = {} } = {}
       : [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || null;
 
   db.prepare("UPDATE bot_users SET role = 'employee', display_name = ? WHERE id = ?").run(name, userId);
+  applyEmployeeAdminCredentials(db, userId, { adminLogin, password }, { requirePair: true });
   upsertUserRights(db, userId, { ...DEFAULT_RIGHTS, ...rights });
   return getEmployeeWithRights(db, userId);
 }
@@ -442,6 +648,52 @@ function deleteEmployeeUser(db, userId) {
   }
   db.prepare('DELETE FROM bot_users WHERE id = ?').run(userId);
   return true;
+}
+
+function findBotUserByRegosUserId(db, regosUserId) {
+  const id = Number(regosUserId);
+  if (!Number.isFinite(id)) return null;
+  return db.prepare('SELECT * FROM bot_users WHERE regos_user_id = ?').get(id) ?? null;
+}
+
+function clearBotUserRegosLink(db, userId) {
+  const user = getBotUserById(db, userId);
+  if (!user) {
+    throw new Error('NOT_FOUND');
+  }
+  db.prepare(
+    `UPDATE bot_users
+     SET regos_user_id = NULL, regos_login = NULL, regos_full_name = NULL
+     WHERE id = ?`
+  ).run(userId);
+  return getEmployeeWithRights(db, userId) || getBotUserById(db, userId);
+}
+
+function setBotUserRegosLink(db, userId, { regosUserId, regosLogin = null, regosFullName = null } = {}) {
+  const user = getBotUserById(db, userId);
+  if (!user) {
+    throw new Error('NOT_FOUND');
+  }
+
+  const id = Number(regosUserId);
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error('INVALID_REGOS_USER');
+  }
+
+  const conflict = findBotUserByRegosUserId(db, id);
+  if (conflict && conflict.id !== userId) {
+    throw new Error('REGOS_USER_LINKED');
+  }
+
+  db.prepare(
+    `UPDATE bot_users
+     SET regos_user_id = ?,
+         regos_login = ?,
+         regos_full_name = ?
+     WHERE id = ?`
+  ).run(id, regosLogin?.trim() || null, regosFullName?.trim() || null, userId);
+
+  return getEmployeeWithRights(db, userId) || getBotUserById(db, userId);
 }
 
 function getEmployeeWithRights(db, userId) {
@@ -468,6 +720,10 @@ function userMatchesQuery(user, query) {
     user.first_name,
     user.last_name,
     user.username,
+    user.admin_login,
+    user.regos_login,
+    user.regos_full_name,
+    user.regos_user_id != null ? String(user.regos_user_id) : '',
     user.telegram_id != null ? String(user.telegram_id) : '',
   ]
     .filter(Boolean)
@@ -655,6 +911,14 @@ module.exports = {
   getBotUserById,
   getEmployeeByPhone,
   findUserByPhone,
+  findEmployeeByAdminLogin,
+  verifyAdminPassword,
+  hashAdminPassword,
+  findBotUserByRegosUserId,
+  setBotUserRegosLink,
+  clearBotUserRegosLink,
+  normalizePhoneKey,
+  phonesMatch,
   getBotUsersByPhone,
   linkEmployeeTelegram,
   registerCustomer,

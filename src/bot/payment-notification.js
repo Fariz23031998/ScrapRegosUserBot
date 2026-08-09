@@ -1,6 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
+const { formatOrderTicketLine } = require('./order-ticket');
 
 let outboundBot = null;
 
@@ -24,6 +25,7 @@ function formatOrderPaidMessage(order, { provider } = {}) {
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
+    formatOrderTicketLine(order),
     `Сумма: ${order.amount} ${currency}`,
     `Провайдер: ${providerLabel}`,
   ]
@@ -58,6 +60,7 @@ async function notifyCreatorOrderPaid(order, { provider, db } = {}) {
 }
 
 module.exports = {
+  getOutboundBot,
   formatOrderPaidMessage,
   notifyCreatorOrderPaid,
 };

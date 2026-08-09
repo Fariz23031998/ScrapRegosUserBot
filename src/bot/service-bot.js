@@ -10,6 +10,7 @@ const { hasRight } = require('../db/user-rights');
 const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
+const { formatOrderTicketLine } = require('./order-ticket');
 
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const ORDER_ACCESS_DENIED = 'Сначала пройдите регистрацию: отправьте свой номер телефона.';
@@ -116,6 +117,7 @@ function formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, extraLine 
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
+    formatOrderTicketLine(order),
     `Сумма: ${order.amount} UZS`,
     extraLine,
     '',
@@ -140,6 +142,7 @@ function createOrderFromContext(db, botUser, ctx, additionalPhone) {
     amount: ctx.amount,
     paymentProvider: getDefaultPaymentProvider(),
     metadata: ctx.metadata,
+    ticketId: ctx.ticketId ?? null,
   });
   const detailedOrder = enrichOrderParties(db, order);
   const paymentUrl = formatClickUrlSafe(detailedOrder.id, detailedOrder.amount);
@@ -154,6 +157,7 @@ function formatCustomerCreatedOrderMessage(order) {
     `ID: ${order.id}`,
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
+    formatOrderTicketLine(order),
     `Сумма: ${order.amount} ${order.currency || 'UZS'}`,
     '',
     paymentPageUrl ? `Страница оплаты: ${paymentPageUrl}` : 'Ссылка на оплату доступна после открытия заказа.',
@@ -170,6 +174,8 @@ async function afterOrderCreated(bot, db, botUser, order, paymentPageUrl) {
 }
 
 async function notifyCustomersAboutOrder(bot, db, botUser, order) {
+  if (!bot) return;
+
   const candidates = [];
   candidates.push(getBotUsersByPhone(db, order.client_phone));
   if (order.additional_phone) {
@@ -309,4 +315,9 @@ module.exports = {
   registerServiceHandlers,
   handleServiceMessage,
   makeServiceButtonForResult,
+  parsePositiveAmount,
+  createOrderFromContext,
+  formatOrderPaymentMessage,
+  afterOrderCreated,
+  notifyCustomersAboutOrder,
 };

@@ -1,12 +1,15 @@
 const { formatPaymentPageUrl } = require('../payments/payments-api');
 const { formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine, formatOrderDateTimeValue } = require('./order-datetime');
+const { formatOrderTicketLine } = require('./order-ticket');
 
 function formatUnpaidOrderLines(order, { includeClientPhone = false } = {}) {
   const paymentPageUrl = formatPaymentPageUrl(order.id);
   const lines = [`ID: ${order.id}`, ...formatOrderPartyLines(order)];
   const dateLine = formatOrderDateTimeLine(order);
   if (dateLine) lines.push(dateLine);
+  const ticketLine = formatOrderTicketLine(order);
+  if (ticketLine) lines.push(ticketLine);
   lines.push(`Сумма: ${order.amount} ${order.currency || 'UZS'}`, `Статус: ${order.status}`);
   if (paymentPageUrl) {
     lines.push(`Страница оплаты: ${paymentPageUrl}`);

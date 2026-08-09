@@ -1,11 +1,14 @@
 const rightsMeta = [];
 let users = [];
+let regosUsers = [];
+let regosUsersLoaded = false;
 let modalMode = 'create';
 let activeRole = 'employee';
 let searchQuery = '';
 let currentPage = 1;
 let pageLimit = 25;
 let totalUsers = 0;
+let sessionPermissions = {};
 
 const modalEl = document.getElementById('user-modal');
 const userForm = document.getElementById('user-form');
@@ -15,10 +18,97 @@ const modalTitle = document.getElementById('modal-title');
 const modalSubmit = document.getElementById('modal-submit');
 const userIdInput = document.getElementById('user-id');
 const phoneInput = userForm.elements.phone;
+const regosSelect = document.getElementById('regos-user-select');
+const regosMatchBtn = document.getElementById('regos-match-btn');
+const regosAutoLinkBtn = document.getElementById('regos-auto-link-btn');
 const searchInput = document.getElementById('user-search');
 const searchClearBtn = document.getElementById('search-clear');
 const searchBox = document.getElementById('search-box');
 const usersPaginationEl = document.getElementById('users-pagination');
+
+function canCreateUsers() {
+  return Boolean(sessionPermissions.users_create);
+}
+function canEditUsers() {
+  return Boolean(sessionPermissions.users_edit);
+}
+function canDeleteUsers() {
+  return Boolean(sessionPermissions.users_delete);
+}
+
+function phonesEqual(left, right) {
+  const a = String(left || '').replace(/\D/g, '');
+  const b = String(right || '').replace(/\D/g, '');
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.endsWith(b) || b.endsWith(a)) return true;
+  const aTail = a.slice(-9);
+  const bTail = b.slice(-9);
+  return aTail.length >= 9 && aTail === bTail;
+}
+
+function collectRegosPhones(user) {
+  const values = [user.main_phone, user.phones];
+  const phones = [];
+  for (const value of values) {
+    if (!value) continue;
+    for (const part of String(value).split(/[,;|/]+/)) {
+      const trimmed = part.trim();
+      if (trimmed) phones.push(trimmed);
+    }
+  }
+  return phones;
+}
+
+function formatRegosOptionLabel(user) {
+  const name = user.full_name || [user.last_name, user.first_name].filter(Boolean).join(' ');
+  const parts = [name, user.login ? `@${user.login}` : '', user.main_phone || '']
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+  return parts.join(' · ') || `ID ${user.id}`;
+}
+
+function findRegosMatchesByPhone(phone) {
+  return regosUsers.filter((user) =>
+    collectRegosPhones(user).some((candidate) => phonesEqual(candidate, phone))
+  );
+}
+
+async function ensureRegosUsersLoaded({ force = false } = {}) {
+  if (regosUsersLoaded && !force) return regosUsers;
+  const data = await api('/bot-admin/api/regos-users');
+  regosUsers = data.users || [];
+  regosUsersLoaded = true;
+  return regosUsers;
+}
+
+function fillRegosSelect(selectedId = '') {
+  const options = ['<option value="">— Не связан —</option>'];
+  for (const user of regosUsers) {
+    const selected = String(user.id) === String(selectedId) ? ' selected' : '';
+    options.push(
+      `<option value="${escapeHtml(String(user.id))}"${selected}>${escapeHtml(
+        formatRegosOptionLabel(user)
+      )}</option>`
+    );
+  }
+  if (selectedId && !regosUsers.some((user) => String(user.id) === String(selectedId))) {
+    options.push(
+      `<option value="${escapeHtml(String(selectedId))}" selected>ID ${escapeHtml(
+        String(selectedId)
+      )} (сохранённая привязка)</option>`
+    );
+  }
+  regosSelect.innerHTML = options.join('');
+}
+
+function formatRegosLinkHtml(user) {
+  if (!user.regos_user_id) {
+    return '<span class="rights-summary rights-summary--empty">Не связан</span>';
+  }
+  const label = user.regos_full_name || user.regos_login || `ID ${user.regos_user_id}`;
+  return `<span class="status status-linked">${escapeHtml(label)}</span>`;
+}
 
 function renderRightsInputs(container, selected = {}) {
   container.innerHTML = rightsMeta
@@ -103,6 +193,8 @@ function renderUsersTable() {
         <tr>
           <th>Телефон</th>
           <th>Имя</th>
+          <th>Логин</th>
+          <th>REGOS</th>
           <th>Telegram</th>
           <th>Права</th>
           <th></th>
@@ -115,6 +207,12 @@ function renderUsersTable() {
           <tr data-user-id="${user.id}">
             <td class="cell-phone" data-label="Телефон">${escapeHtml(user.phone || '—')}</td>
             <td class="cell-name" data-label="Имя">${formatUserNameHtml(user)}</td>
+            <td class="cell-nowrap" data-label="Логин">${
+              user.admin_login
+                ? escapeHtml(user.admin_login)
+                : '<span class="rights-summary rights-summary--empty">—</span>'
+            }</td>
+            <td data-label="REGOS">${formatRegosLinkHtml(user)}</td>
             <td data-label="Telegram">
               <span class="status ${user.is_linked ? 'status-linked' : 'status-pending'}">
                 ${user.is_linked ? `Привязан · ${user.telegram_id}` : 'Ожидает привязки'}
@@ -123,8 +221,16 @@ function renderUsersTable() {
             <td data-label="Права"><div class="rights-summary">${renderRightsSummary(user.rights)}</div></td>
             <td>
               <div class="row-actions">
-                <button type="button" class="btn btn-secondary btn-sm" data-action="edit">Изменить</button>
-                <button type="button" class="btn btn-danger btn-sm" data-action="delete">Удалить</button>
+                ${
+                  canEditUsers()
+                    ? '<button type="button" class="btn btn-secondary btn-sm" data-action="edit">Изменить</button>'
+                    : ''
+                }
+                ${
+                  canDeleteUsers()
+                    ? '<button type="button" class="btn btn-danger btn-sm" data-action="delete">Удалить</button>'
+                    : ''
+                }
               </div>
             </td>
           </tr>`
@@ -164,7 +270,11 @@ function renderUsersTable() {
             <td class="cell-nowrap" data-label="Привязан">${formatLinkedAt(user.linked_at)}</td>
             <td>
               <div class="row-actions">
-                <button type="button" class="btn btn-primary btn-sm" data-action="promote">Сделать сотрудником</button>
+                ${
+                  canEditUsers()
+                    ? '<button type="button" class="btn btn-primary btn-sm" data-action="promote">Сделать сотрудником</button>'
+                    : ''
+                }
               </div>
             </td>
           </tr>`
@@ -194,17 +304,28 @@ function renderUsersPagination() {
   );
 }
 
-function openModal(mode, user = null) {
+async function openModal(mode, user = null) {
   modalMode = mode;
   modalError.hidden = true;
   userForm.reset();
   userIdInput.value = user?.id ?? '';
   phoneInput.readOnly = false;
   phoneInput.required = true;
+  const passwordHint = document.getElementById('password-hint');
+
+  try {
+    await ensureRegosUsersLoaded();
+  } catch (error) {
+    regosUsers = [];
+    regosUsersLoaded = false;
+    console.warn('REGOS users unavailable:', error.message);
+  }
 
   if (mode === 'create') {
     modalTitle.textContent = 'Новый сотрудник';
     modalSubmit.textContent = 'Создать';
+    passwordHint.textContent = 'Нужен, если задаёте логин для входа в админ-панель';
+    fillRegosSelect('');
     renderRightsInputs(modalRights, { see_own_report: true });
   } else if (mode === 'promote') {
     modalTitle.textContent = 'Назначить сотрудником';
@@ -214,16 +335,26 @@ function openModal(mode, user = null) {
     phoneInput.required = false;
     const defaultName = user.display_name || formatTelegramName(user);
     userForm.elements.display_name.value = defaultName;
+    passwordHint.textContent = 'Нужен, если задаёте логин для входа в админ-панель';
+    const matches = findRegosMatchesByPhone(user.phone);
+    fillRegosSelect(matches.length === 1 ? matches[0].id : '');
     renderRightsInputs(modalRights, { see_own_report: true });
   } else {
     modalTitle.textContent = 'Редактирование сотрудника';
     modalSubmit.textContent = 'Сохранить';
     userForm.elements.phone.value = user.phone || '';
     userForm.elements.display_name.value = user.display_name || '';
+    userForm.elements.admin_login.value = user.admin_login || '';
+    passwordHint.textContent = user.has_password
+      ? 'Оставьте пустым, чтобы не менять пароль'
+      : 'Нужен, если задаёте логин для входа в админ-панель';
+    fillRegosSelect(user.regos_user_id || '');
     renderRightsInputs(modalRights, user.rights || {});
   }
 
   modalEl.hidden = false;
+  document.documentElement.classList.add('modal-open');
+  document.body.classList.add('modal-open');
   if (mode === 'promote') {
     userForm.elements.display_name.focus();
   } else {
@@ -234,6 +365,8 @@ function openModal(mode, user = null) {
 function closeModal() {
   modalEl.hidden = true;
   modalError.hidden = true;
+  document.documentElement.classList.remove('modal-open');
+  document.body.classList.remove('modal-open');
 }
 
 async function loadUsers() {
@@ -263,18 +396,73 @@ function setActiveRole(role) {
     tab.classList.toggle('role-tab--active', isActive);
     tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
-  document.getElementById('create-user-btn').hidden = role !== 'employee';
+  document.getElementById('create-user-btn').hidden = role !== 'employee' || !canCreateUsers();
+  regosAutoLinkBtn.hidden = role !== 'employee' || !canEditUsers();
   loadUsers().catch((error) => window.alert(error.message));
 }
 
 async function init() {
-  await ensureSession();
+  const session = await ensureSession({
+    requiredPermission: 'users_read',
+    redirectIfMissingUsersHome: true,
+  });
+  sessionPermissions = session.permissions || {};
+  document.getElementById('create-user-btn').hidden = activeRole !== 'employee' || !canCreateUsers();
+  regosAutoLinkBtn.hidden = activeRole !== 'employee' || !canEditUsers();
   const meta = await api('/bot-admin/rights-meta');
   rightsMeta.push(...(meta.rights || []));
   await loadUsers();
 }
 
-document.getElementById('create-user-btn').addEventListener('click', () => openModal('create'));
+document.getElementById('create-user-btn').addEventListener('click', () => {
+  openModal('create').catch((error) => window.alert(error.message));
+});
+
+regosMatchBtn.addEventListener('click', async () => {
+  try {
+    await ensureRegosUsersLoaded();
+    const phone = phoneInput.value;
+    const matches = findRegosMatchesByPhone(phone);
+    if (!matches.length) {
+      window.alert('По этому телефону пользователь REGOS не найден.');
+      return;
+    }
+    if (matches.length > 1) {
+      window.alert(
+        `Найдено несколько пользователей REGOS (${matches.length}). Выберите нужного вручную.`
+      );
+      fillRegosSelect(regosSelect.value || '');
+      return;
+    }
+    fillRegosSelect(matches[0].id);
+  } catch (error) {
+    window.alert(error.message);
+  }
+});
+
+regosAutoLinkBtn.addEventListener('click', async () => {
+  if (!window.confirm('Сопоставить сотрудников с пользователями REGOS по номеру телефона?')) {
+    return;
+  }
+  regosAutoLinkBtn.disabled = true;
+  try {
+    const result = await api('/bot-admin/api/users/regos-auto-link', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    const summary = result.summary || {};
+    window.alert(
+      `Готово.\nСопоставлено: ${summary.matched || 0}\nУже связаны: ${
+        summary.already_linked || 0
+      }\nНе найдено: ${summary.none || 0}\nНеоднозначно: ${summary.ambiguous || 0}`
+    );
+    await loadUsers();
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    regosAutoLinkBtn.disabled = false;
+  }
+});
 
 document.querySelectorAll('.role-tab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -296,9 +484,6 @@ bindSearchBox({
 
 document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
-modalEl.addEventListener('click', (event) => {
-  if (event.target === modalEl) closeModal();
-});
 
 userForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -306,11 +491,22 @@ userForm.addEventListener('submit', async (event) => {
   modalSubmit.disabled = true;
 
   const formData = new FormData(userForm);
+  const regosUserId = String(formData.get('regos_user_id') || '').trim();
   const payload = {
     phone: formData.get('phone'),
     display_name: formData.get('display_name'),
+    admin_login: String(formData.get('admin_login') || '').trim(),
+    regos_user_id: regosUserId ? Number(regosUserId) : '',
     rights: collectRights(modalRights),
   };
+  if (!regosUserId && (modalMode === 'create' || modalMode === 'promote')) {
+    payload.auto_link_regos = true;
+    delete payload.regos_user_id;
+  }
+  const password = String(formData.get('password') || '');
+  if (modalMode === 'create' || modalMode === 'promote' || password) {
+    payload.password = password;
+  }
 
   try {
     if (modalMode === 'create') {
@@ -345,12 +541,12 @@ document.getElementById('users-table-wrap').addEventListener('click', async (eve
   const action = button.dataset.action;
 
   if (action === 'edit') {
-    openModal('edit', user);
+    openModal('edit', user).catch((error) => window.alert(error.message));
     return;
   }
 
   if (action === 'promote') {
-    openModal('promote', user);
+    openModal('promote', user).catch((error) => window.alert(error.message));
     return;
   }
 

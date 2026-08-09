@@ -260,6 +260,9 @@ function migrateSchema(db) {
   if (!columnExists(db, 'orders', 'payme_receipt_created_at')) {
     db.exec('ALTER TABLE orders ADD COLUMN payme_receipt_created_at INTEGER');
   }
+  if (!columnExists(db, 'orders', 'ticket_id')) {
+    db.exec('ALTER TABLE orders ADD COLUMN ticket_id INTEGER');
+  }
   migrateBotUsersSchema(db);
   const { ensureOrderLogsTable } = require('./order-logs');
   ensureOrderLogsTable(db);
@@ -742,13 +745,16 @@ function createOrder(
     status = 'pending',
     paymentProvider = 'click',
     metadata = null,
+    ticketId = null,
   }
 ) {
+  const normalizedTicketId =
+    ticketId == null || ticketId === '' ? null : Number(ticketId);
   db.prepare(
     `INSERT INTO orders (
       id, telegram_id, bot_user_phone, client_phone, client_type, additional_phone,
-      amount, currency, status, payment_provider, metadata, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      amount, currency, status, payment_provider, metadata, ticket_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
   ).run(
     id,
     telegramId,
@@ -760,7 +766,8 @@ function createOrder(
     currency,
     status,
     paymentProvider,
-    metadata
+    metadata,
+    Number.isFinite(normalizedTicketId) ? normalizedTicketId : null
   );
   const order = getOrderById(db, id);
   logOrderEvent(db, {
@@ -777,6 +784,76 @@ function createOrder(
 
 function getOrderById(db, orderId) {
   return db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) ?? null;
+}
+
+const ORDER_LIST_STATUSES = new Set(['pending', 'paid', 'paid_cash', 'deleted']);
+
+function orderMatchesQuery(order, query) {
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return true;
+
+  const lower = trimmed.toLowerCase();
+  const digits = lower.replace(/\D/g, '');
+  const phones = [order.client_phone, order.additional_phone, order.bot_user_phone].filter(
+    Boolean
+  );
+
+  if (digits && phones.some((phone) => String(phone).replace(/\D/g, '').includes(digits))) {
+    return true;
+  }
+
+  const searchable = [
+    order.id,
+    order.client_phone,
+    order.additional_phone,
+    order.bot_user_phone,
+    order.status,
+    order.payment_provider,
+    order.ticket_id != null ? String(order.ticket_id) : '',
+    order.amount != null ? String(order.amount) : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return searchable.includes(lower);
+}
+
+function listOrders(db, { query, status, from, to, offset = 0, limit = 25 } = {}) {
+  let sql = 'SELECT * FROM orders WHERE 1=1';
+  const params = [];
+
+  if (status && ORDER_LIST_STATUSES.has(status)) {
+    sql += ' AND status = ?';
+    params.push(status);
+  }
+
+  const fromDate = String(from || '').trim();
+  if (fromDate) {
+    sql += ' AND date(created_at) >= date(?)';
+    params.push(fromDate);
+  }
+
+  const toDate = String(to || '').trim();
+  if (toDate) {
+    sql += ' AND date(created_at) <= date(?)';
+    params.push(toDate);
+  }
+
+  sql += ' ORDER BY datetime(created_at) DESC';
+
+  let rows = db.prepare(sql).all(...params);
+  if (query) {
+    rows = rows.filter((row) => orderMatchesQuery(row, query));
+  }
+
+  const total = rows.length;
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  return {
+    orders: rows.slice(safeOffset, safeOffset + safeLimit),
+    total,
+  };
 }
 
 function setOrderPaymeReceiptId(db, orderId, receiptId, receiptCreatedAt = Date.now()) {
@@ -1012,6 +1089,7 @@ module.exports = {
   getEarningsRows,
   createOrder,
   getOrderById,
+  listOrders,
   setOrderPaymeReceiptId,
   markOrderPaid,
   createPayment,

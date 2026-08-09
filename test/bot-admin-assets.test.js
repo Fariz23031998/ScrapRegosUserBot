@@ -11,11 +11,27 @@ const { createBotAdminRouter } = require('../src/admin/bot-admin');
 const { SESSION_COOKIE } = require('../src/admin/bot-admin-auth');
 const { botAdminPublicDir } = require('../src/paths');
 
-const ADMIN_PAGES = ['index.html', 'order-logs.html', 'technical-support.html', 'prices.html'];
-const ADMIN_SCRIPTS = ['admin.js', 'admin-order-logs.js', 'admin-technical-support.js', 'admin-prices.js'];
+const ADMIN_PAGES = [
+  'index.html',
+  'orders.html',
+  'order-logs.html',
+  'technical-support.html',
+  'prices.html',
+  'tickets.html',
+  'ticket-detail.html',
+];
+const ADMIN_SCRIPTS = [
+  'admin.js',
+  'admin-orders.js',
+  'admin-order-logs.js',
+  'admin-technical-support.js',
+  'admin-prices.js',
+  'admin-tickets.js',
+  'admin-ticket-detail.js',
+];
 const LOCAL_ASSET_REF = /(?:href|src)="(?!https?:|\/\/|#|mailto:)([^"]+)"/g;
 const TABLE_ELEMENT_CLASS = /<(?:table|thead|tbody|tr|th|td|div)\s+class="([^"${]+)"/g;
-const TABLE_CLASS_PREFIXES = ['table-', 'data-table', 'cell-', 'order-logs-table'];
+const TABLE_CLASS_PREFIXES = ['table-', 'data-table', 'cell-', 'order-logs-table', 'orders-table'];
 
 function makeTempDbPath() {
   return path.join(
@@ -150,6 +166,26 @@ describe('Bot admin static assets and API auth', () => {
     }
   });
 
+  it('includes the account avatar menu and keeps logout inside it', () => {
+    const publicDir = botAdminPublicDir();
+    for (const page of ADMIN_PAGES) {
+      const html = fs.readFileSync(path.join(publicDir, page), 'utf8');
+      assert.match(html, /id="account-menu"/, `${page} should include account menu`);
+      assert.match(html, /id="account-menu-toggle"/, `${page} should include avatar toggle`);
+      assert.match(html, /id="logout-btn"/, `${page} should keep logout action`);
+      assert.match(
+        html,
+        /account-menu[\s\S]*id="logout-btn"/,
+        `${page} should nest logout inside account menu`
+      );
+      assert.doesNotMatch(
+        html,
+        /class="btn btn-secondary" id="logout-btn"/,
+        `${page} should not keep the old header logout button`
+      );
+    }
+  });
+
   it('defines every table class the renderers use', () => {
     const publicDir = botAdminPublicDir();
     const css = fs.readFileSync(path.join(publicDir, 'admin.css'), 'utf8');
@@ -220,7 +256,13 @@ describe('Bot admin static assets and API auth', () => {
   });
 
   it('still redirects unauthenticated page requests to the login form', async () => {
-    for (const urlPath of ['/bot-admin/', '/bot-admin/order-logs', '/bot-admin/technical-support', '/bot-admin/prices']) {
+    for (const urlPath of [
+      '/bot-admin/',
+      '/bot-admin/orders',
+      '/bot-admin/order-logs',
+      '/bot-admin/technical-support',
+      '/bot-admin/prices',
+    ]) {
       const response = await request(server, urlPath, { headers: { Accept: 'text/html' } });
       assert.equal(response.statusCode, 302);
       assert.equal(response.headers.location, '/bot-admin/login');

@@ -10,7 +10,14 @@ const PRICE_LABELS = {
 const state = {
   columns: [],
   categories: [],
+  canCreate: false,
+  canEdit: false,
+  canDelete: false,
 };
+
+function canSaveCatalog() {
+  return state.canCreate || state.canEdit || state.canDelete;
+}
 
 function showMessage(text, isError = false) {
   const el = document.getElementById('catalog-message');
@@ -112,6 +119,7 @@ function bindCategoryEvents() {
 
 function renderCategories() {
   const root = document.getElementById('categories-editor');
+  const readonlyAttr = state.canEdit ? '' : 'readonly';
   root.innerHTML = state.categories
     .map((category, categoryIndex) => {
       const itemsHtml = category.items
@@ -128,6 +136,7 @@ function renderCategories() {
                   data-item="${itemIndex}"
                   value="${escapeHtml(item.prices?.[key] || '')}"
                   maxlength="80"
+                  ${readonlyAttr}
                 />
               </label>
             `
@@ -140,20 +149,28 @@ function renderCategories() {
                   <span>Услуга (RU)</span>
                   <input type="text" data-field="name_ru" data-category="${categoryIndex}" data-item="${itemIndex}" value="${escapeHtml(
                     item.name_ru || ''
-                  )}" maxlength="300" required />
+                  )}" maxlength="300" required ${readonlyAttr} />
                 </label>
                 <label class="field">
                   <span>Xizmat (UZ)</span>
                   <input type="text" data-field="name_uz" data-category="${categoryIndex}" data-item="${itemIndex}" value="${escapeHtml(
                     item.name_uz || ''
-                  )}" maxlength="300" required />
+                  )}" maxlength="300" required ${readonlyAttr} />
                 </label>
               </div>
               <div class="price-fields-grid">${priceInputs}</div>
               <div class="editor-actions">
-                <button type="button" class="btn btn-secondary btn-sm" data-action="move-item-up" data-category="${categoryIndex}" data-item="${itemIndex}">↑</button>
-                <button type="button" class="btn btn-secondary btn-sm" data-action="move-item-down" data-category="${categoryIndex}" data-item="${itemIndex}">↓</button>
-                <button type="button" class="btn btn-danger btn-sm" data-action="remove-item" data-category="${categoryIndex}" data-item="${itemIndex}">Удалить услугу</button>
+                ${
+                  state.canEdit
+                    ? `<button type="button" class="btn btn-secondary btn-sm" data-action="move-item-up" data-category="${categoryIndex}" data-item="${itemIndex}">↑</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-action="move-item-down" data-category="${categoryIndex}" data-item="${itemIndex}">↓</button>`
+                    : ''
+                }
+                ${
+                  state.canDelete
+                    ? `<button type="button" class="btn btn-danger btn-sm" data-action="remove-item" data-category="${categoryIndex}" data-item="${itemIndex}">Удалить услугу</button>`
+                    : ''
+                }
               </div>
             </div>
           `;
@@ -165,9 +182,17 @@ function renderCategories() {
           <div class="card-toolbar">
             <h3>Категория ${categoryIndex + 1}</h3>
             <div class="editor-actions">
-              <button type="button" class="btn btn-secondary btn-sm" data-action="move-category-up" data-category="${categoryIndex}">↑</button>
-              <button type="button" class="btn btn-secondary btn-sm" data-action="move-category-down" data-category="${categoryIndex}">↓</button>
-              <button type="button" class="btn btn-danger btn-sm" data-action="remove-category" data-category="${categoryIndex}">Удалить категорию</button>
+              ${
+                state.canEdit
+                  ? `<button type="button" class="btn btn-secondary btn-sm" data-action="move-category-up" data-category="${categoryIndex}">↑</button>
+              <button type="button" class="btn btn-secondary btn-sm" data-action="move-category-down" data-category="${categoryIndex}">↓</button>`
+                  : ''
+              }
+              ${
+                state.canDelete
+                  ? `<button type="button" class="btn btn-danger btn-sm" data-action="remove-category" data-category="${categoryIndex}">Удалить категорию</button>`
+                  : ''
+              }
             </div>
           </div>
           <div class="bilingual-grid">
@@ -175,17 +200,21 @@ function renderCategories() {
               <span>Категория (RU)</span>
               <input type="text" data-field="name_ru" data-category="${categoryIndex}" value="${escapeHtml(
                 category.name_ru || ''
-              )}" maxlength="300" required />
+              )}" maxlength="300" required ${readonlyAttr} />
             </label>
             <label class="field">
               <span>Turkum (UZ)</span>
               <input type="text" data-field="name_uz" data-category="${categoryIndex}" value="${escapeHtml(
                 category.name_uz || ''
-              )}" maxlength="300" required />
+              )}" maxlength="300" required ${readonlyAttr} />
             </label>
           </div>
           ${itemsHtml}
-          <button type="button" class="btn btn-secondary btn-sm" data-action="add-item" data-category="${categoryIndex}">+ Услуга</button>
+          ${
+            state.canCreate
+              ? `<button type="button" class="btn btn-secondary btn-sm" data-action="add-item" data-category="${categoryIndex}">+ Услуга</button>`
+              : ''
+          }
         </article>
       `;
     })
@@ -195,10 +224,19 @@ function renderCategories() {
 }
 
 function fillMeta(catalog) {
-  document.getElementById('title-ru').value = catalog.title_ru || '';
-  document.getElementById('title-uz').value = catalog.title_uz || '';
-  document.getElementById('notice-ru').value = catalog.notice_ru || '';
-  document.getElementById('notice-uz').value = catalog.notice_uz || '';
+  const readonly = !state.canEdit;
+  const titleRu = document.getElementById('title-ru');
+  const titleUz = document.getElementById('title-uz');
+  const noticeRu = document.getElementById('notice-ru');
+  const noticeUz = document.getElementById('notice-uz');
+  titleRu.value = catalog.title_ru || '';
+  titleUz.value = catalog.title_uz || '';
+  noticeRu.value = catalog.notice_ru || '';
+  noticeUz.value = catalog.notice_uz || '';
+  titleRu.readOnly = readonly;
+  titleUz.readOnly = readonly;
+  noticeRu.readOnly = readonly;
+  noticeUz.readOnly = readonly;
 }
 
 async function loadCatalog() {
@@ -249,14 +287,27 @@ async function saveCatalog() {
 }
 
 async function init() {
-  await ensureSession();
+  const session = await ensureSession({ requiredPermission: 'prices_read' });
+  state.canCreate = Boolean(session.permissions?.prices_create);
+  state.canEdit = Boolean(session.permissions?.prices_edit);
+  state.canDelete = Boolean(session.permissions?.prices_delete);
   setupLogout();
   await loadCatalog();
-  document.getElementById('add-category-btn').addEventListener('click', () => {
-    state.categories.push(emptyCategory());
-    renderCategories();
-  });
-  document.getElementById('save-catalog-btn').addEventListener('click', saveCatalog);
+
+  const addCategoryBtn = document.getElementById('add-category-btn');
+  const saveBtn = document.getElementById('save-catalog-btn');
+  addCategoryBtn.hidden = !state.canCreate;
+  saveBtn.hidden = !canSaveCatalog();
+
+  if (state.canCreate) {
+    addCategoryBtn.addEventListener('click', () => {
+      state.categories.push(emptyCategory());
+      renderCategories();
+    });
+  }
+  if (canSaveCatalog()) {
+    saveBtn.addEventListener('click', saveCatalog);
+  }
 }
 
 init().catch((error) => {

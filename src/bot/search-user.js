@@ -552,8 +552,164 @@ function searchUser(query, db = openDb()) {
   return { found: false, message: 'Не найдено' };
 }
 
+const TEXT_SEARCH_MIN_LENGTH = 2;
+const TEXT_SEARCH_LIMIT = 20;
+
+function escapeLikePattern(value) {
+  return String(value || '').replace(/([%_\\])/g, '\\$1');
+}
+
+function likePattern(query) {
+  return `%${escapeLikePattern(normalizeQuery(query))}%`;
+}
+
+function findPartnersByNameText(db, query) {
+  const pattern = likePattern(query);
+  return db
+    .prepare(
+      `SELECT * FROM partners
+       WHERE name COLLATE NOCASE LIKE ? ESCAPE '\\'
+       LIMIT ?`
+    )
+    .all(pattern, TEXT_SEARCH_LIMIT);
+}
+
+function findVcr1PartnersByText(db, query) {
+  const pattern = likePattern(query);
+  return db
+    .prepare(
+      `SELECT * FROM vcr1_partners
+       WHERE name COLLATE NOCASE LIKE ? ESCAPE '\\'
+          OR company COLLATE NOCASE LIKE ? ESCAPE '\\'
+          OR inn COLLATE NOCASE LIKE ? ESCAPE '\\'
+       LIMIT ?`
+    )
+    .all(pattern, pattern, pattern, TEXT_SEARCH_LIMIT);
+}
+
+function findLicensesByText(db, query) {
+  const pattern = likePattern(query);
+  return db
+    .prepare(
+      `SELECT * FROM licenses
+       WHERE fio COLLATE NOCASE LIKE ? ESCAPE '\\'
+          OR partner COLLATE NOCASE LIKE ? ESCAPE '\\'
+       LIMIT ?`
+    )
+    .all(pattern, pattern, TEXT_SEARCH_LIMIT);
+}
+
+function findRposClientsByNameText(db, query) {
+  const pattern = likePattern(query);
+  return db
+    .prepare(
+      `SELECT * FROM rpos_clients
+       WHERE name COLLATE NOCASE LIKE ? ESCAPE '\\'
+       LIMIT ?`
+    )
+    .all(pattern, TEXT_SEARCH_LIMIT);
+}
+
+function findRposAccountsByNameText(db, query) {
+  const pattern = likePattern(query);
+  return db
+    .prepare(
+      `SELECT * FROM rpos_accounts
+       WHERE client_name COLLATE NOCASE LIKE ? ESCAPE '\\'
+       LIMIT ?`
+    )
+    .all(pattern, TEXT_SEARCH_LIMIT);
+}
+
+function searchFirmByText(query, db) {
+  const normalized = normalizeQuery(query);
+  if (normalized.length < TEXT_SEARCH_MIN_LENGTH) {
+    return { found: false, message: 'Не найдено' };
+  }
+
+  const results = [];
+
+  for (const partner of findPartnersByNameText(db, normalized)) {
+    results.push({
+      type: 'partner',
+      phone: partner.phone,
+      recordId: partner.id,
+      clientName: partner.name,
+      message: formatWithExpiry(formatPartner(partner), partner.registered_at),
+    });
+  }
+
+  for (const partner of findVcr1PartnersByText(db, normalized)) {
+    results.push({
+      type: 'vcr1_partner',
+      phone: partner.phone,
+      recordId: partner.id,
+      clientName: partner.name,
+      message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
+    });
+
+    for (const license of findAllVcr1LicensesForPartner(db, partner)) {
+      results.push({
+        type: 'vcr1_license',
+        phone: partner.phone,
+        recordId: license.id,
+        clientName: license.partner || partner.name,
+        message: formatWithExpiry(
+          formatVcr1License(license, partner),
+          resolveVcr1LicenseSupportDate(db, license, partner.phone)
+        ),
+      });
+    }
+  }
+
+  for (const license of findLicensesByText(db, normalized)) {
+    results.push({
+      type: 'license',
+      phone: license.phone,
+      recordId: license.id,
+      clientName: license.fio,
+      message: formatWithExpiry(formatLicense(license), license.generated),
+    });
+  }
+
+  for (const client of findRposClientsByNameText(db, normalized)) {
+    results.push({
+      type: 'rpos_client',
+      phone: client.phone,
+      recordId: client.id,
+      clientName: client.name,
+      message: formatWithExpiry(formatRposClient(client), client.created_at),
+    });
+  }
+
+  for (const account of findRposAccountsByNameText(db, normalized)) {
+    results.push({
+      type: 'rpos_account',
+      phone: extractPhoneFromText(account.client_name),
+      recordId: account.id,
+      clientName: account.client_name,
+      message: formatWithExpiry(formatRposAccount(account), account.created_at),
+    });
+  }
+
+  return buildSearchResult(results, db);
+}
+
+/**
+ * Admin firm search: same as searchUser first, then name/company/text fallback.
+ * Does not change Telegram bot search behavior (bots call searchUser only).
+ */
+function searchFirmAdmin(query, db = openDb()) {
+  const exact = searchUser(query, db);
+  if (exact.found) {
+    return exact;
+  }
+  return searchFirmByText(query, db);
+}
+
 module.exports = {
   searchUser,
+  searchFirmAdmin,
   isWithinLastThreeMonths,
   parseRegosDate,
   normalizePhone,

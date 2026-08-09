@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Тикет — админ-панель бота</title>
+    <link rel="stylesheet" href="/bot-admin/admin.css" />
+  </head>
+  <body>
+    <main class="page page--wide page--ticket-detail">
+      <header class="header">
+        <div class="header-top">
+          <div>
+            <p class="breadcrumb"><a href="/bot-admin/tickets">← К списку тикетов</a></p>
+            <h1 id="ticket-title">Тикет</h1>
+            <p id="ticket-subtitle" class="header-top__sub"></p>
+          </div>
+          <div class="account-menu" id="account-menu">
+            <button type="button" class="account-menu__avatar" id="account-menu-toggle" aria-haspopup="true" aria-expanded="false" aria-label="Аккаунт">
+              <span class="account-menu__initials" id="account-menu-initials">?</span>
+            </button>
+            <div class="account-menu__dropdown" id="account-menu-dropdown" hidden>
+              <div class="account-menu__identity" id="account-menu-identity"></div>
+              <button type="button" class="account-menu__item" id="account-credentials-btn" hidden>Сменить логин и пароль</button>
+              <button type="button" class="account-menu__item account-menu__item--danger" id="logout-btn">Выйти</button>
+            </div>
+          </div>
+        </div>
+        <nav class="admin-nav" aria-label="Разделы админ-панели">
+          <a class="admin-nav__link" href="/bot-admin/">Пользователи</a>
+          <a class="admin-nav__link" href="/bot-admin/orders">Заказы</a>
+          <a class="admin-nav__link" href="/bot-admin/order-logs">Журнал заказов</a>
+          <a class="admin-nav__link admin-nav__link--active" href="/bot-admin/tickets" aria-current="page">Тикеты</a>
+          <a class="admin-nav__link" href="/bot-admin/technical-support">Техподдержка</a>
+          <a class="admin-nav__link" href="/bot-admin/prices">Прайс</a>
+        </nav>
+      </header>
+
+      <p id="ticket-error" class="message error" hidden></p>
+      <p id="ticket-success" class="message success" hidden></p>
+
+      <div
+        class="ticket-view-tabs role-tabs"
+        id="ticket-view-tabs"
+        role="tablist"
+        aria-label="Разделы тикета"
+        hidden
+      >
+        <button
+          type="button"
+          class="role-tab role-tab--active"
+          id="ticket-tab-chat"
+          data-view="chat"
+          role="tab"
+          aria-selected="true"
+          aria-controls="ticket-chat-card"
+        >
+          Чат
+        </button>
+        <button
+          type="button"
+          class="role-tab"
+          id="ticket-tab-detail"
+          data-view="detail"
+          role="tab"
+          aria-selected="false"
+          aria-controls="ticket-detail-card"
+        >
+          Детали
+        </button>
+      </div>
+
+      <div class="ticket-workspace" id="ticket-workspace" data-active-view="chat" hidden>
+        <section
+          class="card ticket-workspace__panel ticket-workspace__panel--chat"
+          id="ticket-chat-card"
+          role="tabpanel"
+          aria-labelledby="ticket-tab-chat"
+        >
+          <div class="card-toolbar">
+            <h2>Чат</h2>
+            <div class="card-toolbar-right">
+              <button type="button" class="btn btn-secondary btn-sm" id="ticket-chat-refresh">Обновить</button>
+            </div>
+          </div>
+          <p id="ticket-chat-status" class="ticket-chat__status" hidden></p>
+          <div class="ticket-chat__toolbar" id="ticket-chat-load-older-wrap" hidden>
+            <button type="button" class="btn btn-secondary btn-sm" id="ticket-chat-load-older">
+              Загрузить ещё
+            </button>
+          </div>
+          <div id="ticket-chat-messages" class="ticket-chat__messages" aria-live="polite"></div>
+          <form class="ticket-chat__compose" id="ticket-chat-compose" hidden>
+            <label class="ticket-chat__compose-field" for="ticket-chat-input">
+              <span class="visually-hidden">Сообщение</span>
+              <textarea
+                id="ticket-chat-input"
+                rows="2"
+                placeholder="Введите сообщение…"
+                maxlength="4000"
+                disabled
+              ></textarea>
+            </label>
+            <button type="submit" class="btn btn-primary btn-sm" id="ticket-chat-send" disabled>
+              Отправить
+            </button>
+          </form>
+        </section>
+
+        <section
+          class="card ticket-workspace__panel ticket-workspace__panel--detail"
+          id="ticket-detail-card"
+          role="tabpanel"
+          aria-labelledby="ticket-tab-detail"
+        >
+          <div class="card-toolbar">
+            <h2>Детали</h2>
+            <div class="card-toolbar-right">
+              <button type="button" class="btn btn-primary btn-sm" id="create-order-toggle">Создать заказ</button>
+            </div>
+          </div>
+          <div id="ticket-detail-body"></div>
+        </section>
+      </div>
+    </main>
+
+    <div class="modal-overlay" id="create-order-modal" hidden>
+      <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="create-order-modal-title">
+        <div class="modal-header">
+          <h3 id="create-order-modal-title">Создать заказ услуги</h3>
+          <button type="button" class="modal-close" id="create-order-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form id="create-order-form">
+          <div class="modal-body">
+            <p id="create-order-error" class="message error" hidden></p>
+
+            <div class="ticket-order-form">
+              <div class="field">
+                <span>Данные фирмы <span class="field-hint">(необязательно)</span></span>
+                <div class="firm-search-row">
+                  <input
+                    type="search"
+                    id="firm-search-input"
+                    placeholder="Имя, компания, телефон, лицензия…"
+                    autocomplete="off"
+                  />
+                  <button type="button" class="btn btn-secondary btn-sm" id="firm-search-btn">Найти</button>
+                </div>
+                <p id="firm-search-status" class="firm-search-status" hidden></p>
+                <div id="firm-search-results" class="firm-search-results" hidden></div>
+                <div id="firm-selected" class="firm-selected" hidden></div>
+              </div>
+
+              <label class="field">
+                <span>Сумма (сум)</span>
+                <input type="number" id="order-amount" min="1" step="1" required placeholder="Например, 150000" />
+              </label>
+              <label class="field">
+                <span>Телефон клиента</span>
+                <input type="tel" id="order-client-phone" required />
+              </label>
+              <label class="field">
+                <span>Дополнительный телефон <span class="field-hint">(необязательно)</span></span>
+                <input type="tel" id="order-additional-phone" placeholder="Оставьте пустым, чтобы пропустить" />
+              </label>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="create-order-cancel">Отмена</button>
+            <button type="submit" class="btn btn-primary" id="create-order-submit">
+              <span class="btn-label">Создать</span>
+            </button>
+          </div>
+          <div class="create-order-progress" id="create-order-progress" hidden aria-live="polite" aria-busy="true">
+            <div class="create-order-progress__card">
+              <span class="process-spinner" aria-hidden="true"></span>
+              <p class="create-order-progress__title">Создание заказа…</p>
+              <p class="create-order-progress__hint">Формируем заказ и ссылку на оплату</p>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="/bot-admin/admin-common.js"></script>
+    <script src="/bot-admin/admin-ticket-detail.js"></script>
+  </body>
+</html>

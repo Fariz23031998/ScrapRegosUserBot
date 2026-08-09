@@ -13,6 +13,9 @@ const { attachSmsGateway } = require('../../src/sms/sms-gateway-ws');
 const { notifyCreatorOrderPaid } = require('../../src/bot/payment-notification');
 const { getServicePricesCatalog } = require('../../src/db/service-prices');
 const { sendVersionedHtmlFile } = require('../../src/http/asset-cache');
+const {
+  createRegosTicketWebhookRouter,
+} = require('../../src/integrations/regos-ticket-webhook');
 
 const app = express();
 const db = openDb();
@@ -56,6 +59,8 @@ app.get('/api/prices', (_req, res) => {
     return res.status(500).json({ message: 'Не удалось загрузить прайс.' });
   }
 });
+
+app.use('/api/regos', createRegosTicketWebhookRouter());
 
 app.use('/bot-admin', createBotAdminRouter(db));
 
