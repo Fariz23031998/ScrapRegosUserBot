@@ -445,7 +445,19 @@ function directionLabel(direction) {
   return DIRECTION_LABELS[direction] || direction || '—';
 }
 
+function getCachedRecording(ticket) {
+  return ticket?.local?.recording || null;
+}
+
+function getCachedRecordingDuration(ticket) {
+  const duration = Number(getCachedRecording(ticket)?.duration_seconds);
+  return Number.isFinite(duration) ? duration : null;
+}
+
 function getRecordingUrl(ticket) {
+  const cachedUrl = String(getCachedRecording(ticket)?.url || '').trim();
+  if (/^https?:\/\//i.test(cachedUrl)) return cachedUrl;
+
   const fields = Array.isArray(ticket?.fields) ? ticket.fields : [];
   const recordingField = fields.find((field) => {
     const key = String(field?.key || '').trim().toLowerCase();
@@ -524,6 +536,12 @@ function loadRecordingDuration(ticketId) {
 function loadVisibleCallDurations() {
   const generation = ++durationLoadGeneration;
   tickets.forEach((ticket, index) => {
+    const cachedDuration = getCachedRecordingDuration(ticket);
+    if (Number.isFinite(cachedDuration)) {
+      recordingDurationCache.set(String(ticket.id), cachedDuration);
+      setDurationCell(index, cachedDuration);
+      return;
+    }
     const recordingUrl = getRecordingUrl(ticket);
     if (!recordingUrl) return;
     loadRecordingDuration(ticket.id).then((duration) => {
@@ -967,6 +985,16 @@ function renderActiveTicket() {
       <span class="active-ticket__title">${escapeHtml(title)}</span>
       <span class="active-ticket__meta">${escapeHtml(clientText)} · ${escapeHtml(created)}</span>
     </button>
+    <div class="active-ticket__extras">
+      <span class="active-ticket__extra">
+        <span class="active-ticket__extra-label">Неоплаченные:</span>
+        ${renderUnpaidOrdersCell(activeTicket)}
+      </span>
+      <span class="active-ticket__extra">
+        <span class="active-ticket__extra-label">ТП:</span>
+        ${renderTechnicalSupportCell(activeTicket)}
+      </span>
+    </div>
   `;
 
   const openBtn = document.getElementById('active-ticket-open');
@@ -1046,7 +1074,11 @@ function renderTicketsTable() {
                 ? `<button type="button" class="ticket-recording-open" data-recording-index="${index}" aria-label="Воспроизвести запись тикета №${escapeHtml(ticket.id)}">Воспроизвести</button>`
                 : '—'
             }</td>
-            <td class="cell-mono cell-nowrap" data-label="Длительность звонка" data-call-duration-index="${index}">—</td>
+            <td class="cell-mono cell-nowrap" data-label="Длительность звонка" data-call-duration-index="${index}">${
+              Number.isFinite(getCachedRecordingDuration(ticket))
+                ? escapeHtml(formatCallDuration(getCachedRecordingDuration(ticket)))
+                : '—'
+            }</td>
             <td data-label="SLA нарушен">${
               ticket.sla_breached
                 ? '<span class="badge badge--warn">Да</span>'

@@ -775,7 +775,7 @@ function resolveActiveTicket(ticket) {
 
 function mapActiveTicket(ticket) {
   if (!ticket) return null;
-  return {
+  const mapped = {
     id: ticket.id,
     subject: ticket.subject || null,
     status: ticket.status || null,
@@ -783,6 +783,22 @@ function mapActiveTicket(ticket) {
     created_date: ticket.created_date ?? null,
     responsible_user_id: ticket.responsible_user_id ?? null,
   };
+  if (ticket.local) {
+    mapped.local = {
+      unpaid_orders: ticket.local.unpaid_orders || {
+        count: 0,
+        total_amount: 0,
+        orders: [],
+      },
+      technical_support: ticket.local.technical_support || {
+        status: 'none',
+        ends_at: null,
+        starts_at: null,
+      },
+      firms: Array.isArray(ticket.local.firms) ? ticket.local.firms : [],
+    };
+  }
+  return mapped;
 }
 
 module.exports = {

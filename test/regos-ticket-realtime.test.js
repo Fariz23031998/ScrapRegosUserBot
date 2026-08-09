@@ -90,6 +90,77 @@ describe('REGOS ticket webhook handler', () => {
     ]);
   });
 
+  it('refreshes recording cache on TicketEdited then publishes duration update', async () => {
+    const published = [];
+    const scheduled = [];
+    const dbPath = path.join(os.tmpdir(), `ticket-webhook-rec-${process.pid}-${Date.now()}.db`);
+    const db = openDb(dbPath);
+    try {
+      const handler = createRegosTicketWebhookHandler({
+        connectedIntegrationId: 'integration-1',
+        db,
+        now: () => 1_720_000_000_000,
+        findTicket: async (id) => ({
+          id,
+          responsible_user_id: 3,
+          fields: [
+            {
+              key: 'field_recording_link',
+              value: 'http://rofeev.7x.uz/edited.wav',
+            },
+          ],
+        }),
+        resolveRecordingCache: async (database, ticket, options = {}) => {
+          if (!options.fetchDuration) {
+            const { upsertTicketRecording } = require('../src/db/ticket-recordings');
+            upsertTicketRecording(database, {
+              ticketId: ticket.id,
+              recordingUrl: 'http://rofeev.7x.uz/edited.wav',
+            });
+            return {
+              recording_url: 'http://rofeev.7x.uz/edited.wav',
+              duration_seconds: null,
+            };
+          }
+          const { upsertTicketRecording } = require('../src/db/ticket-recordings');
+          upsertTicketRecording(database, {
+            ticketId: ticket.id,
+            durationSeconds: 33,
+          });
+          return {
+            recording_url: 'http://rofeev.7x.uz/edited.wav',
+            duration_seconds: 33,
+          };
+        },
+        schedule: (task) => scheduled.push(task),
+        publish: (event) => published.push(event),
+      });
+
+      assert.deepEqual(
+        await handler({
+          event_id: `ticket-test-${process.pid}-edited`,
+          occurred_at: '2026-08-09T11:00:00Z',
+          connected_integration_id: 'integration-1',
+          data: { action: 'TicketEdited', data: { id: 77 } },
+        }),
+        { ok: true, message: 'Webhook processed' }
+      );
+
+      assert.equal(published.length, 1);
+      assert.equal(scheduled.length, 1);
+      await scheduled[0]();
+      assert.equal(published.length, 2);
+      assert.equal(published[1].ticket_id, 77);
+      assert.equal(published[1].source_action, 'TicketEdited');
+
+      const { getTicketRecording } = require('../src/db/ticket-recordings');
+      assert.equal(getTicketRecording(db, 77)?.duration_seconds, 33);
+    } finally {
+      db.close();
+      removeDbFiles(dbPath);
+    }
+  });
+
   it('rejects another integration and ignores unrelated actions', async () => {
     const handler = createRegosTicketWebhookHandler({
       connectedIntegrationId: 'integration-1',
@@ -252,6 +323,11 @@ describe('active ticket HTTP endpoint', () => {
         client: null,
         created_date: 1_720_000_000,
         responsible_user_id: 7,
+        local: {
+          unpaid_orders: { count: 0, total_amount: 0, orders: [] },
+          technical_support: { status: 'none', ends_at: null, starts_at: null },
+          firms: [],
+        },
       },
       active_ticket_user_id: 7,
     });

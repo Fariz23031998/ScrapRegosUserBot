@@ -1,7 +1,15 @@
 const { getAllUnpaidOrders } = require('../db/partners-db');
 const { getTechnicalSupportStatusByPhone } = require('../db/technical-support');
 const { listLinksByClient } = require('../db/client-firm-links');
+const { getTicketRecordingsByIds } = require('../db/ticket-recordings');
 const { phonesMatch } = require('../bot/search-user');
+const {
+  getTicketRecordingUrl,
+  resolveTicketRecordingCache,
+} = require('./ticket-recording');
+
+const RECORDING_RESOLVE_CONCURRENCY = 5;
+const RECORDING_RESOLVE_TIMEOUT_MS = 5_000;
 
 function ticketClientId(ticket) {
   const id = Number(ticket?.client_id ?? ticket?.client?.id);
@@ -80,6 +88,29 @@ function pickBetterTsStatus(current, candidate) {
   return candidateEnds > currentEnds ? candidate : current;
 }
 
+function mapLocalRecording(row, ticket) {
+  const fieldUrl = getTicketRecordingUrl(ticket);
+  return {
+    url: row?.recording_url || fieldUrl?.href || null,
+    duration_seconds: row?.duration_seconds ?? null,
+  };
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  let nextIndex = 0;
+  const runners = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await worker(items[index], index);
+      }
+    }
+  );
+  await Promise.all(runners);
+}
+
 /**
  * Attach local SQLite context to a page of REGOS tickets.
  * Batches unpaid-order scan and caches TS / firm lookups per phone / client id.
@@ -91,6 +122,10 @@ function enrichTicketsWithLocalData(db, tickets) {
   const pendingOrders = getAllUnpaidOrders(db);
   const tsByPhone = new Map();
   const firmsByClientId = new Map();
+  const recordingsById = getTicketRecordingsByIds(
+    db,
+    rows.map((ticket) => ticket?.id)
+  );
 
   function tsForPhone(phone) {
     if (!phone) return { status: 'none', ends_at: null, starts_at: null };
@@ -125,6 +160,9 @@ function enrichTicketsWithLocalData(db, tickets) {
       (best, candidatePhone) => pickBetterTsStatus(best, tsForPhone(candidatePhone)),
       { status: 'none', ends_at: null, starts_at: null }
     );
+    const ticketId = Number(ticket?.id);
+    const recordingRow =
+      Number.isInteger(ticketId) && ticketId > 0 ? recordingsById.get(ticketId) : null;
 
     return {
       ...ticket,
@@ -132,15 +170,59 @@ function enrichTicketsWithLocalData(db, tickets) {
         unpaid_orders: summarizeUnpaidOrders(matchedOrders),
         technical_support: technicalSupport,
         firms,
+        recording: mapLocalRecording(recordingRow, ticket),
       },
     };
   });
 }
 
+/**
+ * Fill missing recording URL / duration for the current page with bounded concurrency.
+ * Persists successes to SQLite and updates `ticket.local.recording` in place.
+ */
+async function resolveMissingTicketRecordings(
+  db,
+  tickets,
+  {
+    concurrency = RECORDING_RESOLVE_CONCURRENCY,
+    timeoutMs = RECORDING_RESOLVE_TIMEOUT_MS,
+    resolveCache = resolveTicketRecordingCache,
+  } = {}
+) {
+  const rows = Array.isArray(tickets) ? tickets : [];
+  const misses = rows.filter((ticket) => {
+    const recording = ticket?.local?.recording;
+    const hasUrl = Boolean(recording?.url || getTicketRecordingUrl(ticket));
+    if (!hasUrl) return false;
+    return !recording?.url || recording.duration_seconds == null;
+  });
+  if (misses.length === 0) return rows;
+
+  await mapWithConcurrency(misses, concurrency, async (ticket) => {
+    const needsDuration = ticket?.local?.recording?.duration_seconds == null;
+    const resolved = await resolveCache(db, ticket, {
+      fetchDuration: needsDuration,
+      timeoutMs,
+    });
+    ticket.local = {
+      ...(ticket.local || {}),
+      recording: {
+        url: resolved.recording_url,
+        duration_seconds: resolved.duration_seconds,
+      },
+    };
+  });
+
+  return rows;
+}
+
 module.exports = {
   enrichTicketsWithLocalData,
+  resolveMissingTicketRecordings,
   summarizeUnpaidOrders,
   collectTicketPhones,
   ticketClientId,
   ticketClientPhone,
+  RECORDING_RESOLVE_CONCURRENCY,
+  RECORDING_RESOLVE_TIMEOUT_MS,
 };

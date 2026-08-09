@@ -123,6 +123,7 @@ describe('ticket local enrichment', () => {
     assert.equal(enriched.local.technical_support.status, 'expired');
     assert.equal(enriched.local.firms.length, 1);
     assert.equal(enriched.local.firms[0].firm_name, 'Acme LLC');
+    assert.deepEqual(enriched.local.recording, { url: null, duration_seconds: null });
   });
 
   it('matches unpaid orders and TS by linked firm phone when ticket phone differs', () => {

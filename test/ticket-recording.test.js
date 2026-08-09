@@ -85,3 +85,20 @@ describe('ticket detail recording player', () => {
     assert.match(source, /<a[^>]+href="\$\{safeUrl\}"/);
   });
 });
+
+describe('tickets table recording cache UI', () => {
+  it('uses local.recording url and duration when present', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'public', 'bot-admin', 'admin-tickets.js'),
+      'utf8'
+    );
+
+    assert.match(source, /function getCachedRecording\(ticket\)/);
+    assert.match(source, /ticket\?\.local\?\.recording/);
+    assert.match(source, /getCachedRecordingDuration\(ticket\)/);
+    assert.match(
+      source,
+      /Number\.isFinite\(getCachedRecordingDuration\(ticket\)\)[\s\S]*formatCallDuration\(getCachedRecordingDuration\(ticket\)\)/
+    );
+  });
+});

@@ -73,4 +73,44 @@ describe('mapActiveTicket', () => {
   it('returns null for empty input', () => {
     assert.equal(mapActiveTicket(null), null);
   });
+
+  it('keeps unpaid orders and technical support in local payload', () => {
+    assert.deepEqual(
+      mapActiveTicket({
+        id: 43,
+        subject: 'Call',
+        status: 'Open',
+        client: { name: 'Client', phone: '90111' },
+        created_date: 1710000000,
+        responsible_user_id: 7,
+        local: {
+          unpaid_orders: { count: 2, total_amount: 150000, orders: [{ id: 'a' }] },
+          technical_support: {
+            status: 'active',
+            ends_at: '2026-09-01T00:00:00.000Z',
+            starts_at: '2026-08-01T00:00:00.000Z',
+          },
+          firms: [{ id: 1, firm_type: 'partner', firm_record_id: '9' }],
+          recording: { url: 'http://example/x.wav', duration_seconds: 12 },
+        },
+      }),
+      {
+        id: 43,
+        subject: 'Call',
+        status: 'Open',
+        client: { name: 'Client', phone: '90111' },
+        created_date: 1710000000,
+        responsible_user_id: 7,
+        local: {
+          unpaid_orders: { count: 2, total_amount: 150000, orders: [{ id: 'a' }] },
+          technical_support: {
+            status: 'active',
+            ends_at: '2026-09-01T00:00:00.000Z',
+            starts_at: '2026-08-01T00:00:00.000Z',
+          },
+          firms: [{ id: 1, firm_type: 'partner', firm_record_id: '9' }],
+        },
+      }
+    );
+  });
 });

@@ -1548,9 +1548,27 @@ body.modal-open {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px 10px;
-  max-width: 640px;
+  max-width: 720px;
   font-size: 13px;
   color: #52606d;
+}
+
+.active-ticket__extras {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  width: 100%;
+}
+
+.active-ticket__extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.active-ticket__extra-label {
+  color: #7b8794;
 }
 
 .active-ticket__label {

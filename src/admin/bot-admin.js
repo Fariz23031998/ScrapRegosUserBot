@@ -37,7 +37,14 @@ const {
   updateTechnicalSupportPrices,
   listTechnicalSupportSubscriptions,
 } = require('../db/technical-support');
-const { enrichTicketsWithLocalData } = require('./ticket-local-enrichment');
+const {
+  enrichTicketsWithLocalData,
+  resolveMissingTicketRecordings,
+} = require('./ticket-local-enrichment');
+const {
+  getTicketRecording,
+  upsertTicketRecording,
+} = require('../db/ticket-recordings');
 const {
   getServicePricesCatalog,
   replaceServicePricesCatalog,
@@ -104,6 +111,25 @@ const crypto = require('crypto');
 
 const RECORDING_URL_CACHE_TTL_MS = 10 * 60 * 1000;
 const RECORDING_URL_CACHE_MAX = 1000;
+
+function seedRecordingUrlCache(cache, ticketId, href) {
+  if (!href || ticketId == null) return null;
+  let url;
+  try {
+    url = new URL(String(href));
+  } catch {
+    return null;
+  }
+  const key = String(ticketId);
+  if (!cache.has(key) && cache.size >= RECORDING_URL_CACHE_MAX) {
+    cache.delete(cache.keys().next().value);
+  }
+  cache.set(key, {
+    href: url.href,
+    expiresAt: Date.now() + RECORDING_URL_CACHE_TTL_MS,
+  });
+  return url;
+}
 
 function parseRightsBody(body = {}) {
   const rights = {};
@@ -344,13 +370,21 @@ function resolveActorTelegramId(db, req) {
   return botUser?.telegram_id != null ? botUser.telegram_id : null;
 }
 
+function mapEnrichedActiveTicket(db, ticket) {
+  const active = resolveActiveTicket(ticket);
+  if (!active) return null;
+  const [enriched] = enrichTicketsWithLocalData(db, [active]);
+  return mapActiveTicket(enriched);
+}
+
 async function loadActiveTicketForRequest(db, req) {
   const responsibleUserId = String(req.query.responsible_user_id || '').trim();
   const activeForUserId =
     responsibleUserId || resolveSessionRegosUserId(db, req) || null;
   const activeTicket = activeForUserId
-    ? mapActiveTicket(
-        resolveActiveTicket(await findLatestTicketForResponsibleUser(activeForUserId))
+    ? mapEnrichedActiveTicket(
+        db,
+        await findLatestTicketForResponsibleUser(activeForUserId)
       )
     : null;
   return {
@@ -425,14 +459,7 @@ function createBotAdminRouter(db) {
   function cacheTicketRecordingUrl(ticket) {
     const url = getTicketRecordingUrl(ticket);
     if (!url || ticket?.id == null) return url;
-    const key = String(ticket.id);
-    if (!recordingUrlCache.has(key) && recordingUrlCache.size >= RECORDING_URL_CACHE_MAX) {
-      recordingUrlCache.delete(recordingUrlCache.keys().next().value);
-    }
-    recordingUrlCache.set(key, {
-      href: url.href,
-      expiresAt: Date.now() + RECORDING_URL_CACHE_TTL_MS,
-    });
+    seedRecordingUrlCache(recordingUrlCache, ticket.id, url.href);
     return url;
   }
 
@@ -445,6 +472,14 @@ function createBotAdminRouter(db) {
       return null;
     }
     return new URL(cached.href);
+  }
+
+  function resolveRecordingUrlFromStore(ticketId) {
+    const cached = getCachedTicketRecordingUrl(ticketId);
+    if (cached) return cached;
+    const row = getTicketRecording(db, ticketId);
+    if (!row?.recording_url) return null;
+    return seedRecordingUrlCache(recordingUrlCache, ticketId, row.recording_url);
   }
 
   router.get('/login', (_req, res) => sendPublicFile(res, publicDir, 'login.html'));
@@ -1068,7 +1103,13 @@ function createBotAdminRouter(db) {
       if (!ticket) {
         return res.status(404).json({ message: 'Тикет не найден.' });
       }
-      cacheTicketRecordingUrl(ticket);
+      const recordingUrl = cacheTicketRecordingUrl(ticket);
+      if (recordingUrl) {
+        upsertTicketRecording(db, {
+          ticketId: ticket.id,
+          recordingUrl: recordingUrl.href,
+        });
+      }
       return res.json({ ticket });
     } catch (error) {
       if (error instanceof RegosCrmError) {
@@ -1086,13 +1127,19 @@ function createBotAdminRouter(db) {
     });
 
     try {
-      let recordingUrl = getCachedTicketRecordingUrl(req.params.id);
+      let recordingUrl = resolveRecordingUrlFromStore(req.params.id);
       if (!recordingUrl) {
         const ticket = await findTicketById(req.params.id);
         if (!ticket) {
           return res.status(404).json({ message: 'Тикет не найден.' });
         }
         recordingUrl = cacheTicketRecordingUrl(ticket);
+        if (recordingUrl) {
+          upsertTicketRecording(db, {
+            ticketId: ticket.id,
+            recordingUrl: recordingUrl.href,
+          });
+        }
       }
       if (!recordingUrl) {
         return res.status(404).json({ message: 'Запись звонка не найдена.' });
@@ -1563,7 +1610,7 @@ function createBotAdminRouter(db) {
       });
       const activeTicketPromise = activeForUserId
         ? findLatestTicketForResponsibleUser(activeForUserId).then((latest) =>
-            mapActiveTicket(resolveActiveTicket(latest))
+            mapEnrichedActiveTicket(db, latest)
           )
         : Promise.resolve(null);
 
@@ -1590,7 +1637,15 @@ function createBotAdminRouter(db) {
         db,
         tickets.slice(safeOffset, safeOffset + limit)
       );
-      pageTickets.forEach(cacheTicketRecordingUrl);
+      await resolveMissingTicketRecordings(db, pageTickets);
+      for (const ticket of pageTickets) {
+        const href = ticket?.local?.recording?.url;
+        if (href) {
+          seedRecordingUrlCache(recordingUrlCache, ticket.id, href);
+        } else {
+          cacheTicketRecordingUrl(ticket);
+        }
+      }
 
       return res.json({
         tickets: pageTickets,

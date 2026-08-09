@@ -1,6 +1,7 @@
 const express = require('express');
 const { findTicketById } = require('./regos-crm');
 const { ticketEventHub } = require('../admin/ticket-events');
+const { resolveTicketRecordingCache } = require('../admin/ticket-recording');
 
 const WEBHOOK_EVENT_TTL_MS = 60 * 60 * 1000;
 const TICKET_WEBHOOK_ACTIONS = new Set([
@@ -32,6 +33,11 @@ function createRegosTicketWebhookHandler({
   findTicket = findTicketById,
   publish = (event) => ticketEventHub.publish(event),
   now = () => Date.now(),
+  db = null,
+  resolveRecordingCache = resolveTicketRecordingCache,
+  schedule = (task) => {
+    setImmediate(task);
+  },
 } = {}) {
   const expectedIntegrationId = String(connectedIntegrationId || '').trim();
 
@@ -72,16 +78,52 @@ function createRegosTicketWebhookHandler({
 
     try {
       const ticket = await findTicket(ticketId);
+      const occurredAt =
+        typeof webhookData.occurred_at === 'string' && webhookData.occurred_at.trim()
+          ? webhookData.occurred_at.trim()
+          : new Date(nowMs).toISOString();
+
+      let recording = null;
+      if (db) {
+        // Upsert URL first so SSE clients can play immediately; duration may follow async.
+        recording = await resolveRecordingCache(db, ticket, { fetchDuration: false });
+      }
+
       publish({
         type: 'ticket_changed',
         ticket_id: ticketId,
         responsible_user_id: ticket?.responsible_user_id ?? null,
         source_action: eventAction,
-        occurred_at:
-          typeof webhookData.occurred_at === 'string' && webhookData.occurred_at.trim()
-            ? webhookData.occurred_at.trim()
-            : new Date(nowMs).toISOString(),
+        occurred_at: occurredAt,
       });
+
+      if (
+        db &&
+        recording?.recording_url &&
+        recording.duration_seconds == null
+      ) {
+        schedule(() =>
+          (async () => {
+            try {
+              const updated = await resolveRecordingCache(db, ticket, { fetchDuration: true });
+              if (updated?.duration_seconds == null) return;
+              publish({
+                type: 'ticket_changed',
+                ticket_id: ticketId,
+                responsible_user_id: ticket?.responsible_user_id ?? null,
+                source_action: eventAction,
+                occurred_at: occurredAt,
+              });
+            } catch (error) {
+              console.error(
+                `[regos-webhook] Failed to refresh recording duration for ticket ${ticketId}:`,
+                error
+              );
+            }
+          })()
+        );
+      }
+
       return { ok: true, message: 'Webhook processed' };
     } catch (error) {
       if (eventId) {

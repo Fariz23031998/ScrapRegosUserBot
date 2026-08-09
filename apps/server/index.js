@@ -14,6 +14,7 @@ const { notifyCreatorOrderPaid } = require('../../src/bot/payment-notification')
 const { getServicePricesCatalog } = require('../../src/db/service-prices');
 const { sendVersionedHtmlFile } = require('../../src/http/asset-cache');
 const {
+  createRegosTicketWebhookHandler,
   createRegosTicketWebhookRouter,
 } = require('../../src/integrations/regos-ticket-webhook');
 
@@ -60,7 +61,12 @@ app.get('/api/prices', (_req, res) => {
   }
 });
 
-app.use('/api/regos', createRegosTicketWebhookRouter());
+app.use(
+  '/api/regos',
+  createRegosTicketWebhookRouter({
+    handler: createRegosTicketWebhookHandler({ db }),
+  })
+);
 
 app.use('/bot-admin', createBotAdminRouter(db));
 

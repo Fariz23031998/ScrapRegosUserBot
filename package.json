@@ -36,6 +36,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.22.2",
     "ioredis": "^5.11.1",
+    "music-metadata": "^11.14.0",
     "node-telegram-bot-api": "^0.67.0",
     "node-windows": "^1.0.0-beta.8",
     "playwright": "^1.60.0",
