@@ -3,8 +3,12 @@ const assert = require('node:assert/strict');
 
 const {
   DEFAULT_GETSMS_MESSAGE_TEMPLATE,
+  DEFAULT_PAYMENT_MESSAGE_TEMPLATE,
+  PAYMENT_MESSAGE_CHANNELS,
   formatGetSmsPaymentMessage,
+  formatPaymentMessage,
   renderSmsTemplate,
+  resolvePaymentMessageTemplate,
 } = require('../src/sms/sms-message');
 const { isGetSmsEnabled, sendGetSms } = require('../src/sms/getsms-client');
 const { enqueueOrderPaymentSms } = require('../src/sms/sms-queue');
@@ -16,6 +20,8 @@ const SMS_ENV = [
   'GETSMS_NICKNAME',
   'GETSMS_URL',
   'GETSMS_MESSAGE_TEMPLATE',
+  'SMS_GATEWAY_MESSAGE_TEMPLATE',
+  'TELEGRAM_MTPROTO_MESSAGE_TEMPLATE',
   'SMS_GATEWAY_ENABLED',
   'REDIS_URL',
   'TELEGRAM_BOT_USERNAME',
@@ -27,7 +33,6 @@ const SMS_ENV = [
   'TELEGRAM_API_HASH',
   'TELEGRAM_MTPROTO_SESSION',
 ];
-
 const order = {
   id: 'order-1',
   telegram_id: 123,
@@ -77,11 +82,62 @@ describe('SMS templates', () => {
     assert.match(message, /\nОплатить:/);
   });
 
-  it('supports overriding the shared multiline template', () => {
+  it('supports overriding the GETSMS multiline template', () => {
     process.env.GETSMS_MESSAGE_TEMPLATE = '{amount}|{currency}|{payment_page_url}';
     assert.equal(
       formatGetSmsPaymentMessage(order, paymentPageUrl),
       `50 000|UZS|${paymentPageUrl}`
+    );
+  });
+
+  it('uses a separate template per notification channel', () => {
+    process.env.GETSMS_MESSAGE_TEMPLATE = 'GETSMS:{amount}';
+    process.env.SMS_GATEWAY_MESSAGE_TEMPLATE = 'GATEWAY:{amount}';
+    process.env.TELEGRAM_MTPROTO_MESSAGE_TEMPLATE = 'MTPROTO:{amount}';
+
+    assert.equal(
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.GETSMS),
+      'GETSMS:50 000'
+    );
+    assert.equal(
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY),
+      'GATEWAY:50 000'
+    );
+    assert.equal(
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.MTPROTO),
+      'MTPROTO:50 000'
+    );
+  });
+
+  it('falls back SMS gateway and MTProto to GETSMS_MESSAGE_TEMPLATE when unset', () => {
+    process.env.GETSMS_MESSAGE_TEMPLATE = 'SHARED:{amount}';
+
+    assert.equal(
+      resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY),
+      'SHARED:{amount}'
+    );
+    assert.equal(
+      resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.MTPROTO),
+      'SHARED:{amount}'
+    );
+    assert.equal(
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY),
+      'SHARED:50 000'
+    );
+  });
+
+  it('uses the built-in default when no channel or shared template is set', () => {
+    assert.equal(
+      resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.GETSMS),
+      DEFAULT_PAYMENT_MESSAGE_TEMPLATE
+    );
+    assert.equal(
+      resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY),
+      DEFAULT_PAYMENT_MESSAGE_TEMPLATE
+    );
+    assert.equal(
+      resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.MTPROTO),
+      DEFAULT_PAYMENT_MESSAGE_TEMPLATE
     );
   });
 });
@@ -244,7 +300,7 @@ describe('order SMS dispatch', () => {
     assert.deepEqual(logs, ['sms_sent']);
   });
 
-  it('dispatches one WebSocket job using the shared multiline template', async () => {
+  it('dispatches one WebSocket job using the SMS gateway template', async () => {
     process.env.ENABLE_GETSMS = '0';
     enableGateway();
 
@@ -259,7 +315,10 @@ describe('order SMS dispatch', () => {
     assert.equal(queued.length, 1);
     assert.equal(result.gateway.queued, true);
     assert.equal(result.gateway.jobId, queued[0].id);
-    assert.equal(queued[0].message, formatGetSmsPaymentMessage(order, paymentPageUrl));
+    assert.equal(
+      queued[0].message,
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY)
+    );
     assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.mtproto, { skipped: true, reason: 'disabled' });
   });
@@ -282,6 +341,29 @@ describe('order SMS dispatch', () => {
     assert.equal(sent[0].text, queued[0].message);
   });
 
+  it('sends a distinct body per channel when templates differ', async () => {
+    enableGetSms();
+    enableGateway();
+    enableMtproto();
+    process.env.GETSMS_MESSAGE_TEMPLATE = 'GETSMS:{payment_page_url}';
+    process.env.SMS_GATEWAY_MESSAGE_TEMPLATE = 'GATEWAY:{payment_page_url}';
+    process.env.TELEGRAM_MTPROTO_MESSAGE_TEMPLATE = 'MTPROTO:{payment_page_url}';
+
+    const result = await enqueueOrderPaymentSms(
+      null,
+      order,
+      paymentPageUrl,
+      dependencies()
+    );
+
+    assert.equal(result.getsms.sent, true);
+    assert.equal(result.gateway.queued, true);
+    assert.equal(result.mtproto.sent, true);
+    assert.equal(sent[0].text, `GETSMS:${paymentPageUrl}`);
+    assert.equal(queued[0].message, `GATEWAY:${paymentPageUrl}`);
+    assert.equal(mtprotoSent[0].text, `MTPROTO:${paymentPageUrl}`);
+  });
+
   it('dispatches through MTProto only', async () => {
     process.env.ENABLE_GETSMS = '0';
     process.env.SMS_GATEWAY_ENABLED = '0';
@@ -297,7 +379,10 @@ describe('order SMS dispatch', () => {
     assert.equal(mtprotoSent.length, 1);
     assert.equal(result.mtproto.sent, true);
     assert.equal(result.mtproto.userId, '42');
-    assert.equal(mtprotoSent[0].text, formatGetSmsPaymentMessage(order, paymentPageUrl));
+    assert.equal(
+      mtprotoSent[0].text,
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.MTPROTO)
+    );
     assert.equal(mtprotoSent[0].withGreeting, true);
     assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.gateway, { skipped: true, reason: 'disabled' });

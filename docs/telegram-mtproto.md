@@ -52,7 +52,7 @@ Or set `TELEGRAM_MTPROTO_PHONE` / `TELEGRAM_MTPROTO_TEXT` in `.env`.
 
 ## Bot integration
 
-Wired into `enqueueOrderPaymentSms` ([`src/sms/sms-queue.js`](../src/sms/sms-queue.js)) as a third branch (`mtproto`). It uses the same recipient as SMS (`additional_phone || client_phone`) and the same `GETSMS_MESSAGE_TEMPLATE` body.
+Wired into `enqueueOrderPaymentSms` ([`src/sms/sms-queue.js`](../src/sms/sms-queue.js)) as a third branch (`mtproto`). It uses the same recipient as SMS (`additional_phone || client_phone`) and `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE` when set; otherwise it falls back to `GETSMS_MESSAGE_TEMPLATE`, then the built-in default.
 
 Payment DMs send a **random Russian greeting** first (one of ten fixed hellos), wait 1.5s, then send the payment-link text. The CLI test send does not include the greeting unless you pass `withGreeting` in code.
 

@@ -71,7 +71,7 @@ TELEGRAM_BOT_USERNAME=@YourBot
 - **CLICK payments (optional)**: `ENABLE_CLICK_PAYMENT=1` plus `CLICK_MERCHANT_ID`, `CLICK_SERVICE_ID`, `CLICK_MERCHANT_USER_ID`, `CLICK_SECRET_KEY` — see [docs/payme-integration.md](docs/payme-integration.md) and [docs/click-deploy-linux.md](docs/click-deploy-linux.md). With `ENABLE_CLICK_PAYMENT=0` (or blank keys) the bot and server run on Payme only: no CLICK button on the payment page, new orders use the `payme` provider, and `/click/prepare` / `/click/complete` reply with `error: -9`.
 - **Payment links**: `PUBLIC_BASE_URL`, `CLICK_SERVER_PORT` — `PUBLIC_BASE_URL` is required for payment pages, tech-support orders, Telegram dashboard login links, and the public `/prices` page opened by the bot `/prices` command.
 - **Payme receipts**: `PAYME_*`
-- **SMS transports**: Android uses `SMS_GATEWAY_ENABLED`, `REDIS_URL`, and `SMS_GATEWAY_TOKEN`; GETSMS.UZ uses `ENABLE_GETSMS`, `GETSMS_LOGIN`, and `GETSMS_PASSWORD`. The switches are independent and both providers may send. Both use the same one-message `GETSMS_MESSAGE_TEMPLATE` — see [docs/sms-gateway.md](docs/sms-gateway.md) and [docs/getsms.md](docs/getsms.md)
+- **SMS transports**: Android uses `SMS_GATEWAY_ENABLED`, `REDIS_URL`, and `SMS_GATEWAY_TOKEN`; GETSMS.UZ uses `ENABLE_GETSMS`, `GETSMS_LOGIN`, and `GETSMS_PASSWORD`. The switches are independent and both providers may send. Each transport can use its own template (`GETSMS_MESSAGE_TEMPLATE`, `SMS_GATEWAY_MESSAGE_TEMPLATE`, `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE`) — see [docs/sms-gateway.md](docs/sms-gateway.md) and [docs/getsms.md](docs/getsms.md)
 - **RPOS (optional)**: `{ACCOUNT}_RPOS_USERNAME`, `{ACCOUNT}_RPOS_PASSWORD`
 
 See `.env.example` for the full annotated list.

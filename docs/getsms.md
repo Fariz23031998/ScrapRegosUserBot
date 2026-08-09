@@ -19,7 +19,7 @@ GETSMS_NICKNAME=ROFEEV
 GETSMS_URL=http://185.8.212.184/smsgateway/
 ```
 
-GETSMS is active only when `ENABLE_GETSMS=1` and both credentials are nonblank. It sends one message after order creation using the same `GETSMS_MESSAGE_TEMPLATE` as the Android WebSocket path. `SMS_GATEWAY_ENABLED` controls only the Android path; enabling both transports intentionally sends through both. Failures are isolated and recorded as `sms_failed`.
+GETSMS is active only when `ENABLE_GETSMS=1` and both credentials are nonblank. It sends one message after order creation using `GETSMS_MESSAGE_TEMPLATE` (or the built-in default). Android and MTProto can use their own templates (`SMS_GATEWAY_MESSAGE_TEMPLATE`, `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE`); if those are unset they fall back to `GETSMS_MESSAGE_TEMPLATE`. `SMS_GATEWAY_ENABLED` controls only the Android path; enabling both transports intentionally sends through both. Failures are isolated and recorded as `sms_failed`.
 
 The default message is:
 

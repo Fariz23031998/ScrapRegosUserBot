@@ -3,9 +3,9 @@
 After an order is created in the Telegram employee flow, the bot can send through two independent transports:
 
 - Android: queues one multiline payment message in Redis. A dedicated Android app receives it over WebSocket and sends it natively.
-- GETSMS.UZ: sends the same multiline payment message directly over HTTP.
+- GETSMS.UZ: sends a payment message directly over HTTP.
 
-`SMS_GATEWAY_ENABLED` controls Android and `ENABLE_GETSMS` controls GETSMS. Enabling both intentionally sends through both providers, so the customer may receive messages from each.
+`SMS_GATEWAY_ENABLED` controls Android and `ENABLE_GETSMS` controls GETSMS. Enabling both intentionally sends through both providers, so the customer may receive messages from each. Each transport can use its own message template (see below).
 
 ## Flow
 
@@ -34,13 +34,15 @@ Set in `.env` on the host running **both** `npm run bot` and `npm run server`:
 | `REDIS_URL` | yes (to enable) | e.g. `redis://127.0.0.1:6379` |
 | `SMS_GATEWAY_TOKEN` | yes (with Redis) | Shared secret for WebSocket auth |
 | `PUBLIC_BASE_URL` | yes | Payment link in SMS, e.g. `https://aserver.tech` |
-| `GETSMS_MESSAGE_TEMPLATE` | no | Shared multiline payment template used by Android WebSocket and GETSMS HTTP |
+| `GETSMS_MESSAGE_TEMPLATE` | no | GETSMS body; also the shared fallback when channel-specific templates are unset |
+| `SMS_GATEWAY_MESSAGE_TEMPLATE` | no | Android WebSocket body (falls back to `GETSMS_MESSAGE_TEMPLATE`) |
+| `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE` | no | MTProto Telegram body (falls back to `GETSMS_MESSAGE_TEMPLATE`) |
 
 When `SMS_GATEWAY_ENABLED=0` or `REDIS_URL` is not set, Android enqueue and the WebSocket gateway are skipped automatically (safe for local development). This does not disable GETSMS; see [`getsms.md`](getsms.md).
 
 ## SMS text
 
-One message is queued per order, rendered from `GETSMS_MESSAGE_TEMPLATE` (same body as the GETSMS HTTP path):
+One message is queued per order for the Android path, rendered from `SMS_GATEWAY_MESSAGE_TEMPLATE` (or `GETSMS_MESSAGE_TEMPLATE` / the built-in default):
 
 ```
 Оплата услуг ROFEEV TECHNOLOGY
