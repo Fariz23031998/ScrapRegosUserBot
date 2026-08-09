@@ -6,7 +6,6 @@ const path = require('path');
 
 const { openDb } = require('../src/db/partners-db');
 const {
-  ensureTicketRecordingsTable,
   getTicketRecording,
   getTicketRecordingsByIds,
   upsertTicketRecording,
@@ -36,7 +35,15 @@ describe('ticket_recordings db helpers', () => {
   before(() => {
     dbPath = makeTempDbPath();
     db = openDb(dbPath);
-    ensureTicketRecordingsTable(db);
+  });
+
+  it('creates ticket_recordings on openDb', () => {
+    const row = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ticket_recordings'`
+      )
+      .get();
+    assert.equal(row?.name, 'ticket_recordings');
   });
 
   after(() => {
