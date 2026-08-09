@@ -14,6 +14,7 @@ const {
   formatTicketAdminUrl,
   formatOrderTicketLine,
 } = require('../src/bot/order-ticket');
+const { addLink, listLinksByClient } = require('../src/db/client-firm-links');
 
 function makeTempDbPath() {
   return path.join(
@@ -256,6 +257,177 @@ describe('POST /bot-admin/api/orders', () => {
 
       const stored = getOrderById(db, body.order.id);
       assert.equal(stored.ticket_id, 99);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  async function loginEmployee(server, { login, password }) {
+    const loginRes = await postJson(server, '/bot-admin/api/login', { login, password });
+    assert.equal(loginRes.statusCode, 200);
+    const cookie = cookieFromSetCookie(loginRes.headers['set-cookie']);
+    assert.ok(cookie);
+    return cookie;
+  }
+
+  function firmOrderPayload(overrides = {}) {
+    return {
+      amount: 25000,
+      client_phone: '998901234567',
+      ticket_id: 42,
+      client_id: 777,
+      client_name: 'Acme Firm',
+      client_type: 'partner',
+      record_id: 501,
+      firm_message: 'Partner card',
+      firm_phone: '998909998877',
+      ...overrides,
+    };
+  }
+
+  it('auto-links selected firm to client when user has clients_link_firm', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551200',
+      displayName: 'Linker',
+      rights: { tickets_read: 1, clients_link_firm: 1 },
+      adminLogin: 'order.linker',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555200, employee.id);
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.linker',
+        password: 'panel-secret',
+      });
+      const res = await postJson(server, '/bot-admin/api/orders', firmOrderPayload(), {
+        Cookie: cookie,
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, true);
+      assert.ok(body.firm_link?.id);
+
+      const links = listLinksByClient(db, 777);
+      assert.equal(links.length, 1);
+      assert.equal(links[0].firm_type, 'partner');
+      assert.equal(links[0].firm_record_id, '501');
+      assert.equal(links[0].firm_name, 'Acme Firm');
+      assert.equal(links[0].firm_phone, '998909998877');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('does not auto-link firm without clients_link_firm permission', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551201',
+      displayName: 'No Link Right',
+      rights: { tickets_read: 1 },
+      adminLogin: 'order.nolink',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555201, employee.id);
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.nolink',
+        password: 'panel-secret',
+      });
+      const res = await postJson(server, '/bot-admin/api/orders', firmOrderPayload(), {
+        Cookie: cookie,
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, false);
+      assert.equal(body.firm_link?.reason, 'no_permission');
+      assert.equal(listLinksByClient(db, 777).length, 0);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('treats already-linked firm as success when creating an order', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551202',
+      displayName: 'Dup Linker',
+      rights: { tickets_read: 1, clients_link_firm: 1 },
+      adminLogin: 'order.duplink',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555202, employee.id);
+    addLink(db, {
+      regos_client_id: 777,
+      type: 'partner',
+      recordId: 501,
+      clientName: 'Acme Firm',
+      phone: '998909998877',
+    });
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.duplink',
+        password: 'panel-secret',
+      });
+      const res = await postJson(server, '/bot-admin/api/orders', firmOrderPayload(), {
+        Cookie: cookie,
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, true);
+      assert.equal(body.firm_link?.reason, 'already_linked');
+      assert.equal(listLinksByClient(db, 777).length, 1);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('skips auto-link when firm is selected but client_id is missing', async () => {
+    const employee = createEmployeeUser(db, {
+      phone: '+998905551203',
+      displayName: 'No Client Id',
+      rights: { tickets_read: 1, clients_link_firm: 1 },
+      adminLogin: 'order.noclient',
+      password: 'panel-secret',
+    });
+    db.prepare('UPDATE bot_users SET telegram_id = ? WHERE id = ?').run(555203, employee.id);
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const cookie = await loginEmployee(server, {
+        login: 'order.noclient',
+        password: 'panel-secret',
+      });
+      const { client_id: _ignored, ...payload } = firmOrderPayload();
+      const res = await postJson(server, '/bot-admin/api/orders', payload, { Cookie: cookie });
+      assert.equal(res.statusCode, 201, res.body);
+      const body = JSON.parse(res.body);
+      assert.equal(body.firm_link?.linked, false);
+      assert.equal(body.firm_link?.reason, 'no_client_id');
+      assert.equal(listLinksByClient(db, 777).length, 0);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

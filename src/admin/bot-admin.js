@@ -23,6 +23,7 @@ const {
   isAuthenticated,
   getSessionActor,
   getSessionPermissions,
+  actorHasPermission,
   setSessionCookie,
   clearSessionCookie,
   requireAdminAuth,
@@ -1530,10 +1531,19 @@ function createBotAdminRouter(db) {
       const clientType = req.body?.client_type != null ? String(req.body.client_type).trim() : '';
       const firmMessage =
         req.body?.firm_message != null ? String(req.body.firm_message).trim() : '';
+      const firmPhoneRaw =
+        req.body?.firm_phone != null ? String(req.body.firm_phone).trim() : '';
       const recordIdRaw = req.body?.record_id;
       const recordId =
         recordIdRaw == null || recordIdRaw === '' ? null : recordIdRaw;
       const hasFirm = Boolean(clientType || recordId != null || firmMessage);
+
+      const clientIdRaw = req.body?.client_id;
+      const clientId =
+        clientIdRaw == null || clientIdRaw === '' ? null : Number(clientIdRaw);
+      if (clientIdRaw != null && clientIdRaw !== '' && (!Number.isInteger(clientId) || clientId <= 0)) {
+        return res.status(400).json({ message: 'Некорректный client_id.' });
+      }
 
       const metadata = JSON.stringify({
         type: clientType || null,
@@ -1564,6 +1574,38 @@ function createBotAdminRouter(db) {
       const paymentUrl = formatClickUrlSafe(detailedOrder.id, detailedOrder.amount);
       const paymentPageUrl = formatPaymentPageUrl(order.id);
 
+      let firmLink = { linked: false, reason: 'skipped' };
+      const actor = getSessionActor(req);
+      const canLinkFirm = actorHasPermission(db, actor, 'clients_link_firm');
+      const firmType = clientType || null;
+      const firmRecordId = recordId;
+      if (!canLinkFirm) {
+        firmLink = { linked: false, reason: 'no_permission' };
+      } else if (clientId == null) {
+        firmLink = { linked: false, reason: 'no_client_id' };
+      } else if (!firmType || firmRecordId == null || firmRecordId === '') {
+        firmLink = { linked: false, reason: 'no_firm' };
+      } else {
+        try {
+          const link = addClientFirmLink(db, {
+            regos_client_id: clientId,
+            type: firmType,
+            recordId: firmRecordId,
+            clientName: clientName || null,
+            phone: firmPhoneRaw || clientPhone,
+            message: firmMessage || null,
+          });
+          firmLink = { linked: true, id: link?.id ?? null };
+        } catch (err) {
+          if (err?.code === 'DUPLICATE_LINK') {
+            firmLink = { linked: true, reason: 'already_linked' };
+          } else {
+            console.warn('[bot-admin] Auto firm link failed:', err.message);
+            firmLink = { linked: false, reason: 'error', message: err.message };
+          }
+        }
+      }
+
       const outboundBot = getOutboundBot();
       if (outboundBot) {
         try {
@@ -1590,6 +1632,7 @@ function createBotAdminRouter(db) {
       return res.status(201).json({
         order: detailedOrder,
         payment_page_url: paymentPageUrl,
+        firm_link: firmLink,
       });
     } catch (error) {
       console.error('Create order error:', error);

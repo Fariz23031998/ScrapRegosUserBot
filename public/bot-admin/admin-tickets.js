@@ -69,10 +69,7 @@ let orderSelectedFirm = null;
 let orderLinkedClientFirms = [];
 let orderTicketDefaultPhone = '';
 let createOrderBusy = false;
-let orderFirmSearchTimer = null;
 let orderFirmSearchRequestId = 0;
-
-const ORDER_FIRM_SEARCH_DEBOUNCE_MS = 300;
 
 const searchInput = document.getElementById('ticket-search');
 const searchClearBtn = document.getElementById('search-clear');
@@ -1113,13 +1110,6 @@ function renderOrderFirmResults(results) {
   });
 }
 
-function cancelOrderFirmSearchDebounce() {
-  if (orderFirmSearchTimer != null) {
-    clearTimeout(orderFirmSearchTimer);
-    orderFirmSearchTimer = null;
-  }
-}
-
 function clearOrderFirmSearchResults() {
   firmSearchStatus.hidden = true;
   firmSearchStatus.textContent = '';
@@ -1153,25 +1143,7 @@ async function runOrderFirmSearch() {
   }
 }
 
-function scheduleOrderFirmSearch() {
-  cancelOrderFirmSearchDebounce();
-  const q = firmSearchInput.value.trim();
-  if (!q) {
-    orderFirmSearchRequestId += 1;
-    clearOrderFirmSearchResults();
-    return;
-  }
-  orderFirmSearchTimer = setTimeout(() => {
-    orderFirmSearchTimer = null;
-    runOrderFirmSearch().catch((error) => {
-      firmSearchStatus.hidden = false;
-      firmSearchStatus.textContent = error.message;
-    });
-  }, ORDER_FIRM_SEARCH_DEBOUNCE_MS);
-}
-
 function triggerOrderFirmSearchNow() {
-  cancelOrderFirmSearchDebounce();
   runOrderFirmSearch().catch((error) => {
     firmSearchStatus.hidden = false;
     firmSearchStatus.textContent = error.message;
@@ -1179,7 +1151,6 @@ function triggerOrderFirmSearchNow() {
 }
 
 function resetCreateOrderForm() {
-  cancelOrderFirmSearchDebounce();
   orderFirmSearchRequestId += 1;
   createOrderForm.reset();
   orderSelectedFirm = null;
@@ -1903,9 +1874,6 @@ createOrderModal.addEventListener('click', (event) => {
 firmSearchBtn.addEventListener('click', () => {
   triggerOrderFirmSearchNow();
 });
-firmSearchInput.addEventListener('input', () => {
-  scheduleOrderFirmSearch();
-});
 firmSearchInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
@@ -1924,6 +1892,7 @@ createOrderForm.addEventListener('submit', async (event) => {
       client_phone: orderClientPhoneInput.value.trim(),
       additional_phone: orderAdditionalPhoneInput.value.trim() || undefined,
       ticket_id: activeTicket.id,
+      client_id: activeTicket.client_id ?? activeTicket.client?.id,
     };
 
     if (orderSelectedFirm) {
@@ -1931,6 +1900,7 @@ createOrderForm.addEventListener('submit', async (event) => {
       payload.client_type = orderSelectedFirm.type || undefined;
       payload.record_id = orderSelectedFirm.recordId ?? undefined;
       payload.firm_message = orderSelectedFirm.message || undefined;
+      payload.firm_phone = orderSelectedFirm.phone || undefined;
     } else {
       payload.client_name = activeTicket.client?.name || undefined;
     }

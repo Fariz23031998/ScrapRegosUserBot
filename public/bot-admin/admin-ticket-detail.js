@@ -481,8 +481,6 @@ function renderFirmResults(results) {
   });
 }
 
-const FIRM_SEARCH_DEBOUNCE_MS = 300;
-let firmSearchTimer = null;
 let firmSearchRequestId = 0;
 
 function clearFirmSearchResults() {
@@ -490,13 +488,6 @@ function clearFirmSearchResults() {
   firmSearchStatus.textContent = '';
   firmSearchResults.hidden = true;
   firmSearchResults.innerHTML = '';
-}
-
-function cancelFirmSearchDebounce() {
-  if (firmSearchTimer != null) {
-    clearTimeout(firmSearchTimer);
-    firmSearchTimer = null;
-  }
 }
 
 async function runFirmSearch() {
@@ -525,25 +516,7 @@ async function runFirmSearch() {
   }
 }
 
-function scheduleFirmSearch() {
-  cancelFirmSearchDebounce();
-  const q = firmSearchInput.value.trim();
-  if (!q) {
-    firmSearchRequestId += 1;
-    clearFirmSearchResults();
-    return;
-  }
-  firmSearchTimer = setTimeout(() => {
-    firmSearchTimer = null;
-    runFirmSearch().catch((error) => {
-      firmSearchStatus.hidden = false;
-      firmSearchStatus.textContent = error.message;
-    });
-  }, FIRM_SEARCH_DEBOUNCE_MS);
-}
-
 function triggerFirmSearchNow() {
-  cancelFirmSearchDebounce();
   runFirmSearch().catch((error) => {
     firmSearchStatus.hidden = false;
     firmSearchStatus.textContent = error.message;
@@ -551,7 +524,6 @@ function triggerFirmSearchNow() {
 }
 
 function resetCreateOrderForm() {
-  cancelFirmSearchDebounce();
   firmSearchRequestId += 1;
   createOrderForm.reset();
   selectedFirm = null;
@@ -1079,9 +1051,6 @@ editTicketForm.addEventListener('submit', async (event) => {
 firmSearchBtn.addEventListener('click', () => {
   triggerFirmSearchNow();
 });
-firmSearchInput.addEventListener('input', () => {
-  scheduleFirmSearch();
-});
 firmSearchInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
@@ -1101,6 +1070,7 @@ createOrderForm.addEventListener('submit', async (event) => {
       client_phone: orderClientPhoneInput.value.trim(),
       additional_phone: orderAdditionalPhoneInput.value.trim() || undefined,
       ticket_id: ticket?.id,
+      client_id: ticket?.client_id ?? ticket?.client?.id,
     };
 
     if (selectedFirm) {
@@ -1108,6 +1078,7 @@ createOrderForm.addEventListener('submit', async (event) => {
       payload.client_type = selectedFirm.type || undefined;
       payload.record_id = selectedFirm.recordId ?? undefined;
       payload.firm_message = selectedFirm.message || undefined;
+      payload.firm_phone = selectedFirm.phone || undefined;
     } else {
       payload.client_name = ticket?.client?.name || undefined;
     }
