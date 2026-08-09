@@ -27,7 +27,7 @@ function parseAdminTableHtml(html) {
   }
 
   const tableHtml = tableMatch[1];
-  const headerCells = [...tableHtml.matchAll(/<thead[\s\S]*?<tr[\s\S]*?>([\s\S]*?)<\/tr>/i)];
+  const headerCells = [...tableHtml.matchAll(/<thead[\s\S]*?<tr[\s\S]*?>([\s\S]*?)<\/tr>/gi)];
   let headers = [];
   if (headerCells[0]) {
     headers = [...headerCells[0][1].matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)].map((m) =>

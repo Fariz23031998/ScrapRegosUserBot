@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
+const { TELEGRAM_HTML, bold, field } = require('./telegram-html');
 
 let outboundBot = null;
 
@@ -21,13 +22,13 @@ function formatOrderPaidMessage(order, { provider } = {}) {
   const currency = order.currency || 'UZS';
   const providerLabel = provider || order.payment_provider || 'unknown';
   return [
-    'Заказ оплачен.',
-    `ID: ${order.id}`,
+    `✅ ${bold('Заказ оплачен.')}`,
+    field('🆔', 'ID', order.id),
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
     formatOrderTicketLine(order),
-    `Сумма: ${order.amount} ${currency}`,
-    `Провайдер: ${providerLabel}`,
+    field('💳', 'Сумма', `${order.amount} ${currency}`),
+    field('🏦', 'Провайдер', providerLabel),
   ]
     .filter(Boolean)
     .join('\n');
@@ -48,7 +49,7 @@ async function notifyCreatorOrderPaid(order, { provider, db } = {}) {
   const detailedOrder = db ? enrichOrderParties(db, order) : order;
   const text = formatOrderPaidMessage(detailedOrder, { provider });
   try {
-    await bot.sendMessage(telegramId, text);
+    await bot.sendMessage(telegramId, text, TELEGRAM_HTML);
     return { sent: true };
   } catch (err) {
     console.error(

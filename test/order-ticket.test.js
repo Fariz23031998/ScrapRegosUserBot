@@ -51,7 +51,7 @@ describe('order ticket helpers', () => {
     assert.equal(formatTicketAdminUrl(null), null);
     assert.equal(
       formatOrderTicketLine({ ticket_id: 123 }),
-      'Тикет: http://localhost:3000/bot-admin/tickets/123'
+      '🎫 <a href="http://localhost:3000/bot-admin/tickets/123">Тикет #123</a>'
     );
     assert.equal(formatOrderTicketLine({}), null);
     assert.equal(formatOrderTicketLine({ ticket_id: null }), null);

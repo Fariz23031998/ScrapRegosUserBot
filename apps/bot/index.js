@@ -30,6 +30,7 @@ const { registerPricesHandlers } = require('../../src/bot/prices-bot');
 const { formatUnpaidOrdersBlock } = require('../../src/bot/bot-format');
 const { enrichOrderParties } = require('../../src/bot/order-parties');
 const { sendChatActionSafe } = require('../../src/bot/telegram-safe');
+const { TELEGRAM_HTML, withHtml } = require('../../src/bot/telegram-html');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -167,7 +168,7 @@ async function sendCustomerPaymentLinks(chatId, phone) {
     await sendBotMessage(chatId, CUSTOMER_NO_ORDERS, REMOVE_KEYBOARD);
     return;
   }
-  await sendBotMessage(chatId, unpaidBlock, REMOVE_KEYBOARD);
+  await sendBotMessage(chatId, unpaidBlock, withHtml(REMOVE_KEYBOARD));
 }
 
 async function sendEmployeeStartMessage(chatId, telegramId) {
@@ -183,9 +184,13 @@ async function sendSearchResultWithAction(chatId, telegramId, entry, { appendUnp
   for (let i = 0; i < chunks.length; i += 1) {
     const isLast = i === chunks.length - 1;
     if (isLast) {
-      await bot.sendMessage(chatId, chunks[i], makeServiceButtonForResult(entry, telegramId, db));
+      await bot.sendMessage(
+        chatId,
+        chunks[i],
+        withHtml(makeServiceButtonForResult(entry, telegramId, db))
+      );
     } else {
-      await bot.sendMessage(chatId, chunks[i]);
+      await bot.sendMessage(chatId, chunks[i], TELEGRAM_HTML);
     }
   }
 

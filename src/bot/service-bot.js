@@ -11,6 +11,7 @@ const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
+const { TELEGRAM_HTML, bold, field, link, withHtml } = require('./telegram-html');
 
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const ORDER_ACCESS_DENIED = 'Сначала пройдите регистрацию: отправьте свой номер телефона.';
@@ -111,21 +112,19 @@ function isCancelCommand(text) {
 }
 
 function formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, extraLine = '') {
-  const link = paymentPageUrl || paymentUrl;
+  const href = paymentPageUrl || paymentUrl;
   return [
-    'Заказ создан.',
-    `ID: ${order.id}`,
+    `🆕 ${bold('Заказ создан.')}`,
+    field('🆔', 'ID', order.id),
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
     formatOrderTicketLine(order),
-    `Сумма: ${order.amount} UZS`,
+    field('💳', 'Сумма', `${order.amount} UZS`),
     extraLine,
     '',
-    link
-      ? paymentPageUrl
-        ? `Страница оплаты: ${link}`
-        : `Ссылка для оплаты: ${link}`
-      : 'Ссылка на оплату недоступна: задайте PUBLIC_BASE_URL.',
+    href
+      ? `🔗 ${link(href, paymentPageUrl ? 'Страница оплаты' : 'Ссылка для оплаты')}`
+      : '⚠️ Ссылка на оплату недоступна: задайте PUBLIC_BASE_URL.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -153,15 +152,19 @@ function createOrderFromContext(db, botUser, ctx, additionalPhone) {
 function formatCustomerCreatedOrderMessage(order) {
   const paymentPageUrl = formatPaymentPageUrl(order.id);
   return [
-    'Создана ссылка для оплаты услуги.',
-    `ID: ${order.id}`,
+    `🆕 ${bold('Создана ссылка для оплаты услуги.')}`,
+    field('🆔', 'ID', order.id),
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
     formatOrderTicketLine(order),
-    `Сумма: ${order.amount} ${order.currency || 'UZS'}`,
+    field('💳', 'Сумма', `${order.amount} ${order.currency || 'UZS'}`),
     '',
-    paymentPageUrl ? `Страница оплаты: ${paymentPageUrl}` : 'Ссылка на оплату доступна после открытия заказа.',
-  ].filter(Boolean).join('\n');
+    paymentPageUrl
+      ? `🔗 ${link(paymentPageUrl, 'Страница оплаты')}`
+      : 'Ссылка на оплату доступна после открытия заказа.',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 async function afterOrderCreated(bot, db, botUser, order, paymentPageUrl) {
@@ -195,7 +198,7 @@ async function notifyCustomersAboutOrder(bot, db, botUser, order) {
   const text = formatCustomerCreatedOrderMessage(order);
   for (const u of byTelegramId.values()) {
     try {
-      await bot.sendMessage(u.telegram_id, text);
+      await bot.sendMessage(u.telegram_id, text, TELEGRAM_HTML);
     } catch (err) {
       // Bot API cannot DM users who never started the bot / deleted the chat.
       console.warn(
@@ -241,7 +244,7 @@ function registerServiceHandlers(bot, { db, getBotUser }) {
       await bot.sendMessage(
         chatId,
         formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl),
-        menuAfterOrderKeyboard()
+        withHtml(menuAfterOrderKeyboard())
       );
       await afterOrderCreated(bot, db, botUser, order, paymentPageUrl);
       return;
@@ -304,7 +307,7 @@ async function handleServiceMessage(bot, msg, botUser, db) {
     await bot.sendMessage(
       msg.chat.id,
       formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl),
-      menuAfterOrderKeyboard()
+      withHtml(menuAfterOrderKeyboard())
     );
     await afterOrderCreated(bot, db, botUser, order, paymentPageUrl);
     return true;

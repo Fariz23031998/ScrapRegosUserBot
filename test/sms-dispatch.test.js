@@ -109,6 +109,25 @@ describe('SMS templates', () => {
     );
   });
 
+  it('escapes dynamic MTProto placeholders for HTML parse mode', () => {
+    const url = 'https://example.test/pay?order_id=1&x=<y>';
+    process.env.TELEGRAM_MTPROTO_MESSAGE_TEMPLATE =
+      '<b>Оплата</b>\n<a href="{payment_page_url}">Оплатить</a>';
+    assert.equal(
+      formatPaymentMessage(order, url, PAYMENT_MESSAGE_CHANNELS.MTPROTO),
+      '<b>Оплата</b>\n<a href="https://example.test/pay?order_id=1&amp;x=&lt;y&gt;">Оплатить</a>'
+    );
+    assert.equal(
+      formatPaymentMessage(order, url, PAYMENT_MESSAGE_CHANNELS.GETSMS),
+      DEFAULT_PAYMENT_MESSAGE_TEMPLATE.replace('{amount}', '50 000')
+        .replace('{currency}', 'UZS')
+        .replace('{payment_page_url}', url)
+        .replace('{support_telegram_url}', 'https://t.me/EasyTradesupport_bot')
+        .replace('{website_url}', 'https://rofeev.uz')
+        .replace('{support_phone}', '+998 55 705-00-30')
+    );
+  });
+
   it('falls back SMS gateway and MTProto to GETSMS_MESSAGE_TEMPLATE when unset', () => {
     process.env.GETSMS_MESSAGE_TEMPLATE = 'SHARED:{amount}';
 

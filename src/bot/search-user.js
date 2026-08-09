@@ -19,9 +19,10 @@ const {
   liveGetRposClientById,
   liveGetRposAccountById,
 } = require('../live/portal-search');
+const { bold, field } = require('./telegram-html');
 
 const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000;
-const EXPIRED_MESSAGE = 'Срок технической поддержки истёк';
+const EXPIRED_MESSAGE = `⚠️ ${bold('Срок технической поддержки истёк')}`;
 const PORTAL_ERROR_MESSAGE = 'Ошибка загрузки данных с портала. Попробуйте ещё раз.';
 const TEXT_SEARCH_MIN_LENGTH = 2;
 const TEXT_SEARCH_LIMIT = 20;
@@ -125,97 +126,102 @@ function formatWithExpiry(formatted, dateValue) {
   return `${EXPIRED_MESSAGE}\n\n${formatted}`;
 }
 
-function formatPartner(partner) {
-  return [
-    'Regos',
-    `ID: ${partner.id}`,
-    `Имя: ${partner.name}`,
-    `Правовой статус: ${partner.legal_status || '-'}`,
-    `Телефон: ${partner.phone || '-'}`,
-    `Контакты: ${partner.contacts || '-'}`,
-    `Примечание: ${partner.description || '-'}`,
-    `Модерация: ${partner.moderation_status || '-'}`,
-    `Баланс: ${partner.balance ?? '-'}`,
-    `Зарегистрирован: ${partner.registered_at || '-'}`,
-  ].join('\n');
+function formatPartner(partner, account = null) {
+  const lines = [
+    `🏢 ${bold('Regos')}`,
+    field('🆔', 'ID', partner.id),
+    field('👤', 'Имя', partner.name),
+    field('📋', 'Правовой статус', partner.legal_status || '-'),
+    field('📞', 'Телефон', partner.phone || '-'),
+    field('📇', 'Контакты', partner.contacts || '-'),
+    field('📝', 'Примечание', partner.description || '-'),
+    field('✅', 'Модерация', partner.moderation_status || '-'),
+    field('💰', 'Баланс', partner.balance ?? '-'),
+    field('📅', 'Зарегистрирован', partner.registered_at || '-'),
+  ];
+  if (account) {
+    lines.push(field('📦', 'Тариф', account.tariff || '-'));
+    lines.push(field('📆', 'Оплачено до', account.paid_until || '-'));
+  }
+  return lines.join('\n');
 }
 
 function formatRposClient(client) {
   return [
-    'RPOS',
-    `ID: ${client.id}`,
-    `Имя: ${client.name}`,
-    `Телефон: ${client.phone || '-'}`,
-    `Код: -`,
-    `Создано: ${client.created_at || '-'}`,
-    `Источник: RPOS`,
+    `🖥️ ${bold('RPOS')}`,
+    field('🆔', 'ID', client.id),
+    field('👤', 'Имя', client.name),
+    field('📞', 'Телефон', client.phone || '-'),
+    field('🔑', 'Код', '-'),
+    field('📅', 'Создано', client.created_at || '-'),
+    field('📡', 'Источник', 'RPOS'),
   ].join('\n');
 }
 
 function formatRposAccount(account) {
   return [
-    'RPOS',
-    `ID: ${account.id}`,
-    `Имя: ${account.client_name || '-'}`,
-    `Телефон: -`,
-    `Код: ${account.code || '-'}`,
-    `Создано: ${account.created_at || '-'}`,
-    `Источник: RPOS`,
+    `🖥️ ${bold('RPOS')}`,
+    field('🆔', 'ID', account.id),
+    field('👤', 'Имя', account.client_name || '-'),
+    field('📞', 'Телефон', '-'),
+    field('🔑', 'Код', account.code || '-'),
+    field('📅', 'Создано', account.created_at || '-'),
+    field('📡', 'Источник', 'RPOS'),
   ].join('\n');
 }
 
 function formatLicense(license) {
   return [
-    'EasyTrade',
-    `ID: ${license.id}`,
-    `Имя: ${license.fio}`,
-    `Телефон: ${license.phone || '-'}`,
-    `Код: ${license.code || '-'}`,
-    `Тип: ${license.type || '-'}`,
-    `Договор: ${license.contract || '-'}`,
-    `Статус: ${license.active || '-'}`,
-    `Создано: ${license.generated || '-'}`,
-    `Поддержка: ${license.support || '-'}`,
-    `Партнёр: ${license.partner || '-'}`,
-    `Телефон партнёра: ${license.partner_phone || '-'}`,
-    `Адрес: ${license.adr || '-'}`,
-    `Примечание: ${license.note || '-'}`,
+    `🧾 ${bold('EasyTrade')}`,
+    field('🆔', 'ID', license.id),
+    field('👤', 'Имя', license.fio),
+    field('📞', 'Телефон', license.phone || '-'),
+    field('🔑', 'Код', license.code || '-'),
+    field('📦', 'Тип', license.type || '-'),
+    field('📄', 'Договор', license.contract || '-'),
+    field('📌', 'Статус', license.active || '-'),
+    field('📅', 'Создано', license.generated || '-'),
+    field('🛠', 'Поддержка', license.support || '-'),
+    field('🤝', 'Партнёр', license.partner || '-'),
+    field('📞', 'Телефон партнёра', license.partner_phone || '-'),
+    field('📍', 'Адрес', license.adr || '-'),
+    field('📝', 'Примечание', license.note || '-'),
   ].join('\n');
 }
 
 function formatVcr1Partner(partner) {
   return [
-    'VCR1',
-    `ID: ${partner.id}`,
-    `Имя: ${partner.name}`,
-    `ИНН/ПИНФЛ: ${partner.inn || '-'}`,
-    `Правовой статус: ${partner.legal_status || '-'}`,
-    `Телефон: ${partner.phone || '-'}`,
-    `Контакты: ${partner.contacts || '-'}`,
-    `Компания: ${partner.company || '-'}`,
-    `Баланс: ${partner.balance ?? '-'}`,
-    `Зарегистрирован: ${partner.registered_at || '-'}`,
+    `📟 ${bold('VCR')}`,
+    field('🆔', 'ID', partner.id),
+    field('👤', 'Имя', partner.name),
+    field('🔢', 'ИНН/ПИНФЛ', partner.inn || '-'),
+    field('📋', 'Правовой статус', partner.legal_status || '-'),
+    field('📞', 'Телефон', partner.phone || '-'),
+    field('📇', 'Контакты', partner.contacts || '-'),
+    field('🏛', 'Компания', partner.company || '-'),
+    field('💰', 'Баланс', partner.balance ?? '-'),
+    field('📅', 'Зарегистрирован', partner.registered_at || '-'),
   ].join('\n');
 }
 
 function formatVcr1License(license, partner = null) {
   return [
-    'VCR1',
-    `ID: ${license.id}`,
-    `Партнёр: ${license.partner || '-'}`,
-    `Баланс: ${partner?.balance ?? '-'}`,
-    `Договор: ${license.contract || '-'}`,
-    `Создано: ${license.created_at || '-'}`,
-    `Статус: ${license.status || '-'}`,
-    `Фискальный модуль: ${license.fm || '-'}`,
-    `Серийный номер: ${license.serial || '-'}`,
-    `Лицензия: ${license.license || '-'}`,
-    `FDA: ${license.fda_version || '-'}`,
-    `Дата сборки: ${license.app_build_time || '-'}`,
-    `Версия БД: ${license.db_version || '-'}`,
-    `Последний чек: ${license.last_receipt_date || '-'}`,
-    `Последняя попытка проверки: ${license.last_check_attempt || '-'}`,
-    `Последняя синхронизация: ${license.last_sync || '-'}`,
+    `📟 ${bold('VCR')}`,
+    field('🆔', 'ID', license.id),
+    field('🤝', 'Партнёр', license.partner || '-'),
+    field('💰', 'Баланс', partner?.balance ?? '-'),
+    field('📄', 'Договор', license.contract || '-'),
+    field('📅', 'Создано', license.created_at || '-'),
+    field('📌', 'Статус', license.status || '-'),
+    field('🖨', 'Фискальный модуль', license.fm || '-'),
+    field('🔢', 'Серийный номер', license.serial || '-'),
+    field('🔑', 'Лицензия', license.license || '-'),
+    field('📦', 'FDA', license.fda_version || '-'),
+    field('🏗', 'Дата сборки', license.app_build_time || '-'),
+    field('🗄', 'Версия БД', license.db_version || '-'),
+    field('🧾', 'Последний чек', license.last_receipt_date || '-'),
+    field('🔍', 'Последняя попытка проверки', license.last_check_attempt || '-'),
+    field('🔄', 'Последняя синхронизация', license.last_sync || '-'),
   ].join('\n');
 }
 
@@ -335,7 +341,8 @@ function applyTechnicalSupportToMessage(message, phone, db) {
   const label = formatSupportUntilLabel(subscription.ends_at);
   const withoutExpired = stripExpiredSupportBanner(message);
   if (!label) return withoutExpired;
-  return withoutExpired ? `${withoutExpired}\n\n${label}` : label;
+  const badge = `🛠 ${bold(label)}`;
+  return withoutExpired ? `${withoutExpired}\n\n${badge}` : badge;
 }
 
 function buildSearchResult(results, db = null) {
@@ -571,7 +578,10 @@ async function searchUser(query, db = openDb()) {
               phone: partnerByLogin.phone,
               recordId: partnerByLogin.id,
               clientName: partnerByLogin.name,
-              message: formatWithExpiry(formatPartner(partnerByLogin), partnerByLogin.registered_at),
+              message: formatWithExpiry(
+                formatPartner(partnerByLogin, account),
+                partnerByLogin.registered_at
+              ),
             },
           ],
           db

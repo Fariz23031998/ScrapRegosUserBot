@@ -54,7 +54,28 @@ Or set `TELEGRAM_MTPROTO_PHONE` / `TELEGRAM_MTPROTO_TEXT` in `.env`.
 
 Wired into `enqueueOrderPaymentSms` ([`src/sms/sms-queue.js`](../src/sms/sms-queue.js)) as a third branch (`mtproto`). It uses the same recipient as SMS (`additional_phone || client_phone`) and `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE` when set; otherwise it falls back to `GETSMS_MESSAGE_TEMPLATE`, then the built-in default.
 
-Payment DMs send a **random Russian greeting** first (one of ten fixed hellos), wait 1.5s, then send the payment-link text. The CLI test send does not include the greeting unless you pass `withGreeting` in code.
+MTProto payment text is sent with Telegram **HTML** parse mode. You can use tags such as `<b>`, `<i>`, `<u>`, `<code>`, and `<a href="...">` in `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE`. Placeholder values (`{payment_page_url}`, `{amount}`, etc.) are HTML-escaped automatically so URLs with `&` stay valid. Keep GETSMS / SMS gateway templates plain — only the MTProto channel uses HTML.
+
+Example:
+
+```dotenv
+TELEGRAM_MTPROTO_MESSAGE_TEMPLATE="<b>Оплата услуг</b>
+Сумма: {amount} {currency}
+<a href=\"{payment_page_url}\">Оплатить</a>
+Поддержка: {support_telegram_url}"
+```
+
+Payment DMs send a **random greeting** first, wait 1.5s, then send the payment-link text. The greeting stays plain text.
+
+Override greetings with `HELLO_SENTENCES` in `.env` (one sentence per line). If unset or empty, the built-in Russian list is used:
+
+```dotenv
+HELLO_SENTENCES="Здравствуйте!
+Добрый день!
+Приветствую!"
+```
+
+The CLI test send does not include the greeting unless you pass `withGreeting` in code.
 
 The separate **Bot API** customer notify (`notifyCustomersAboutOrder`) only works if that person already started your bot. If they have not, Bot API returns `chat not found` — that is now logged and skipped so SMS/MTProto still run. First contact by phone is the MTProto path’s job.
 

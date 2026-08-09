@@ -1,4 +1,5 @@
 const { normalizePhone } = require('../bot/search-user');
+const { escapeHtml } = require('../bot/telegram-html');
 
 const DEFAULT_PAYMENT_MESSAGE_TEMPLATE = `Оплата услуг ROFEEV TECHNOLOGY
 Ссылка на оплату создана на сумму {amount} {currency}.
@@ -86,7 +87,7 @@ function resolvePaymentMessageTemplate(channel = PAYMENT_MESSAGE_CHANNELS.GETSMS
 }
 
 function formatPaymentMessage(order, paymentPageUrl, channel = PAYMENT_MESSAGE_CHANNELS.GETSMS) {
-  return renderSmsTemplate(resolvePaymentMessageTemplate(channel), {
+  const values = {
     amount: formatSmsAmount(order.amount),
     currency: order.currency || 'UZS',
     payment_page_url: paymentPageUrl,
@@ -94,7 +95,17 @@ function formatPaymentMessage(order, paymentPageUrl, channel = PAYMENT_MESSAGE_C
       process.env.SMS_SUPPORT_TELEGRAM_URL?.trim() || 'https://t.me/EasyTradesupport_bot',
     website_url: process.env.SMS_WEBSITE_URL?.trim() || 'https://rofeev.uz',
     support_phone: process.env.SMS_SUPPORT_PHONE?.trim() || '+998 55 705-00-30',
-  });
+  };
+
+  // MTProto sends with parseMode HTML — escape dynamic values so URLs with & stay valid.
+  // Template markup itself is left unescaped for the author to use <b>, <a>, etc.
+  if (channel === PAYMENT_MESSAGE_CHANNELS.MTPROTO) {
+    for (const key of Object.keys(values)) {
+      values[key] = escapeHtml(values[key]);
+    }
+  }
+
+  return renderSmsTemplate(resolvePaymentMessageTemplate(channel), values);
 }
 
 function formatGetSmsPaymentMessage(order, paymentPageUrl) {

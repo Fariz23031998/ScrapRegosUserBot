@@ -36,7 +36,7 @@ Set in `.env` on the host running **both** `npm run bot` and `npm run server`:
 | `PUBLIC_BASE_URL` | yes | Payment link in SMS, e.g. `https://aserver.tech` |
 | `GETSMS_MESSAGE_TEMPLATE` | no | GETSMS body; also the shared fallback when channel-specific templates are unset |
 | `SMS_GATEWAY_MESSAGE_TEMPLATE` | no | Android WebSocket body (falls back to `GETSMS_MESSAGE_TEMPLATE`) |
-| `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE` | no | MTProto Telegram body (falls back to `GETSMS_MESSAGE_TEMPLATE`) |
+| `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE` | no | MTProto Telegram body (HTML supported; falls back to `GETSMS_MESSAGE_TEMPLATE`) |
 
 When `SMS_GATEWAY_ENABLED=0` or `REDIS_URL` is not set, Android enqueue and the WebSocket gateway are skipped automatically (safe for local development). This does not disable GETSMS; see [`getsms.md`](getsms.md).
 

@@ -12,8 +12,8 @@ const DIRECTION_LABELS = {
 
 const FIRM_TYPE_LABELS = {
   partner: 'Partner',
-  vcr1_partner: 'VCR1',
-  vcr1_license: 'VCR1 лицензия',
+  vcr1_partner: 'VCR',
+  vcr1_license: 'VCR лицензия',
   license: 'Лицензия',
   rpos_client: 'RPOS клиент',
   rpos_account: 'RPOS аккаунт',

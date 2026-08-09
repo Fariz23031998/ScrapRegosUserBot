@@ -2,7 +2,7 @@ const fs = require('fs');
 const { vipClientsPath } = require('../paths');
 
 const DEFAULT_VIP_CLIENTS_PATH = vipClientsPath();
-const VIP_LABEL = '😎 VIP-клиент';
+const VIP_LABEL = '😎 <b>VIP-клиент</b>';
 
 function loadVipClients(filePath = DEFAULT_VIP_CLIENTS_PATH) {
   if (!fs.existsSync(filePath)) {

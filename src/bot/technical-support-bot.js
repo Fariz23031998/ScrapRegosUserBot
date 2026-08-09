@@ -14,6 +14,7 @@ const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
+const { TELEGRAM_HTML, bold, field, link } = require('./telegram-html');
 
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const ACCESS_DENIED = 'Сначала пройдите регистрацию: отправьте свой номер телефона.';
@@ -106,21 +107,19 @@ function durationKeyboard(prices) {
 }
 
 function formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, months) {
-  const link = paymentPageUrl || paymentUrl;
+  const href = paymentPageUrl || paymentUrl;
   return [
-    'Заказ техподдержки создан.',
-    `ID: ${order.id}`,
+    `🆕 ${bold('Заказ техподдержки создан.')}`,
+    field('🆔', 'ID', order.id),
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
     formatOrderTicketLine(order),
-    `Срок: ${durationLabel(months)}`,
-    `Сумма: ${order.amount} UZS`,
+    field('⏱', 'Срок', durationLabel(months)),
+    field('💳', 'Сумма', `${order.amount} UZS`),
     '',
-    link
-      ? paymentPageUrl
-        ? `Страница оплаты: ${link}`
-        : `Ссылка для оплаты: ${link}`
-      : 'Ссылка на оплату недоступна: задайте PUBLIC_BASE_URL.',
+    href
+      ? `🔗 ${link(href, paymentPageUrl ? 'Страница оплаты' : 'Ссылка для оплаты')}`
+      : '⚠️ Ссылка на оплату недоступна: задайте PUBLIC_BASE_URL.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -129,16 +128,16 @@ function formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, months) {
 function formatCustomerCreatedOrderMessage(order, months) {
   const paymentPageUrl = formatPaymentPageUrl(order.id);
   return [
-    'Создана ссылка для оплаты техподдержки.',
-    `ID: ${order.id}`,
+    `🆕 ${bold('Создана ссылка для оплаты техподдержки.')}`,
+    field('🆔', 'ID', order.id),
     ...formatOrderPartyLines(order),
     formatOrderDateTimeLine(order),
     formatOrderTicketLine(order),
-    `Срок: ${durationLabel(months)}`,
-    `Сумма: ${order.amount} ${order.currency || 'UZS'}`,
+    field('⏱', 'Срок', durationLabel(months)),
+    field('💳', 'Сумма', `${order.amount} ${order.currency || 'UZS'}`),
     '',
     paymentPageUrl
-      ? `Страница оплаты: ${paymentPageUrl}`
+      ? `🔗 ${link(paymentPageUrl, 'Страница оплаты')}`
       : 'Ссылка на оплату доступна после открытия заказа.',
   ]
     .filter(Boolean)
@@ -159,7 +158,7 @@ async function notifyCustomersAboutOrder(bot, db, botUser, order, months) {
   const text = formatCustomerCreatedOrderMessage(order, months);
   for (const user of byTelegramId.values()) {
     try {
-      await bot.sendMessage(user.telegram_id, text);
+      await bot.sendMessage(user.telegram_id, text, TELEGRAM_HTML);
     } catch (err) {
       console.warn(
         `[tech-support] Skip Bot API notify for telegram_id=${user.telegram_id}: ${err.message}`
@@ -247,7 +246,8 @@ async function completeSupportPurchase(bot, chatId, telegramId, db, botUser, mon
 
   await bot.sendMessage(
     chatId,
-    formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, price.months)
+    formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, price.months),
+    TELEGRAM_HTML
   );
   try {
     await notifyCustomersAboutOrder(bot, db, botUser, order, price.months);

@@ -2,17 +2,21 @@ const { formatPaymentPageUrl } = require('../payments/payments-api');
 const { formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine, formatOrderDateTimeValue } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
+const { bold, field, link } = require('./telegram-html');
 
 function formatUnpaidOrderLines(order, { includeClientPhone = false } = {}) {
   const paymentPageUrl = formatPaymentPageUrl(order.id);
-  const lines = [`ID: ${order.id}`, ...formatOrderPartyLines(order)];
+  const lines = [field('🆔', 'ID', order.id), ...formatOrderPartyLines(order)];
   const dateLine = formatOrderDateTimeLine(order);
   if (dateLine) lines.push(dateLine);
   const ticketLine = formatOrderTicketLine(order);
   if (ticketLine) lines.push(ticketLine);
-  lines.push(`Сумма: ${order.amount} ${order.currency || 'UZS'}`, `Статус: ${order.status}`);
+  lines.push(
+    field('💳', 'Сумма', `${order.amount} ${order.currency || 'UZS'}`),
+    field('📌', 'Статус', order.status)
+  );
   if (paymentPageUrl) {
-    lines.push(`Страница оплаты: ${paymentPageUrl}`);
+    lines.push(`🔗 ${link(paymentPageUrl, 'Страница оплаты')}`);
   }
   return lines;
 }
@@ -26,12 +30,15 @@ function formatUnpaidOrdersBlock(orders, { includeClientPhone = false } = {}) {
 
   const header =
     orders.length === 1
-      ? 'Есть неоплаченный заказ:'
-      : `Есть неоплаченные заказы (${orders.length}):`;
+      ? `⚠️ ${bold('Есть неоплаченный заказ:')}`
+      : `⚠️ ${bold(`Есть неоплаченные заказы (${orders.length}):`)}`;
 
   const blocks = orders.map((order, index) => {
     const lines = formatUnpaidOrderLines(order, { includeClientPhone });
-    const body = orders.length === 1 ? lines.join('\n') : [`Заказ ${index + 1}:`, ...lines].join('\n');
+    const body =
+      orders.length === 1
+        ? lines.join('\n')
+        : [`📦 ${bold(`Заказ ${index + 1}:`)}`, ...lines].join('\n');
     return body;
   });
 

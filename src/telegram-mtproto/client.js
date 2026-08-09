@@ -6,7 +6,7 @@ const { StringSession } = require('telegram/sessions');
 const { generateRandomLong } = require('telegram/Helpers');
 const { formatPhoneForSms } = require('../sms/sms-message');
 
-const HELLO_SENTENCES = [
+const DEFAULT_HELLO_SENTENCES = Object.freeze([
   'Здравствуйте!',
   'Добрый день!',
   'Здравствуйте, добрый день!',
@@ -17,15 +17,31 @@ const HELLO_SENTENCES = [
   'Приветствую!',
   'Здравствуйте, хорошего дня!',
   'Добрый день, рад(-а) вас видеть!',
-];
+]);
+
+const HELLO_SENTENCES = DEFAULT_HELLO_SENTENCES;
 
 const GREETING_DELAY_MS = 1500;
 
 let sharedClient = null;
 let connectingPromise = null;
 
+function parseHelloSentences(raw) {
+  if (raw == null) return [];
+  return String(raw)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function getHelloSentences() {
+  const fromEnv = parseHelloSentences(process.env.HELLO_SENTENCES);
+  return fromEnv.length ? fromEnv : [...DEFAULT_HELLO_SENTENCES];
+}
+
 function pickRandomHello() {
-  return HELLO_SENTENCES[crypto.randomInt(0, HELLO_SENTENCES.length)];
+  const sentences = getHelloSentences();
+  return sentences[crypto.randomInt(0, sentences.length)];
 }
 
 function delay(ms) {
@@ -164,7 +180,7 @@ function toInputPeerUser(user) {
 }
 
 async function sendTelegramByPhone(
-  { phone, text, withGreeting = false },
+  { phone, text, withGreeting = false, parseMode = 'html' },
   {
     getClientFn = getClient,
     resolveUserByPhoneFn = resolveUserByPhone,
@@ -188,11 +204,15 @@ async function sendTelegramByPhone(
   let greeting = null;
   if (withGreeting) {
     greeting = pickRandomHelloFn();
-    await client.sendMessage(peer, { message: greeting });
+    // Greetings are plain text — disable Markdown/HTML parsing.
+    await client.sendMessage(peer, { message: greeting, parseMode: false });
     await delayFn(greetingDelayMs);
   }
 
-  await client.sendMessage(peer, { message: String(text) });
+  await client.sendMessage(peer, {
+    message: String(text),
+    parseMode: parseMode == null ? false : parseMode,
+  });
 
   const userId = user?.id != null ? String(user.id) : null;
   const result = {
@@ -208,8 +228,11 @@ async function sendTelegramByPhone(
 }
 
 module.exports = {
+  DEFAULT_HELLO_SENTENCES,
   HELLO_SENTENCES,
   GREETING_DELAY_MS,
+  parseHelloSentences,
+  getHelloSentences,
   pickRandomHello,
   getApiCredentials,
   isTelegramMtprotoConfigured,
