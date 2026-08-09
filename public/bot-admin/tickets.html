@@ -135,6 +135,21 @@
       </section>
     </main>
 
+    <div class="modal-overlay" id="ticket-recording-modal" hidden>
+      <div class="modal ticket-recording-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-recording-title">
+        <div class="modal-header">
+          <h3 id="ticket-recording-title">Запись звонка</h3>
+          <button type="button" class="modal-close" id="ticket-recording-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="ticket-recording-modal__ticket" id="ticket-recording-ticket"></p>
+          <audio class="ticket-recording-modal__player" id="ticket-recording-player" controls preload="metadata">
+            Ваш браузер не поддерживает воспроизведение аудио.
+          </audio>
+        </div>
+      </div>
+    </div>
+
     <script src="/bot-admin/admin-common.js"></script>
     <script src="/bot-admin/admin-tickets.js"></script>
   </body>

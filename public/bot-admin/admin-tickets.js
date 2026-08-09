@@ -39,6 +39,9 @@ let ticketEventsReady = false;
 let realtimeTicketsRefreshTimer = null;
 let realtimeTicketsRefreshInFlight = false;
 let realtimeTicketsRefreshPending = false;
+let durationLoadGeneration = 0;
+const recordingDurationCache = new Map();
+let recordingModalTrigger = null;
 
 const searchInput = document.getElementById('ticket-search');
 const searchClearBtn = document.getElementById('search-clear');
@@ -57,6 +60,10 @@ const ticketsSummaryEl = document.getElementById('tickets-summary');
 const activeTicketEl = document.getElementById('active-ticket');
 const ticketsErrorEl = document.getElementById('tickets-error');
 const filtersForm = document.getElementById('ticket-filters');
+const recordingModal = document.getElementById('ticket-recording-modal');
+const recordingModalClose = document.getElementById('ticket-recording-close');
+const recordingModalTicket = document.getElementById('ticket-recording-ticket');
+const recordingPlayer = document.getElementById('ticket-recording-player');
 
 function statusLabel(status) {
   return STATUS_LABELS[status] || status || '—';
@@ -64,6 +71,85 @@ function statusLabel(status) {
 
 function directionLabel(direction) {
   return DIRECTION_LABELS[direction] || direction || '—';
+}
+
+function getRecordingUrl(ticket) {
+  const fields = Array.isArray(ticket?.fields) ? ticket.fields : [];
+  const recordingField = fields.find((field) => {
+    const key = String(field?.key || '').trim().toLowerCase();
+    const name = String(field?.name || '').trim().toLowerCase();
+    return key === 'field_recording_link' || name === 'ссылка на запись';
+  });
+  const value = String(recordingField?.value || '').trim();
+  return /^https?:\/\//i.test(value) ? value : null;
+}
+
+function formatCallDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.round(Number(totalSeconds)));
+  if (!Number.isFinite(seconds)) return '—';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours > 0
+    ? `${hours}:${pad2(minutes)}:${pad2(remainder)}`
+    : `${minutes}:${pad2(remainder)}`;
+}
+
+function setDurationCell(index, duration) {
+  const cell = ticketsWrap.querySelector(`[data-call-duration-index="${index}"]`);
+  if (cell) cell.textContent = formatCallDuration(duration);
+}
+
+function loadVisibleCallDurations() {
+  const generation = ++durationLoadGeneration;
+  tickets.forEach((ticket, index) => {
+    const url = getRecordingUrl(ticket);
+    if (!url) return;
+
+    if (recordingDurationCache.has(url)) {
+      setDurationCell(index, recordingDurationCache.get(url));
+      return;
+    }
+
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    audio.addEventListener(
+      'loadedmetadata',
+      () => {
+        if (!Number.isFinite(audio.duration)) return;
+        recordingDurationCache.set(url, audio.duration);
+        if (generation === durationLoadGeneration) setDurationCell(index, audio.duration);
+        audio.removeAttribute('src');
+        audio.load();
+      },
+      { once: true }
+    );
+    audio.src = url;
+  });
+}
+
+function openRecordingModal(ticket, trigger) {
+  const url = getRecordingUrl(ticket);
+  if (!url) return;
+  recordingModalTrigger = trigger || null;
+  recordingModalTicket.textContent = `Тикет #${ticket.id} — ${ticket.subject || 'Без темы'}`;
+  recordingPlayer.src = url;
+  recordingModal.hidden = false;
+  document.documentElement.classList.add('modal-open');
+  document.body.classList.add('modal-open');
+  recordingModalClose.focus();
+}
+
+function closeRecordingModal() {
+  if (recordingModal.hidden) return;
+  recordingPlayer.pause();
+  recordingPlayer.removeAttribute('src');
+  recordingPlayer.load();
+  recordingModal.hidden = true;
+  document.documentElement.classList.remove('modal-open');
+  document.body.classList.remove('modal-open');
+  recordingModalTrigger?.focus();
+  recordingModalTrigger = null;
 }
 
 function formatUnix(seconds) {
@@ -311,6 +397,8 @@ function renderTicketsTable() {
           <th>Направление</th>
           <th>Ответственный</th>
           <th>Создан</th>
+          <th>Ссылка на запись</th>
+          <th>Длительность звонка</th>
           <th>SLA нарушен</th>
           <th>Оценка</th>
         </tr>
@@ -318,7 +406,7 @@ function renderTicketsTable() {
       <tbody>
         ${tickets
           .map(
-            (ticket) => `
+            (ticket, index) => `
           <tr class="tickets-table__row" data-ticket-id="${escapeHtml(ticket.id)}" tabindex="0">
             <td class="cell-mono" data-label="ID">${escapeHtml(ticket.id)}</td>
             <td data-label="Тема">${escapeHtml(ticket.subject || '—')}</td>
@@ -331,6 +419,12 @@ function renderTicketsTable() {
             <td data-label="Направление">${escapeHtml(directionLabel(ticket.direction))}</td>
             <td data-label="Ответственный">${escapeHtml(userLabel(ticket.responsible_user_id))}</td>
             <td class="cell-nowrap" data-label="Создан">${escapeHtml(formatUnix(ticket.created_date))}</td>
+            <td data-label="Ссылка на запись">${
+              getRecordingUrl(ticket)
+                ? `<button type="button" class="ticket-recording-open" data-recording-index="${index}" aria-label="Воспроизвести запись тикета №${escapeHtml(ticket.id)}">Воспроизвести</button>`
+                : '—'
+            }</td>
+            <td class="cell-mono cell-nowrap" data-label="Длительность звонка" data-call-duration-index="${index}">—</td>
             <td data-label="SLA нарушен">${
               ticket.sla_breached
                 ? '<span class="badge badge--warn">Да</span>'
@@ -346,18 +440,31 @@ function renderTicketsTable() {
   `;
 
   ticketsWrap.querySelectorAll('.tickets-table__row').forEach((row) => {
-    const open = () => {
+    const open = (event) => {
+      if (event?.target.closest('button, a, input, select, textarea')) return;
       const id = Number(row.getAttribute('data-ticket-id'));
       openTicketPage(id);
     };
     row.addEventListener('click', open);
     row.addEventListener('keydown', (event) => {
+      if (event.target.closest('button, a, input, select, textarea')) return;
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        open();
+        open(event);
       }
     });
   });
+
+  ticketsWrap.querySelectorAll('.ticket-recording-open').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const index = Number(button.getAttribute('data-recording-index'));
+      const ticket = tickets[index];
+      if (ticket) openRecordingModal(ticket, button);
+    });
+  });
+
+  loadVisibleCallDurations();
 }
 
 function renderTicketsPagination() {
@@ -634,6 +741,14 @@ bindSearchBox({
     currentPage = 1;
     loadTickets().catch((error) => showError(error.message));
   },
+});
+
+recordingModalClose.addEventListener('click', closeRecordingModal);
+recordingModal.addEventListener('click', (event) => {
+  if (event.target === recordingModal) closeRecordingModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !recordingModal.hidden) closeRecordingModal();
 });
 
 setupLogout();

@@ -1408,6 +1408,43 @@ body.modal-open {
   outline-offset: -2px;
 }
 
+.ticket-recording-open {
+  padding: 6px 10px;
+  border: 1px solid #0f766e;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f766e;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ticket-recording-open:hover,
+.ticket-recording-open:focus-visible {
+  background: #f0fdfa;
+}
+
+.ticket-recording-open:focus-visible {
+  outline: 2px solid #14b8a6;
+  outline-offset: 2px;
+}
+
+.ticket-recording-modal {
+  width: min(100%, 560px);
+}
+
+.ticket-recording-modal__ticket {
+  margin: 0;
+  color: #52606d;
+  font-size: 14px;
+}
+
+.ticket-recording-modal__player {
+  width: 100%;
+}
+
 .ticket-status {
   display: inline-block;
   padding: 4px 10px;
