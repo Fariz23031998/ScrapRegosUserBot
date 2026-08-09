@@ -10,7 +10,7 @@ const {
 const { formatClickUrlSafe } = require('../payments/click');
 const { formatPaymentPageUrl, getDefaultPaymentProvider } = require('../payments/payments-api');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
-const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
+const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require('./telegram-safe');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
@@ -235,6 +235,7 @@ async function completeSupportPurchase(bot, chatId, telegramId, db, botUser, mon
     return;
   }
 
+  await sendChatActionSafe(bot, chatId);
   const { order, paymentUrl, paymentPageUrl } = createSupportOrder(
     db,
     botUser,

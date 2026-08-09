@@ -139,10 +139,79 @@ describe('channel-aware duration totals', () => {
     assert.deepEqual(durationSummary, {
       base: { count: 2, slaBreached: 1, rated: 1 },
       calls: [
-        { id: 1, slaBreached: true, rated: true, hasRecording: false },
-        { id: 2, slaBreached: false, rated: false, hasRecording: true },
+        {
+          id: 1,
+          slaBreached: true,
+          rated: true,
+          hasRecording: false,
+          duration_seconds: null,
+        },
+        {
+          id: 2,
+          slaBreached: false,
+          rated: false,
+          hasRecording: true,
+          duration_seconds: null,
+        },
       ],
     });
+  });
+
+  it('attaches SQL-cached durations to duration_summary calls', () => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const { openDb } = require('../src/db/partners-db');
+    const { upsertTicketRecording } = require('../src/db/ticket-recordings');
+
+    const dbPath = path.join(
+      os.tmpdir(),
+      `duration-summary-cache-${process.pid}-${Date.now()}.db`
+    );
+    const db = openDb(dbPath);
+    try {
+      upsertTicketRecording(db, {
+        ticketId: 2,
+        recordingUrl: 'http://rofeev.7x.uz/recordings/2.wav',
+        durationSeconds: 42.5,
+      });
+      const durationSummary = buildDurationSummary(
+        [
+          {
+            id: 2,
+            channel_id: 'phone',
+            sla_breached: false,
+            rating: null,
+            fields: [
+              {
+                key: 'field_recording_link',
+                value: 'http://rofeev.7x.uz/recordings/2.wav',
+              },
+            ],
+          },
+        ],
+        [{ channel_id: 'phone', interaction_mode: 'call' }],
+        db
+      );
+      assert.deepEqual(durationSummary.calls, [
+        {
+          id: 2,
+          slaBreached: false,
+          rated: false,
+          hasRecording: true,
+          duration_seconds: 42.5,
+        },
+      ]);
+    } finally {
+      db.close();
+      for (const suffix of ['', '-wal', '-shm']) {
+        try {
+          fs.unlinkSync(`${dbPath}${suffix}`);
+        } catch {
+          // ignore
+        }
+      }
+    }
   });
 
   it('uses a strict duration threshold and excludes missing durations', () => {

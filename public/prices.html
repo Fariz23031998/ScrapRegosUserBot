@@ -27,7 +27,10 @@
         <p id="prices-updated" class="prices-updated" hidden></p>
       </header>
 
-      <p id="prices-status" class="prices-status">Загрузка…</p>
+      <p id="prices-status" class="prices-status prices-status--loading">
+        <span class="prices-status__spinner" aria-hidden="true"></span>
+        <span>Загрузка…</span>
+      </p>
       <div id="prices-catalog" class="prices-catalog" hidden></div>
     </main>
 

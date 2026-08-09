@@ -7,7 +7,7 @@ const { formatPaymentPageUrl, getDefaultPaymentProvider } = require('../payments
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { createSupportDraft } = require('./technical-support-bot');
 const { hasRight } = require('../db/user-rights');
-const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
+const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require('./telegram-safe');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
@@ -237,6 +237,7 @@ function registerServiceHandlers(bot, { db, getBotUser }) {
       }
       const { order, paymentUrl, paymentPageUrl } = createOrderFromContext(db, botUser, pending, null);
       clearPending(telegramId);
+      await sendChatActionSafe(bot, chatId);
       await bot.sendMessage(
         chatId,
         formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl),
@@ -299,6 +300,7 @@ async function handleServiceMessage(bot, msg, botUser, db) {
     }
     const { order, paymentUrl, paymentPageUrl } = createOrderFromContext(db, botUser, pending, normalizePhone(text));
     clearPending(msg.from.id);
+    await sendChatActionSafe(bot, msg.chat.id);
     await bot.sendMessage(
       msg.chat.id,
       formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl),

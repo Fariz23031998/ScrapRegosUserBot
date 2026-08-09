@@ -68,8 +68,19 @@ function localized(obj, field) {
 function setStatus(text, isError = false) {
   const el = document.getElementById('prices-status');
   el.hidden = !text;
-  el.textContent = text || '';
-  el.className = `prices-status${isError ? ' error' : ''}`;
+  el.className = `prices-status${isError ? ' error' : ''}${text && !isError ? ' prices-status--loading' : ''}`;
+  if (!text) {
+    el.textContent = '';
+    return;
+  }
+  if (isError) {
+    el.textContent = text;
+    return;
+  }
+  el.innerHTML = `
+    <span class="prices-status__spinner" aria-hidden="true"></span>
+    <span>${escapeHtml(text)}</span>
+  `;
 }
 
 function syncLangButtons() {

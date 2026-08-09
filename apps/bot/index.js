@@ -29,6 +29,7 @@ const {
 const { registerPricesHandlers } = require('../../src/bot/prices-bot');
 const { formatUnpaidOrdersBlock } = require('../../src/bot/bot-format');
 const { enrichOrderParties } = require('../../src/bot/order-parties');
+const { sendChatActionSafe } = require('../../src/bot/telegram-safe');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -364,6 +365,7 @@ async function handleIncomingMessage(msg) {
   }
 
   try {
+    await sendChatActionSafe(bot, msg.chat.id);
     const result = searchUser(text, db);
     if (result.found && Array.isArray(result.results) && result.results.length > 0) {
       const shownUnpaidForPhones = new Set();

@@ -127,5 +127,7 @@ describe('tickets table recording cache UI', () => {
       source,
       /Number\.isFinite\(duration\) && duration > 0 \? duration : null/
     );
+    assert.match(source, /call\.duration_seconds/);
+    assert.match(source, /missing\.push\(call\)/);
   });
 });

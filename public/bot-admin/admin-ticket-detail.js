@@ -581,7 +581,10 @@ function setEditTicketBusy(busy) {
   editTicketForm.querySelectorAll('input, select, textarea, button').forEach((control) => {
     control.disabled = editTicketBusy;
   });
-  editTicketSubmit.textContent = editTicketBusy ? 'Сохранение…' : 'Сохранить';
+  setButtonLoading(editTicketSubmit, editTicketBusy);
+  if (!editTicketBusy) {
+    editTicketSubmit.textContent = 'Сохранить';
+  }
 }
 
 function openEditTicketModal() {
@@ -662,16 +665,24 @@ async function loadUsers() {
   }
 }
 
-function setChatStatus(message, { isError = false } = {}) {
+function setChatStatus(message, { isError = false, loading = false } = {}) {
   if (!message) {
     ticketChatStatusEl.hidden = true;
     ticketChatStatusEl.textContent = '';
-    ticketChatStatusEl.classList.remove('ticket-chat__status--error');
+    ticketChatStatusEl.classList.remove('ticket-chat__status--error', 'ticket-chat__status--loading');
     return;
   }
   ticketChatStatusEl.hidden = false;
-  ticketChatStatusEl.textContent = message;
   ticketChatStatusEl.classList.toggle('ticket-chat__status--error', Boolean(isError));
+  ticketChatStatusEl.classList.toggle('ticket-chat__status--loading', Boolean(loading) && !isError);
+  if (loading && !isError) {
+    ticketChatStatusEl.innerHTML = `
+      <span class="process-spinner process-spinner--inline" aria-hidden="true"></span>
+      <span>${escapeHtml(message)}</span>
+    `;
+  } else {
+    ticketChatStatusEl.textContent = message;
+  }
 }
 
 function setChatComposerEnabled(enabled) {
@@ -831,7 +842,7 @@ async function fetchChatPage(ticketId, { limit = CHAT_PAGE_LIMIT, offset, fromEn
 async function loadChatMessages(ticketId, { silent = false } = {}) {
   const requestId = ++chatRequestId;
   if (!silent) {
-    setChatStatus('Загрузка сообщений…');
+    setChatStatus('Загрузка сообщений…', { loading: true });
   }
   showTicketWorkspace();
   ticketChatRefreshBtn.disabled = true;
@@ -887,7 +898,7 @@ async function loadOlderChatMessages(ticketId) {
   const prevScrollHeight = ticketChatMessagesEl.scrollHeight;
   const prevScrollTop = ticketChatMessagesEl.scrollTop;
   ticketChatLoadOlderBtn.disabled = true;
-  setChatStatus('Загрузка предыдущих сообщений…');
+  setChatStatus('Загрузка предыдущих сообщений…', { loading: true });
 
   try {
     const nextOffset = Math.max(0, chatOffset - CHAT_PAGE_LIMIT);
@@ -952,7 +963,8 @@ async function sendChatMessage(ticketId) {
 
   ticketChatSendBtn.disabled = true;
   ticketChatInput.disabled = true;
-  setChatStatus('Отправка…');
+  setButtonLoading(ticketChatSendBtn, true);
+  setChatStatus('Отправка…', { loading: true });
 
   try {
     await api(`/bot-admin/api/tickets/${ticketId}/messages`, {
@@ -967,6 +979,7 @@ async function sendChatMessage(ticketId) {
   } finally {
     const canSend = Boolean(ticket?.chat_id);
     ticketChatInput.disabled = !canSend;
+    setButtonLoading(ticketChatSendBtn, false);
     ticketChatSendBtn.disabled = !canSend;
     if (canSend) {
       ticketChatInput.focus();
@@ -976,6 +989,10 @@ async function sendChatMessage(ticketId) {
 
 async function loadTicket(ticketId) {
   currentTicketId = ticketId;
+  ticketTitleEl.textContent = 'Тикет';
+  ticketDetailBody.innerHTML = renderLoadingState();
+  ticketChatMessagesEl.innerHTML = renderLoadingState('Загрузка сообщений…');
+  showTicketWorkspace();
   const data = await api(`/bot-admin/api/tickets/${ticketId}`);
   renderTicket(data.ticket);
   await Promise.all([

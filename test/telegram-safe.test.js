@@ -1,13 +1,14 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { answerCallbackQuerySafe, onCallbackQuery } = require('../src/bot/telegram-safe');
+const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require('../src/bot/telegram-safe');
 
 function makeFakeBot(answerImpl) {
   const listeners = [];
   return {
     listeners,
     answerCallbackQuery: answerImpl,
+    sendChatAction: async () => ({ ok: true }),
     on(event, handler) {
       if (event === 'callback_query') listeners.push(handler);
     },
@@ -47,5 +48,23 @@ describe('Telegram handler safety', () => {
     });
 
     await assert.doesNotReject(() => bot.emit({ id: '1', data: 'test:1' }));
+  });
+
+  it('swallows sendChatAction failures', async () => {
+    const bot = {
+      async sendChatAction() {
+        throw new Error('ETELEGRAM: 400 Bad Request: chat not found');
+      },
+    };
+    assert.equal(await sendChatActionSafe(bot, 1), false);
+  });
+
+  it('reports success when sendChatAction works', async () => {
+    const bot = {
+      async sendChatAction() {
+        return { ok: true };
+      },
+    };
+    assert.equal(await sendChatActionSafe(bot, 1, 'typing'), true);
   });
 });

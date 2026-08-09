@@ -46,7 +46,10 @@
         </div>
         <p id="channel-settings-message" class="message" hidden></p>
         <div id="channel-settings-wrap">
-          <p class="empty-state">Загрузка каналов…</p>
+          <div class="loading-state" role="status" aria-live="polite" aria-busy="true">
+            <span class="process-spinner" aria-hidden="true"></span>
+            <p class="loading-state__text">Загрузка каналов…</p>
+          </div>
         </div>
       </section>
     </main>

@@ -150,7 +150,7 @@ function renderOrdersTable() {
 
   ordersWrap.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => {
-      handleOrderAction(button.dataset.action, button.dataset.orderId).catch((error) =>
+      handleOrderAction(button.dataset.action, button.dataset.orderId, button).catch((error) =>
         window.alert(error.message)
       );
     });
@@ -176,6 +176,7 @@ function renderOrdersPagination() {
 }
 
 async function loadOrders() {
+  ordersWrap.innerHTML = renderLoadingState();
   const params = new URLSearchParams({
     page: String(currentPage),
     limit: String(pageLimit),
@@ -196,31 +197,43 @@ async function loadOrders() {
   renderOrdersPagination();
 }
 
-async function handleOrderAction(action, orderId) {
+async function handleOrderAction(action, orderId, button) {
   if (!orderId) return;
 
   if (action === 'delete' && canDeleteOrders) {
     if (!window.confirm('Удалить неоплаченный заказ?')) return;
-    const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/delete`, {
-      method: 'POST',
-    });
-    window.alert(data.message || 'Заказ удалён.');
   } else if (action === 'paid-cash' && canMarkOrdersPaidCash) {
     if (!window.confirm('Отметить заказ как оплаченный наличными?')) return;
-    const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/paid-cash`, {
-      method: 'POST',
-    });
-    window.alert(data.message || 'Заказ закрыт.');
   } else if (action === 'renotify' && canRenotifyOrders) {
-    const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/renotify`, {
-      method: 'POST',
-    });
-    window.alert(data.message || 'Уведомление отправлено.');
+    // proceed
   } else {
     return;
   }
 
-  await loadOrders();
+  setButtonLoading(button, true);
+  try {
+    if (action === 'delete') {
+      const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/delete`, {
+        method: 'POST',
+      });
+      window.alert(data.message || 'Заказ удалён.');
+    } else if (action === 'paid-cash') {
+      const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/paid-cash`, {
+        method: 'POST',
+      });
+      window.alert(data.message || 'Заказ закрыт.');
+    } else if (action === 'renotify') {
+      const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/renotify`, {
+        method: 'POST',
+      });
+      window.alert(data.message || 'Уведомление отправлено.');
+    }
+
+    await loadOrders();
+  } catch (error) {
+    setButtonLoading(button, false);
+    throw error;
+  }
 }
 
 function applyFiltersFromForm() {

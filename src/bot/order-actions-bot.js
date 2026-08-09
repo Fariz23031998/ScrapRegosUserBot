@@ -9,7 +9,7 @@ const {
 const { formatPaymentPageUrl } = require('../payments/payments-api');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { formatUnpaidOrderMessage, buildOrderActionsKeyboard } = require('./bot-format');
-const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
+const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require('./telegram-safe');
 const { enrichOrderParties } = require('./order-parties');
 
 const ORDER_DENIED = 'Нет доступа к неоплаченным заказам.';
@@ -143,6 +143,7 @@ function registerOrderActionHandlers(bot, { db }) {
       return;
     }
 
+    await sendChatActionSafe(bot, chatId);
     const paymentPageUrl = formatPaymentPageUrl(order.id);
     const result = await enqueueOrderPaymentSms(db, order, paymentPageUrl);
     await bot.sendMessage(chatId, formatRenotifyResultMessage(result));

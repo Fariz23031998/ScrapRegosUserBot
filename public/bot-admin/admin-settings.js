@@ -65,6 +65,7 @@ function renderChannelSettings() {
 
 async function loadChannelSettings() {
   showSettingsMessage('');
+  settingsWrap.innerHTML = renderLoadingState('Загрузка каналов…');
   const data = await api('/bot-admin/api/settings/channels');
   channels = data.channels || [];
   renderChannelSettings();
@@ -72,7 +73,7 @@ async function loadChannelSettings() {
 
 async function saveChannelSettings() {
   showSettingsMessage('');
-  saveButton.disabled = true;
+  setButtonLoading(saveButton, true);
   try {
     const modes = new Map(
       [...settingsWrap.querySelectorAll('.channel-mode-select')].map((select) => [
@@ -95,6 +96,7 @@ async function saveChannelSettings() {
   } catch (error) {
     showSettingsMessage(error.message || 'Не удалось сохранить настройки.', 'error');
   } finally {
+    setButtonLoading(saveButton, false);
     saveButton.disabled = !canEditSettings;
   }
 }

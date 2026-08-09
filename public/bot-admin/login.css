@@ -175,6 +175,36 @@ body {
   cursor: wait;
 }
 
+.login-submit.is-loading {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+
+.login-submit.is-loading > * {
+  visibility: hidden;
+}
+
+.login-submit.is-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: login-spin 0.7s linear infinite;
+}
+
+@keyframes login-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .login-footer {
   margin: 16px 0 0;
   text-align: center;

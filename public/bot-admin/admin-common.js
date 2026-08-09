@@ -40,6 +40,26 @@ async function api(path, options = {}) {
   return data;
 }
 
+function renderLoadingState(message = 'Загрузка…') {
+  return `
+    <div class="loading-state" role="status" aria-live="polite" aria-busy="true">
+      <span class="process-spinner" aria-hidden="true"></span>
+      <p class="loading-state__text">${escapeHtml(message)}</p>
+    </div>
+  `;
+}
+
+function setButtonLoading(button, busy) {
+  if (!button) return;
+  button.classList.toggle('is-loading', Boolean(busy));
+  button.disabled = Boolean(busy);
+  if (busy) {
+    button.setAttribute('aria-busy', 'true');
+  } else {
+    button.removeAttribute('aria-busy');
+  }
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -402,7 +422,7 @@ function mountAccountMenu(session) {
       payload.new_password = newPassword;
     }
 
-    submitBtn.disabled = true;
+    setButtonLoading(submitBtn, true);
     try {
       const data = await api('/bot-admin/api/account', {
         method: 'PATCH',
@@ -419,7 +439,7 @@ function mountAccountMenu(session) {
     } catch (error) {
       setAccountCredentialsMessage('error', error.message || 'Не удалось сохранить.');
     } finally {
-      submitBtn.disabled = false;
+      setButtonLoading(submitBtn, false);
     }
   });
 }

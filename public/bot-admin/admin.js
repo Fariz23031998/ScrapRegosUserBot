@@ -370,6 +370,8 @@ function closeModal() {
 }
 
 async function loadUsers() {
+  const wrap = document.getElementById('users-table-wrap');
+  wrap.innerHTML = renderLoadingState();
   const params = new URLSearchParams({
     role: activeRole,
     page: String(currentPage),
@@ -440,11 +442,11 @@ regosMatchBtn.addEventListener('click', async () => {
   }
 });
 
-regosAutoLinkBtn.addEventListener('click', async () => {
+  regosAutoLinkBtn.addEventListener('click', async () => {
   if (!window.confirm('Сопоставить сотрудников с пользователями REGOS по номеру телефона?')) {
     return;
   }
-  regosAutoLinkBtn.disabled = true;
+  setButtonLoading(regosAutoLinkBtn, true);
   try {
     const result = await api('/bot-admin/api/users/regos-auto-link', {
       method: 'POST',
@@ -460,7 +462,7 @@ regosAutoLinkBtn.addEventListener('click', async () => {
   } catch (error) {
     window.alert(error.message);
   } finally {
-    regosAutoLinkBtn.disabled = false;
+    setButtonLoading(regosAutoLinkBtn, false);
   }
 });
 
@@ -488,7 +490,7 @@ document.getElementById('modal-cancel').addEventListener('click', closeModal);
 userForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   modalError.hidden = true;
-  modalSubmit.disabled = true;
+  setButtonLoading(modalSubmit, true);
 
   const formData = new FormData(userForm);
   const regosUserId = String(formData.get('regos_user_id') || '').trim();
@@ -527,7 +529,7 @@ userForm.addEventListener('submit', async (event) => {
     modalError.textContent = error.message;
     modalError.hidden = false;
   } finally {
-    modalSubmit.disabled = false;
+    setButtonLoading(modalSubmit, false);
   }
 });
 
@@ -552,11 +554,13 @@ document.getElementById('users-table-wrap').addEventListener('click', async (eve
 
   if (action === 'delete') {
     if (!window.confirm('Удалить сотрудника?')) return;
+    setButtonLoading(button, true);
     try {
       await api(`/bot-admin/api/users/${userId}`, { method: 'DELETE' });
       await loadUsers();
     } catch (error) {
       window.alert(error.message);
+      setButtonLoading(button, false);
     }
   }
 });

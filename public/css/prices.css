@@ -112,8 +112,33 @@ h1 {
 }
 
 .prices-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
   text-align: center;
   color: var(--text-muted);
+}
+
+.prices-status--loading {
+  min-height: 24px;
+}
+
+.prices-status__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e2e8f0;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: prices-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes prices-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .prices-status.error {

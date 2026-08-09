@@ -11,6 +11,16 @@ async function answerCallbackQuerySafe(bot, queryId, options) {
   }
 }
 
+async function sendChatActionSafe(bot, chatId, action = 'typing') {
+  try {
+    await bot.sendChatAction(chatId, action);
+    return true;
+  } catch (error) {
+    console.warn('[telegram] sendChatAction failed:', error.message);
+    return false;
+  }
+}
+
 // Keeps a single failing update from crashing the long-running bot process.
 function onCallbackQuery(bot, name, handler) {
   bot.on('callback_query', async (query) => {
@@ -24,5 +34,6 @@ function onCallbackQuery(bot, name, handler) {
 
 module.exports = {
   answerCallbackQuerySafe,
+  sendChatActionSafe,
   onCallbackQuery,
 };

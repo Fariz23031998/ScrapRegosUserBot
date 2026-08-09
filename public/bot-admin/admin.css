@@ -340,6 +340,29 @@ body {
   color: #52606d;
 }
 
+.loading-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 32px 16px;
+  text-align: center;
+  min-height: 120px;
+}
+
+.loading-state__text {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.loading-state .process-spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 2.5px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -1092,6 +1115,11 @@ body.modal-open {
   border-top-color: #fff;
   border-radius: 50%;
   animation: process-spin 0.7s linear infinite;
+}
+
+.btn-secondary.is-loading::after {
+  border-color: rgba(31, 41, 51, 0.2);
+  border-top-color: #1f2933;
 }
 
 .firm-search-row {
@@ -1884,8 +1912,21 @@ body:has(.page--ticket-detail) {
   color: #52606d;
 }
 
+.ticket-chat__status--loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .ticket-chat__status--error {
   color: #b91c1c;
+}
+
+.process-spinner--inline {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  flex-shrink: 0;
 }
 
 .ticket-chat__toolbar {

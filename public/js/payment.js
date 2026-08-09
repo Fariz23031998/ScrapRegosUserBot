@@ -132,10 +132,18 @@ function startPaymeStatusPolling(orderId) {
     clearInterval(paymeStatusTimer);
   }
 
+  setStatus('Проверка оплаты…', 'loading');
+
   const poll = async () => {
     try {
+      if (document.visibilityState === 'visible') {
+        setStatus('Проверка оплаты…', 'loading');
+      }
       const result = await checkPaymeStatus(orderId);
       if (!result || result.status !== 'paid') {
+        if (document.visibilityState === 'visible') {
+          setStatus('Ожидаем подтверждение оплаты в Payme…', 'loading');
+        }
         return;
       }
 

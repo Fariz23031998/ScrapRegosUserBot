@@ -8,7 +8,7 @@ const {
   buildPeriodFromDates,
   buildPresetReportPeriod,
 } = require('../db/earnings-report');
-const { answerCallbackQuerySafe, onCallbackQuery } = require('./telegram-safe');
+const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require('./telegram-safe');
 
 const REPORT_DENIED = 'Нет доступа к отчёту.';
 const REPORT_EMPTY = 'За выбранный период операций не найдено.';
@@ -66,6 +66,7 @@ function isCancelCommand(text) {
 }
 
 async function sendReport(bot, chatId, db, { scopeLabel, queryFilters, period, filenamePrefix }) {
+  await sendChatActionSafe(bot, chatId);
   const summary = getEarningsSummary(db, queryFilters);
   if (!summary.count) {
     await bot.sendMessage(chatId, REPORT_EMPTY);
@@ -80,6 +81,7 @@ async function sendReport(bot, chatId, db, { scopeLabel, queryFilters, period, f
 
   await bot.sendMessage(chatId, text);
 
+  await sendChatActionSafe(bot, chatId, 'upload_document');
   const buffer = await buildEarningsExcel(summary.rows);
   const filename = `${filenamePrefix}-${period.label.replace(/\s+/g, '_')}.xlsx`;
   await bot.sendDocument(

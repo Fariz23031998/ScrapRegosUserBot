@@ -44,6 +44,7 @@ const {
 } = require('./ticket-local-enrichment');
 const {
   getTicketRecording,
+  getTicketRecordingsByIds,
   upsertTicketRecording,
 } = require('../db/ticket-recordings');
 const {
@@ -394,7 +395,7 @@ async function loadActiveTicketForRequest(db, req) {
   };
 }
 
-function buildDurationSummary(tickets, channelSettings) {
+function buildDurationSummary(tickets, channelSettings, db = null) {
   const callChannelIds = new Set(
     (channelSettings || [])
       .filter((setting) => setting.interaction_mode === 'call')
@@ -402,6 +403,12 @@ function buildDurationSummary(tickets, channelSettings) {
   );
   const messageTickets = [];
   const calls = [];
+  const recordingsById = db
+    ? getTicketRecordingsByIds(
+        db,
+        (tickets || []).map((ticket) => ticket?.id)
+      )
+    : new Map();
 
   for (const ticket of tickets || []) {
     const channelId = ticket?.channel_id == null ? '' : String(ticket.channel_id);
@@ -409,11 +416,18 @@ function buildDurationSummary(tickets, channelSettings) {
       messageTickets.push(ticket);
       continue;
     }
+    const ticketId = Number(ticket?.id);
+    const recording =
+      Number.isInteger(ticketId) && ticketId > 0 ? recordingsById.get(ticketId) : null;
+    const cachedDuration = Number(recording?.duration_seconds);
+    const durationSeconds =
+      Number.isFinite(cachedDuration) && cachedDuration > 0 ? cachedDuration : null;
     calls.push({
       id: ticket.id,
       slaBreached: Boolean(ticket.sla_breached),
       rated: ticket.rating != null,
-      hasRecording: Boolean(getTicketRecordingUrl(ticket)),
+      hasRecording: Boolean(getTicketRecordingUrl(ticket) || recording?.recording_url),
+      duration_seconds: durationSeconds,
     });
   }
 
@@ -1623,7 +1637,7 @@ function createBotAdminRouter(db) {
 
       const summary = summarizeTickets(tickets);
       const durationSummary = durationFilterActive
-        ? buildDurationSummary(tickets, listRegosChannelSettings(db))
+        ? buildDurationSummary(tickets, listRegosChannelSettings(db), db)
         : null;
       if (durationSummary) {
         tickets.forEach(cacheTicketRecordingUrl);

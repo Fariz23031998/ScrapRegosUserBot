@@ -76,6 +76,8 @@ function renderPricesForm(prices, { canEdit = true } = {}) {
 }
 
 async function loadPrices(canEdit = true) {
+  const grid = document.getElementById('prices-grid');
+  grid.innerHTML = renderLoadingState();
   const data = await api('/bot-admin/api/technical-support/prices');
   renderPricesForm(data.prices || [], { canEdit });
 }
@@ -94,6 +96,8 @@ async function savePrices(event) {
     prices[months] = amount;
   }
 
+  const submitBtn = document.getElementById('prices-submit');
+  setButtonLoading(submitBtn, true);
   try {
     const data = await api('/bot-admin/api/technical-support/prices', {
       method: 'PUT',
@@ -103,6 +107,8 @@ async function savePrices(event) {
     showPricesMessage('Цены сохранены.');
   } catch (error) {
     showPricesMessage(error.message || 'Не удалось сохранить цены.', true);
+  } finally {
+    setButtonLoading(submitBtn, false);
   }
 }
 
@@ -157,6 +163,8 @@ function renderSubscriptions(items) {
 }
 
 async function loadSubscriptions() {
+  const wrap = document.getElementById('subscriptions-wrap');
+  wrap.innerHTML = renderLoadingState();
   const params = new URLSearchParams({
     page: String(state.page),
     limit: String(state.limit),

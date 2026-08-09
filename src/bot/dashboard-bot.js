@@ -6,6 +6,7 @@ const {
   TOKEN_TTL_MS,
 } = require('../admin/dashboard-login-tokens');
 const { getAdminCredentials } = require('../admin/bot-admin-auth');
+const { sendChatActionSafe } = require('./telegram-safe');
 
 const ACCESS_DENIED = 'Доступ запрещён. Нет права на открытие админ-панели.';
 const NOT_CONFIGURED =
@@ -52,6 +53,7 @@ function registerDashboardHandlers(bot, { db, getBotUser, sendRegisterPrompt }) 
     }
 
     try {
+      await sendChatActionSafe(bot, msg.chat.id);
       const { rawToken } = createDashboardLoginToken(db, telegramId);
       const url = buildDashboardLoginUrl(rawToken);
       if (!url) {

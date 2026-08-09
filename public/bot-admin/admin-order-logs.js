@@ -107,6 +107,7 @@ function renderLogsPagination() {
 }
 
 async function loadOrderLogs() {
+  logsWrap.innerHTML = renderLoadingState();
   const params = new URLSearchParams({
     page: String(currentPage),
     limit: String(pageLimit),

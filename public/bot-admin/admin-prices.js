@@ -240,6 +240,8 @@ function fillMeta(catalog) {
 }
 
 async function loadCatalog() {
+  const editor = document.getElementById('categories-editor');
+  editor.innerHTML = renderLoadingState();
   const catalog = await api('/bot-admin/api/prices');
   state.columns = catalog.columns || [];
   state.categories = (catalog.categories || []).map((category) => ({
@@ -264,6 +266,8 @@ async function loadCatalog() {
 
 async function saveCatalog() {
   showMessage('');
+  const saveBtn = document.getElementById('save-catalog-btn');
+  setButtonLoading(saveBtn, true);
   try {
     const catalog = await api('/bot-admin/api/prices', {
       method: 'PUT',
@@ -283,6 +287,8 @@ async function saveCatalog() {
     showMessage('Прайс сохранён.');
   } catch (error) {
     showMessage(error.message || 'Не удалось сохранить прайс.', true);
+  } finally {
+    setButtonLoading(saveBtn, false);
   }
 }
 

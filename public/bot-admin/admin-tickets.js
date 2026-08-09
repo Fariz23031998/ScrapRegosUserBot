@@ -144,7 +144,10 @@ function setCreateTicketBusy(busy) {
   createTicketForm.querySelectorAll('input, select, textarea, button').forEach((control) => {
     control.disabled = createTicketBusy;
   });
-  createTicketSubmit.textContent = createTicketBusy ? 'Создание…' : 'Создать';
+  setButtonLoading(createTicketSubmit, createTicketBusy);
+  if (!createTicketBusy) {
+    createTicketSubmit.textContent = 'Создать';
+  }
 }
 
 function renderSelectedTicketClient() {
@@ -234,7 +237,10 @@ function setClientEditBusy(busy) {
     if (control === clientEditClose || control === clientEditCancel) return;
     control.disabled = clientEditBusy;
   });
-  clientEditSubmit.textContent = clientEditBusy ? 'Сохранение…' : 'Сохранить';
+  setButtonLoading(clientEditSubmit, clientEditBusy);
+  if (!clientEditBusy) {
+    clientEditSubmit.textContent = 'Сохранить';
+  }
 }
 
 function resetClientFirmSearch() {
@@ -574,10 +580,22 @@ async function calculateDurationAwareSummary(durationSummary, threshold, generat
   const calls = Array.isArray(durationSummary?.calls)
     ? durationSummary.calls.filter((call) => call.hasRecording)
     : [];
+  const missing = [];
 
-  await mapWithConcurrency(calls, 4, async (call) => {
+  for (const call of calls) {
+    const cached = Number(call.duration_seconds);
+    if (Number.isFinite(cached) && cached > 0) {
+      durationsByTicketId[String(call.id)] = cached;
+      recordingDurationCache.set(String(call.id), cached);
+      continue;
+    }
+    missing.push(call);
+  }
+
+  // Only probe Audio for calls that are not already in SQL cache.
+  await mapWithConcurrency(missing, 4, async (call) => {
     const duration = await loadRecordingDuration(call.id);
-    if (Number.isFinite(duration)) {
+    if (Number.isFinite(duration) && duration > 0) {
       durationsByTicketId[String(call.id)] = duration;
     }
   });
@@ -1255,9 +1273,12 @@ async function loadChannels({ preferredChannelId = undefined } = {}) {
   }
 }
 
-async function loadTickets() {
+async function loadTickets({ silent = false } = {}) {
   showError('');
   const summaryGeneration = ++summaryCalculationGeneration;
+  if (!silent) {
+    ticketsWrap.innerHTML = renderLoadingState();
+  }
   const params = new URLSearchParams({
     page: String(currentPage),
     limit: String(pageLimit),
@@ -1315,7 +1336,7 @@ async function runRealtimeTicketsRefresh() {
   realtimeTicketsRefreshPending = false;
   realtimeTicketsRefreshInFlight = true;
   try {
-    await loadTickets();
+    await loadTickets({ silent: true });
   } catch (error) {
     console.warn('Не удалось обновить тикеты в реальном времени:', error.message);
   } finally {

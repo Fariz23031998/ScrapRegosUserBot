@@ -21,7 +21,9 @@ async function checkSession() {
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   errorEl.hidden = true;
+  submitBtn.classList.add('is-loading');
   submitBtn.disabled = true;
+  submitBtn.setAttribute('aria-busy', 'true');
 
   const formData = new FormData(form);
   try {
@@ -43,7 +45,9 @@ form.addEventListener('submit', async (event) => {
     errorEl.textContent = error.message;
     errorEl.hidden = false;
   } finally {
+    submitBtn.classList.remove('is-loading');
     submitBtn.disabled = false;
+    submitBtn.removeAttribute('aria-busy');
   }
 });
 
