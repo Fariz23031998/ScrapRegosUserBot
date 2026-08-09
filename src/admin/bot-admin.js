@@ -40,6 +40,7 @@ const {
 const {
   enrichTicketsWithLocalData,
   resolveMissingTicketRecordings,
+  scheduleTicketRecordingDurationBackfill,
 } = require('./ticket-local-enrichment');
 const {
   getTicketRecording,
@@ -1637,7 +1638,8 @@ function createBotAdminRouter(db) {
         db,
         tickets.slice(safeOffset, safeOffset + limit)
       );
-      await resolveMissingTicketRecordings(db, pageTickets);
+      // Keep list responses fast: sync missing URLs only, never download audio here.
+      await resolveMissingTicketRecordings(db, pageTickets, { fetchDuration: false });
       for (const ticket of pageTickets) {
         const href = ticket?.local?.recording?.url;
         if (href) {
@@ -1646,6 +1648,8 @@ function createBotAdminRouter(db) {
           cacheTicketRecordingUrl(ticket);
         }
       }
+      // Warm duration cache after the response path; cooldown skips repeated failures.
+      scheduleTicketRecordingDurationBackfill(db, pageTickets);
 
       return res.json({
         tickets: pageTickets,

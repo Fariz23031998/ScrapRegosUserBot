@@ -4,9 +4,15 @@ function ensureTicketRecordingsTable(db) {
       ticket_id INTEGER PRIMARY KEY,
       recording_url TEXT,
       duration_seconds REAL,
+      duration_checked_at TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+  // Older DBs created before duration_checked_at existed.
+  const cols = db.prepare(`PRAGMA table_info(ticket_recordings)`).all();
+  if (!cols.some((col) => col.name === 'duration_checked_at')) {
+    db.exec('ALTER TABLE ticket_recordings ADD COLUMN duration_checked_at TEXT');
+  }
 }
 
 function requirePositiveTicketId(value) {
@@ -27,6 +33,7 @@ function mapRecordingRow(row) {
     recording_url: row.recording_url || null,
     // Treat 0 / negative as missing so callers can retry a failed parse.
     duration_seconds: Number.isFinite(duration) && duration > 0 ? duration : null,
+    duration_checked_at: row.duration_checked_at || null,
     updated_at: row.updated_at || null,
   };
 }
@@ -37,7 +44,7 @@ function getTicketRecording(db, ticketId) {
   if (!Number.isInteger(id) || id <= 0) return null;
   const row = db
     .prepare(
-      `SELECT ticket_id, recording_url, duration_seconds, updated_at
+      `SELECT ticket_id, recording_url, duration_seconds, duration_checked_at, updated_at
        FROM ticket_recordings
        WHERE ticket_id = ?`
     )
@@ -55,7 +62,7 @@ function getTicketRecordingsByIds(db, ticketIds) {
   const placeholders = ids.map(() => '?').join(', ');
   const rows = db
     .prepare(
-      `SELECT ticket_id, recording_url, duration_seconds, updated_at
+      `SELECT ticket_id, recording_url, duration_seconds, duration_checked_at, updated_at
        FROM ticket_recordings
        WHERE ticket_id IN (${placeholders})`
     )
@@ -69,8 +76,8 @@ function getTicketRecordingsByIds(db, ticketIds) {
 }
 
 /**
- * Partial upsert. When recording URL changes, duration is cleared unless a new
- * duration is provided in the same call.
+ * Partial upsert. When recording URL changes, duration and duration_checked_at
+ * are cleared unless a new duration is provided in the same call.
  */
 function upsertTicketRecording(db, input = {}) {
   ensureTicketRecordingsTable(db);
@@ -81,15 +88,18 @@ function upsertTicketRecording(db, input = {}) {
     || Object.prototype.hasOwnProperty.call(input, 'recording_url');
   const durationProvided = Object.prototype.hasOwnProperty.call(input, 'durationSeconds')
     || Object.prototype.hasOwnProperty.call(input, 'duration_seconds');
+  const markChecked = Boolean(input.markDurationChecked);
 
   let nextUrl = existing?.recording_url ?? null;
   let nextDuration = existing?.duration_seconds ?? null;
+  let nextCheckedAt = existing?.duration_checked_at ?? null;
 
   if (urlProvided) {
     const raw = input.recordingUrl ?? input.recording_url;
     nextUrl = raw == null || raw === '' ? null : String(raw);
     if ((existing?.recording_url || null) !== nextUrl) {
       nextDuration = null;
+      nextCheckedAt = null;
     }
   }
 
@@ -102,14 +112,20 @@ function upsertTicketRecording(db, input = {}) {
         : duration;
   }
 
+  if (markChecked || (durationProvided && nextDuration != null)) {
+    nextCheckedAt = new Date().toISOString();
+  }
+
   db.prepare(
-    `INSERT INTO ticket_recordings (ticket_id, recording_url, duration_seconds, updated_at)
-     VALUES (?, ?, ?, datetime('now'))
+    `INSERT INTO ticket_recordings (
+       ticket_id, recording_url, duration_seconds, duration_checked_at, updated_at
+     ) VALUES (?, ?, ?, ?, datetime('now'))
      ON CONFLICT(ticket_id) DO UPDATE SET
        recording_url = excluded.recording_url,
        duration_seconds = excluded.duration_seconds,
+       duration_checked_at = excluded.duration_checked_at,
        updated_at = datetime('now')`
-  ).run(ticketId, nextUrl, nextDuration);
+  ).run(ticketId, nextUrl, nextDuration, nextCheckedAt);
 
   return getTicketRecording(db, ticketId);
 }
@@ -119,7 +135,7 @@ function listTicketRecordingsMissingDuration(db, { limit = 100 } = {}) {
   const safeLimit = Math.min(500, Math.max(1, Number(limit) || 100));
   const rows = db
     .prepare(
-      `SELECT ticket_id, recording_url, duration_seconds, updated_at
+      `SELECT ticket_id, recording_url, duration_seconds, duration_checked_at, updated_at
        FROM ticket_recordings
        WHERE recording_url IS NOT NULL
          AND recording_url != ''

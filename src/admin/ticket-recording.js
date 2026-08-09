@@ -7,11 +7,22 @@ const {
 const DEFAULT_RECORDING_HOSTS = ['rofeev.7x.uz'];
 const DEFAULT_DURATION_TIMEOUT_MS = 8_000;
 const DEFAULT_DURATION_MAX_BYTES = 8 * 1024 * 1024;
+/** Avoid re-downloading audio on every tickets refresh after a failed parse. */
+const DURATION_RETRY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 /** Zero/negative values are treated as parse failures (common with truncated audio). */
 function isValidRecordingDuration(value) {
   const duration = Number(value);
   return Number.isFinite(duration) && duration > 0;
+}
+
+function shouldAttemptDurationFetch(row, { force = false } = {}) {
+  if (force) return true;
+  if (isValidRecordingDuration(row?.duration_seconds)) return false;
+  if (!row?.duration_checked_at) return true;
+  const checkedAt = Date.parse(row.duration_checked_at);
+  if (!Number.isFinite(checkedAt)) return true;
+  return Date.now() - checkedAt >= DURATION_RETRY_COOLDOWN_MS;
 }
 
 function getAllowedRecordingHosts() {
@@ -131,6 +142,7 @@ async function resolveTicketRecordingCache(
   ticket,
   {
     fetchDuration = true,
+    forceDurationFetch = false,
     fetchDurationFn = fetchRecordingDurationSeconds,
     signal,
     timeoutMs,
@@ -154,13 +166,25 @@ async function resolveTicketRecordingCache(
     ? row.duration_seconds
     : null;
 
-  if (fetchDuration && recordingUrl && durationSeconds == null) {
+  if (
+    fetchDuration &&
+    recordingUrl &&
+    durationSeconds == null &&
+    shouldAttemptDurationFetch(row, { force: forceDurationFetch })
+  ) {
     const duration = await fetchDurationFn(recordingUrl, { signal, timeoutMs });
     if (isValidRecordingDuration(duration)) {
-      row = upsertTicketRecording(db, { ticketId, durationSeconds: duration });
+      row = upsertTicketRecording(db, {
+        ticketId,
+        durationSeconds: duration,
+        markDurationChecked: true,
+      });
       durationSeconds = isValidRecordingDuration(row?.duration_seconds)
         ? row.duration_seconds
         : duration;
+    } else {
+      // Remember the failed attempt so list refresh does not re-download every time.
+      row = upsertTicketRecording(db, { ticketId, markDurationChecked: true });
     }
   }
 
@@ -174,7 +198,9 @@ module.exports = {
   DEFAULT_RECORDING_HOSTS,
   DEFAULT_DURATION_TIMEOUT_MS,
   DEFAULT_DURATION_MAX_BYTES,
+  DURATION_RETRY_COOLDOWN_MS,
   isValidRecordingDuration,
+  shouldAttemptDurationFetch,
   getAllowedRecordingHosts,
   getTicketRecordingUrl,
   fetchRecordingDurationSeconds,

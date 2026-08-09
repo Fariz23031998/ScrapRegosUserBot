@@ -134,6 +134,7 @@ describe('resolveTicketRecordingCache', () => {
     });
     assert.equal(first.duration_seconds, null);
     assert.equal(getTicketRecording(db, 9)?.duration_seconds, null);
+    assert.ok(getTicketRecording(db, 9)?.duration_checked_at);
 
     db.prepare(
       `UPDATE ticket_recordings
@@ -142,10 +143,71 @@ describe('resolveTicketRecordingCache', () => {
     ).run();
     assert.equal(getTicketRecording(db, 9)?.duration_seconds, null);
 
+    // Cooldown blocks immediate retry after a failed parse.
+    let fetchCount = 0;
+    const blocked = await resolveTicketRecordingCache(db, ticket, {
+      fetchDurationFn: async () => {
+        fetchCount += 1;
+        return 15.5;
+      },
+    });
+    assert.equal(fetchCount, 0);
+    assert.equal(blocked.duration_seconds, null);
+
     const retried = await resolveTicketRecordingCache(db, ticket, {
+      forceDurationFetch: true,
       fetchDurationFn: async () => 15.5,
     });
     assert.equal(retried.duration_seconds, 15.5);
+  });
+});
+
+describe('list recording resolve stays off the hot path', () => {
+  let dbPath;
+  let db;
+
+  before(() => {
+    dbPath = makeTempDbPath();
+    db = openDb(dbPath);
+    ensureTicketRecordingsTable(db);
+  });
+
+  after(() => {
+    try {
+      db.close();
+    } catch {
+      // ignore
+    }
+    removeDbFiles(dbPath);
+  });
+
+  beforeEach(() => {
+    db.exec('DELETE FROM ticket_recordings');
+  });
+
+  it('syncs URL without fetching duration when fetchDuration is false', async () => {
+    const ticket = ticketWithRecording(70, 'http://rofeev.7x.uz/fast.wav');
+    const [enriched] = enrichTicketsWithLocalData(db, [ticket]);
+    let fetches = 0;
+    await resolveMissingTicketRecordings(db, [enriched], {
+      fetchDuration: false,
+      resolveCache: async (_db, row, options = {}) => {
+        assert.equal(options.fetchDuration, false);
+        fetches += 1;
+        const { upsertTicketRecording } = require('../src/db/ticket-recordings');
+        upsertTicketRecording(_db, {
+          ticketId: row.id,
+          recordingUrl: 'http://rofeev.7x.uz/fast.wav',
+        });
+        return {
+          recording_url: 'http://rofeev.7x.uz/fast.wav',
+          duration_seconds: null,
+        };
+      },
+    });
+    assert.equal(fetches, 1);
+    assert.equal(getTicketRecording(db, 70)?.recording_url, 'http://rofeev.7x.uz/fast.wav');
+    assert.equal(getTicketRecording(db, 70)?.duration_seconds, null);
   });
 });
 

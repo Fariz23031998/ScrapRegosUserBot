@@ -178,8 +178,8 @@ function enrichTicketsWithLocalData(db, tickets) {
 }
 
 /**
- * Fill missing recording URL / duration for the current page with bounded concurrency.
- * Persists successes to SQLite and updates `ticket.local.recording` in place.
+ * Sync recording URLs (and optionally durations) for the current page.
+ * List requests should pass `fetchDuration: false` so they stay fast and use SQL cache.
  */
 async function resolveMissingTicketRecordings(
   db,
@@ -187,6 +187,7 @@ async function resolveMissingTicketRecordings(
   {
     concurrency = RECORDING_RESOLVE_CONCURRENCY,
     timeoutMs = RECORDING_RESOLVE_TIMEOUT_MS,
+    fetchDuration = true,
     resolveCache = resolveTicketRecordingCache,
   } = {}
 ) {
@@ -195,6 +196,10 @@ async function resolveMissingTicketRecordings(
     const recording = ticket?.local?.recording;
     const hasUrl = Boolean(recording?.url || getTicketRecordingUrl(ticket));
     if (!hasUrl) return false;
+    if (!fetchDuration) {
+      // Cheap path: persist/refresh SQL URL for every recording on the page.
+      return true;
+    }
     const duration = Number(recording?.duration_seconds);
     const hasDuration = Number.isFinite(duration) && duration > 0;
     return !recording?.url || !hasDuration;
@@ -203,7 +208,8 @@ async function resolveMissingTicketRecordings(
 
   await mapWithConcurrency(misses, concurrency, async (ticket) => {
     const duration = Number(ticket?.local?.recording?.duration_seconds);
-    const needsDuration = !(Number.isFinite(duration) && duration > 0);
+    const needsDuration =
+      fetchDuration && !(Number.isFinite(duration) && duration > 0);
     const resolved = await resolveCache(db, ticket, {
       fetchDuration: needsDuration,
       timeoutMs,
@@ -220,9 +226,38 @@ async function resolveMissingTicketRecordings(
   return rows;
 }
 
+/**
+ * Fill missing durations in the background so tickets list responses stay fast.
+ */
+function scheduleTicketRecordingDurationBackfill(
+  db,
+  tickets,
+  {
+    concurrency = RECORDING_RESOLVE_CONCURRENCY,
+    timeoutMs = RECORDING_RESOLVE_TIMEOUT_MS,
+    resolveCache = resolveTicketRecordingCache,
+    schedule = (task) => setImmediate(task),
+  } = {}
+) {
+  const snapshot = Array.isArray(tickets) ? tickets.slice() : [];
+  if (snapshot.length === 0) return;
+
+  schedule(() => {
+    void resolveMissingTicketRecordings(db, snapshot, {
+      concurrency,
+      timeoutMs,
+      fetchDuration: true,
+      resolveCache,
+    }).catch((error) => {
+      console.error('[ticket-recordings] Background duration backfill failed:', error);
+    });
+  });
+}
+
 module.exports = {
   enrichTicketsWithLocalData,
   resolveMissingTicketRecordings,
+  scheduleTicketRecordingDurationBackfill,
   summarizeUnpaidOrders,
   collectTicketPhones,
   ticketClientId,
