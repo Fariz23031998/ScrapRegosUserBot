@@ -230,6 +230,20 @@ async function init() {
   canDeleteOrders = hasPermission(session, 'delete_unpaid_order');
   canMarkOrdersPaidCash = hasPermission(session, 'mark_paid_cash');
   canRenotifyOrders = hasPermission(session, 'renotify_order');
+
+  const params = new URLSearchParams(window.location.search);
+  const q = String(params.get('q') || '').trim();
+  const status = String(params.get('status') || '').trim();
+  if (q) {
+    searchQuery = q;
+    searchInput.value = q;
+  }
+  if (status) {
+    statusFilter = status;
+    statusSelect.value = status;
+  }
+  updateSearchBoxUi(searchInput, searchClearBtn, searchBox, searchQuery);
+
   await loadOrders();
 }
 

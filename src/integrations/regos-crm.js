@@ -125,6 +125,10 @@ async function postChannelGet(request = {}) {
   return postRegos('Channel/Get', request);
 }
 
+async function postClientGet(request = {}) {
+  return postRegos('Client/Get', request);
+}
+
 async function postChatGet(request = {}) {
   return postRegos('Chat/Get', request);
 }
@@ -348,6 +352,171 @@ async function fetchAllChannels({ activeOnly = false, search } = {}) {
   }
 
   return all;
+}
+
+async function searchClients(search, { limit = 20 } = {}) {
+  const query = String(search || '').trim();
+  const safeLimit = Math.min(50, Math.max(1, Number(limit) || 20));
+  const page = await postClientGet({
+    limit: safeLimit,
+    offset: 0,
+    ...(query ? { search: query } : {}),
+  });
+  return page.result;
+}
+
+async function getClientById(clientId) {
+  const id = requirePositiveId(clientId, 'id');
+  const page = await postClientGet({ ids: [id], limit: 1, offset: 0 });
+  const client = (page.result || []).find((row) => Number(row?.id) === id);
+  return client || null;
+}
+
+function normalizeOptionalClientString(value, { max, field } = {}) {
+  if (value == null) return undefined;
+  const text = String(value).trim();
+  if (text.length > max) {
+    throw new RegosCrmError(`Поле ${field} не должно превышать ${max} символов.`, {
+      code: 'BAD_REQUEST',
+      status: 400,
+    });
+  }
+  return text;
+}
+
+async function editClient(clientId, changes = {}) {
+  const request = { id: requirePositiveId(clientId, 'id') };
+  if (Object.hasOwn(changes, 'name')) {
+    request.name = normalizeOptionalClientString(changes.name, { max: 200, field: 'name' });
+  }
+  if (Object.hasOwn(changes, 'phone')) {
+    request.phone = normalizeOptionalClientString(changes.phone, { max: 50, field: 'phone' });
+  }
+  if (Object.hasOwn(changes, 'email')) {
+    request.email = normalizeOptionalClientString(changes.email, { max: 150, field: 'email' });
+  }
+  if (Object.hasOwn(changes, 'description')) {
+    request.description = normalizeOptionalClientString(changes.description, {
+      max: 4000,
+      field: 'description',
+    });
+  }
+  if (Object.hasOwn(changes, 'external_id')) {
+    request.external_id = normalizeOptionalClientString(changes.external_id, {
+      max: 150,
+      field: 'external_id',
+    });
+  }
+
+  const editableKeys = Object.keys(request).filter((key) => key !== 'id');
+  if (editableKeys.length === 0) {
+    return { changed: false, result: null };
+  }
+
+  const data = await postRegosMutation('Client/Edit', request);
+  return { changed: true, result: data.result };
+}
+
+function requirePositiveId(value, field) {
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new RegosCrmError(`Поле ${field} должно быть положительным целым числом.`, {
+      code: 'BAD_REQUEST',
+      status: 400,
+    });
+  }
+  return id;
+}
+
+function normalizeTicketDirection(value, { optional = false } = {}) {
+  if (value == null || value === '') return optional ? undefined : 'Inbound';
+  const direction = String(value);
+  if (!['Inbound', 'Outbound'].includes(direction)) {
+    throw new RegosCrmError('Направление должно быть Inbound или Outbound.', {
+      code: 'BAD_REQUEST',
+      status: 400,
+    });
+  }
+  return direction;
+}
+
+function normalizeTicketSubject(value) {
+  if (value == null) return undefined;
+  const subject = String(value).trim();
+  if (subject.length > 300) {
+    throw new RegosCrmError('Тема тикета не должна превышать 300 символов.', {
+      code: 'BAD_REQUEST',
+      status: 400,
+    });
+  }
+  return subject;
+}
+
+async function createTicket(input = {}) {
+  const request = {
+    client_id: requirePositiveId(input.client_id, 'client_id'),
+    channel_id: requirePositiveId(input.channel_id, 'channel_id'),
+    direction: normalizeTicketDirection(input.direction),
+  };
+  const subject = normalizeTicketSubject(input.subject);
+  if (subject !== undefined) request.subject = subject;
+  if (input.description != null) request.description = String(input.description).trim();
+  if (input.responsible_user_id != null && input.responsible_user_id !== '') {
+    request.responsible_user_id = requirePositiveId(
+      input.responsible_user_id,
+      'responsible_user_id'
+    );
+  }
+
+  const data = await postRegosMutation('Ticket/Add', request);
+  const id = Number(data.result.new_id);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new RegosCrmError('REGOS не вернул идентификатор созданного тикета.', {
+      code: 'BAD_RESPONSE',
+      status: 502,
+    });
+  }
+  return { id, result: data.result };
+}
+
+async function editTicket(ticketId, changes = {}) {
+  const request = { id: requirePositiveId(ticketId, 'id') };
+  if (Object.hasOwn(changes, 'subject')) {
+    request.subject = normalizeTicketSubject(changes.subject);
+  }
+  if (Object.hasOwn(changes, 'description')) {
+    request.description = String(changes.description ?? '').trim();
+  }
+  if (Object.hasOwn(changes, 'direction')) {
+    request.direction = normalizeTicketDirection(changes.direction);
+  }
+  const editableKeys = Object.keys(request).filter((key) => key !== 'id');
+  if (editableKeys.length === 0) return { changed: false, result: null };
+  const data = await postRegosMutation('Ticket/Edit', request);
+  return { changed: true, result: data.result };
+}
+
+async function setTicketStatus(ticketId, status) {
+  const normalized = String(status || '');
+  if (!['Open', 'Closed', 'WaitingClient', 'WaitingStaff'].includes(normalized)) {
+    throw new RegosCrmError('Указан некорректный статус тикета.', {
+      code: 'BAD_REQUEST',
+      status: 400,
+    });
+  }
+  const data = await postRegosMutation('Ticket/SetStatus', {
+    id: requirePositiveId(ticketId, 'id'),
+    status: normalized,
+  });
+  return data.result;
+}
+
+async function setTicketResponsible(ticketId, responsibleUserId) {
+  const data = await postRegosMutation('Ticket/SetResponsible', {
+    id: requirePositiveId(ticketId, 'id'),
+    responsible_user_id: requirePositiveId(responsibleUserId, 'responsible_user_id'),
+  });
+  return data.result;
 }
 
 function mapRegosChannelSummary(channel = {}) {
@@ -623,6 +792,7 @@ module.exports = {
   postTicketGet,
   postUserGet,
   postChannelGet,
+  postClientGet,
   postChatGet,
   postChatMessageGet,
   getTicketMessages,
@@ -633,6 +803,13 @@ module.exports = {
   fetchAllTickets,
   fetchAllUsers,
   fetchAllChannels,
+  searchClients,
+  getClientById,
+  editClient,
+  createTicket,
+  editTicket,
+  setTicketStatus,
+  setTicketResponsible,
   mapRegosChannelSummary,
   collectRegosUserPhones,
   mapRegosUserSummary,

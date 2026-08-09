@@ -37,6 +37,7 @@ const {
   updateTechnicalSupportPrices,
   listTechnicalSupportSubscriptions,
 } = require('../db/technical-support');
+const { enrichTicketsWithLocalData } = require('./ticket-local-enrichment');
 const {
   getServicePricesCatalog,
   replaceServicePricesCatalog,
@@ -52,6 +53,13 @@ const {
   fetchAllTickets,
   fetchAllUsers,
   fetchAllChannels,
+  searchClients,
+  getClientById,
+  editClient,
+  createTicket,
+  editTicket,
+  setTicketStatus,
+  setTicketResponsible,
   mapRegosUserSummary,
   mapRegosChannelSummary,
   matchPhoneToRegosUser,
@@ -72,7 +80,13 @@ const {
 const { botAdminPublicDir } = require('../paths');
 const { sendVersionedHtmlFile } = require('../http/asset-cache');
 const { createOrder, listOrders, getOrderById, deletePendingOrder, markPendingOrderPaidCash } = require('../db/partners-db');
-const { looksLikePhone, normalizePhone, searchFirmAdmin } = require('../bot/search-user');
+const {
+  listLinksByClient,
+  addLink: addClientFirmLink,
+  removeLink: removeClientFirmLink,
+  getLinkById,
+} = require('../db/client-firm-links');
+const { looksLikePhone, normalizePhone, searchFirmAdmin, getFirmCardByTypeAndId } = require('../bot/search-user');
 const {
   parsePositiveAmount,
   formatOrderPaymentMessage,
@@ -723,6 +737,258 @@ function createBotAdminRouter(db) {
     }
   });
 
+  router.get('/api/tickets/clients', requireRight(db, 'tickets_read'), async (req, res) => {
+    try {
+      const query = String(req.query.q || '').trim();
+      if (query.length < 2) {
+        return res.json({ clients: [] });
+      }
+      const clients = await searchClients(query, { limit: 20 });
+      return res.json({
+        clients: clients.map((client) => ({
+          id: client.id,
+          name: client.name || null,
+          phone: client.phone || null,
+          email: client.email || null,
+          external_id: client.external_id || null,
+        })),
+      });
+    } catch (error) {
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      console.error('Search ticket clients error:', error);
+      return res.status(500).json({ message: 'Не удалось найти клиентов REGOS.' });
+    }
+  });
+
+  function mapAdminClient(client) {
+    if (!client) return null;
+    return {
+      id: client.id,
+      name: client.name || null,
+      phone: client.phone || null,
+      email: client.email || null,
+      external_id: client.external_id || null,
+      description: client.description || null,
+    };
+  }
+
+  function mapAdminFirmLink(link) {
+    if (!link) return null;
+    return {
+      id: link.id,
+      firm_type: link.firm_type,
+      firm_record_id: link.firm_record_id,
+      firm_name: link.firm_name,
+      firm_phone: link.firm_phone,
+      firm_message: link.firm_message,
+      created_at: link.created_at,
+    };
+  }
+
+  router.get('/api/clients/:id', requireRight(db, 'tickets_read'), async (req, res) => {
+    try {
+      const client = await getClientById(req.params.id);
+      if (!client) {
+        return res.status(404).json({ message: 'Клиент не найден.' });
+      }
+      const firms = listLinksByClient(db, client.id).map(mapAdminFirmLink);
+      return res.json({ client: mapAdminClient(client), firms });
+    } catch (error) {
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      if (error?.code === 'INVALID_CLIENT_ID') {
+        return res.status(400).json({ message: 'Некорректный ID клиента.' });
+      }
+      console.error('Get client error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить клиента.' });
+    }
+  });
+
+  router.patch(
+    '/api/clients/:id',
+    requireRight(db, 'clients_edit'),
+    express.json(),
+    async (req, res) => {
+      try {
+        const clientId = Number(req.params.id);
+        const current = await getClientById(clientId);
+        if (!current) {
+          return res.status(404).json({ message: 'Клиент не найден.' });
+        }
+
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const changes = {};
+        for (const key of ['name', 'phone', 'email', 'description', 'external_id']) {
+          if (Object.hasOwn(body, key) && String(body[key] ?? '') !== String(current[key] ?? '')) {
+            changes[key] = body[key];
+          }
+        }
+
+        await editClient(clientId, changes);
+        const client = await getClientById(clientId);
+        if (!client) {
+          return res.status(502).json({
+            message: 'REGOS изменил клиента, но не вернул его при повторном чтении.',
+          });
+        }
+        const firms = listLinksByClient(db, client.id).map(mapAdminFirmLink);
+        return res.json({ client: mapAdminClient(client), firms });
+      } catch (error) {
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        console.error('Edit client error:', error);
+        return res.status(500).json({ message: 'Не удалось изменить клиента.' });
+      }
+    }
+  );
+
+  router.post(
+    '/api/clients/:id/firms',
+    requireRight(db, 'clients_link_firm'),
+    express.json(),
+    (req, res) => {
+      try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const link = addClientFirmLink(db, {
+          regos_client_id: req.params.id,
+          type: body.type,
+          recordId: body.recordId,
+          clientName: body.clientName,
+          phone: body.phone,
+          message: body.message,
+        });
+        return res.status(201).json({ firm: mapAdminFirmLink(link) });
+      } catch (error) {
+        if (error?.code === 'DUPLICATE_LINK') {
+          return res.status(409).json({ message: 'Эта фирма уже привязана к клиенту.' });
+        }
+        if (
+          error?.code === 'INVALID_CLIENT_ID' ||
+          error?.code === 'INVALID_FIRM_TYPE' ||
+          error?.code === 'INVALID_FIRM_RECORD_ID'
+        ) {
+          return res.status(400).json({ message: 'Укажите корректные данные фирмы.' });
+        }
+        console.error('Add client firm link error:', error);
+        return res.status(500).json({ message: 'Не удалось привязать фирму.' });
+      }
+    }
+  );
+
+  router.delete(
+    '/api/clients/:id/firms/:linkId',
+    requireRight(db, 'clients_link_firm'),
+    (req, res) => {
+      try {
+        const existing = getLinkById(db, req.params.linkId);
+        if (!existing || Number(existing.regos_client_id) !== Number(req.params.id)) {
+          return res.status(404).json({ message: 'Связь с фирмой не найдена.' });
+        }
+        const removed = removeClientFirmLink(db, req.params.linkId, {
+          regosClientId: req.params.id,
+        });
+        if (!removed) {
+          return res.status(404).json({ message: 'Связь с фирмой не найдена.' });
+        }
+        return res.json({ ok: true });
+      } catch (error) {
+        if (error?.code === 'INVALID_CLIENT_ID') {
+          return res.status(400).json({ message: 'Некорректный ID клиента.' });
+        }
+        console.error('Remove client firm link error:', error);
+        return res.status(500).json({ message: 'Не удалось отвязать фирму.' });
+      }
+    }
+  );
+
+  router.post(
+    '/api/tickets',
+    requireRight(db, 'tickets_create'),
+    express.json(),
+    async (req, res) => {
+      try {
+        const created = await createTicket({
+          client_id: req.body?.client_id,
+          channel_id: req.body?.channel_id,
+          direction: req.body?.direction,
+          subject: req.body?.subject,
+          description: req.body?.description,
+          responsible_user_id: req.body?.responsible_user_id,
+        });
+        const ticket = await findTicketById(created.id);
+        if (!ticket) {
+          return res.status(502).json({
+            message: 'REGOS создал тикет, но не вернул его при повторном чтении.',
+            ticket_id: created.id,
+          });
+        }
+        cacheTicketRecordingUrl(ticket);
+        return res.status(201).json({ ticket });
+      } catch (error) {
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        console.error('Create ticket error:', error);
+        return res.status(500).json({ message: 'Не удалось создать тикет.' });
+      }
+    }
+  );
+
+  router.patch(
+    '/api/tickets/:id',
+    requireRight(db, 'tickets_edit'),
+    express.json(),
+    async (req, res) => {
+      try {
+        const current = await findTicketById(req.params.id);
+        if (!current) {
+          return res.status(404).json({ message: 'Тикет не найден.' });
+        }
+
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const scalarChanges = {};
+        for (const key of ['subject', 'description', 'direction']) {
+          if (Object.hasOwn(body, key) && String(body[key] ?? '') !== String(current[key] ?? '')) {
+            scalarChanges[key] = body[key];
+          }
+        }
+
+        await editTicket(current.id, scalarChanges);
+        if (
+          Object.hasOwn(body, 'responsible_user_id') &&
+          Number(body.responsible_user_id) !== Number(current.responsible_user_id)
+        ) {
+          await setTicketResponsible(current.id, body.responsible_user_id);
+        }
+        if (
+          Object.hasOwn(body, 'status') &&
+          String(body.status || '') !== String(current.status || '')
+        ) {
+          await setTicketStatus(current.id, body.status);
+        }
+
+        const ticket = await findTicketById(current.id);
+        if (!ticket) {
+          return res.status(502).json({
+            message: 'REGOS изменил тикет, но не вернул его при повторном чтении.',
+          });
+        }
+        cacheTicketRecordingUrl(ticket);
+        return res.json({ ticket });
+      } catch (error) {
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        console.error('Edit ticket error:', error);
+        return res.status(500).json({ message: 'Не удалось изменить тикет.' });
+      }
+    }
+  );
+
   router.get('/api/settings/channels', requireRight(db, 'settings_read'), async (_req, res) => {
     try {
       return res.json({ channels: await loadMergedChannelSettings(db) });
@@ -983,6 +1249,11 @@ function createBotAdminRouter(db) {
           }
         }
 
+        const currentResponsibleId = Number(ticket.responsible_user_id);
+        if (!Number.isInteger(currentResponsibleId) || currentResponsibleId <= 0) {
+          await setTicketResponsible(ticket.id, regosUserId);
+        }
+
         const created = await addTicketMessage({
           chatId,
           text,
@@ -1004,27 +1275,52 @@ function createBotAdminRouter(db) {
     }
   );
 
-  router.get('/api/firm-search', requireRight(db, 'tickets_read'), (req, res) => {
-    const q = String(req.query.q || '').trim();
-    if (!q) {
-      return res.status(400).json({ message: 'Укажите поисковый запрос.' });
-    }
-    try {
-      const result = searchFirmAdmin(q, db);
-      if (!result.found) {
-        return res.json({ found: false, results: [] });
+  router.get(
+    '/api/firm-search',
+    requireAnyRight(db, ['tickets_read', 'clients_link_firm']),
+    (req, res) => {
+      const q = String(req.query.q || '').trim();
+      if (!q) {
+        return res.status(400).json({ message: 'Укажите поисковый запрос.' });
       }
-      const results = (result.results || []).map((entry) => ({
-        type: entry.type || null,
-        phone: entry.phone || null,
-        recordId: entry.recordId ?? null,
-        clientName: entry.clientName || null,
-        message: entry.message || null,
-      }));
-      return res.json({ found: results.length > 0, results });
+      try {
+        const result = searchFirmAdmin(q, db);
+        if (!result.found) {
+          return res.json({ found: false, results: [] });
+        }
+        const results = (result.results || []).map((entry) => ({
+          type: entry.type || null,
+          phone: entry.phone || null,
+          recordId: entry.recordId ?? null,
+          clientName: entry.clientName || null,
+          message: entry.message || null,
+        }));
+        return res.json({ found: results.length > 0, results });
+      } catch (error) {
+        console.error('Firm search error:', error);
+        return res.status(500).json({ message: 'Не удалось выполнить поиск.' });
+      }
+    }
+  );
+
+  router.get('/api/firms/:type/:recordId', requireRight(db, 'tickets_read'), (req, res) => {
+    try {
+      const firm = getFirmCardByTypeAndId(db, req.params.type, req.params.recordId);
+      if (!firm) {
+        return res.status(404).json({ message: 'Фирма не найдена.' });
+      }
+      return res.json({
+        firm: {
+          type: firm.type || null,
+          recordId: firm.recordId ?? null,
+          clientName: firm.clientName || null,
+          phone: firm.phone || null,
+          message: firm.message || null,
+        },
+      });
     } catch (error) {
-      console.error('Firm search error:', error);
-      return res.status(500).json({ message: 'Не удалось выполнить поиск.' });
+      console.error('Get firm card error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить фирму.' });
     }
   });
 
@@ -1288,7 +1584,10 @@ function createBotAdminRouter(db) {
         page = totalPages;
       }
       const safeOffset = (page - 1) * limit;
-      const pageTickets = tickets.slice(safeOffset, safeOffset + limit);
+      const pageTickets = enrichTicketsWithLocalData(
+        db,
+        tickets.slice(safeOffset, safeOffset + limit)
+      );
       pageTickets.forEach(cacheTicketRecordingUrl);
 
       return res.json({

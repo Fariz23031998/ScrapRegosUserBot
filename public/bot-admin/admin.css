@@ -348,7 +348,12 @@ body {
 }
 
 .field input[type='text'],
-.field input[type='password'] {
+.field input[type='password'],
+.field input[type='search'],
+.field input[type='tel'],
+.field input[type='number'],
+.field input[type='email'],
+.field textarea {
   font-weight: 400;
 }
 
@@ -360,11 +365,38 @@ label {
 
 input[type='text'],
 input[type='password'],
+input[type='search']:not(.search-box__input),
+input[type='tel'],
+input[type='number'],
+input[type='email'],
+textarea,
 select {
   padding: 10px 12px;
   border: 1px solid #cbd2d9;
   border-radius: 8px;
   font-size: 15px;
+  background: #fff;
+  color: #1f2933;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input[type='text']:focus,
+input[type='password']:focus,
+input[type='search']:not(.search-box__input):focus,
+input[type='tel']:focus,
+input[type='number']:focus,
+input[type='email']:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+input[type='search']::-webkit-search-cancel-button,
+input[type='search']::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .field select {
@@ -373,7 +405,8 @@ select {
   background: #fff;
 }
 
-input[type='text']:read-only {
+input[type='text']:read-only,
+input[type='search']:read-only {
   background: #f1f5f9;
   color: #64748b;
   cursor: default;
@@ -1064,17 +1097,28 @@ body.modal-open {
 .firm-search-row {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
 }
 
 .firm-search-row input {
   flex: 1;
   min-width: 0;
+  font: inherit;
+  font-size: 14px;
+}
+
+.firm-search-row .btn {
+  flex-shrink: 0;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .firm-search-status {
-  margin: 0;
+  margin: 8px 0 0;
   font-size: 13px;
+  font-weight: 400;
   color: #7b8794;
 }
 
@@ -1083,7 +1127,12 @@ body.modal-open {
   gap: 8px;
   max-height: 220px;
   overflow: auto;
+  margin-top: 8px;
   padding: 2px;
+}
+
+.firm-search-results[hidden] {
+  display: none !important;
 }
 
 .firm-search-result {
@@ -1122,10 +1171,15 @@ body.modal-open {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-top: 8px;
   padding: 10px 12px;
   border: 1px solid #a7f3d0;
   border-radius: 8px;
   background: #ecfdf5;
+}
+
+.firm-selected[hidden] {
+  display: none !important;
 }
 
 .firm-selected__body {
@@ -1134,6 +1188,72 @@ body.modal-open {
   font-size: 13px;
   color: #065f46;
   min-width: 0;
+}
+
+.ticket-client-open {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1f2933;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ticket-client-open:hover {
+  border-color: #94a3b8;
+  background: #eff6ff;
+}
+
+.client-edit-firms {
+  display: grid;
+  gap: 16px;
+}
+
+#client-edit-profile:not([hidden]) + .client-edit-firms {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e4e7eb;
+}
+
+.client-edit-firms[hidden],
+#client-edit-profile[hidden],
+#client-edit-submit[hidden] {
+  display: none !important;
+}
+
+.client-linked-firms {
+  display: grid;
+  gap: 8px;
+}
+
+.client-linked-firm {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.client-linked-firm__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.client-linked-firm__meta {
+  color: #52606d;
+  font-size: 12px;
 }
 
 .badge {
@@ -1152,6 +1272,66 @@ body.modal-open {
 .badge--muted {
   background: #e4e7eb;
   color: #52606d;
+}
+
+.ticket-firms-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.ticket-firm-open {
+  display: inline-flex;
+  align-items: center;
+  max-width: 160px;
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #1f2933;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ticket-firm-open:hover {
+  border-color: #94a3b8;
+  background: #eff6ff;
+}
+
+.ticket-unpaid-link {
+  color: #b45309;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ticket-unpaid-link:hover {
+  text-decoration: underline;
+}
+
+.firm-detail-message {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #e4e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.firm-detail-message[hidden],
+#firm-detail-loading[hidden] {
+  display: none !important;
 }
 
 .page--wide {
@@ -1511,6 +1691,26 @@ body.modal-open {
 
 .modal--wide .modal-footer {
   padding: 0 20px 20px;
+}
+
+.ticket-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.ticket-form-grid__full {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 640px) {
+  .ticket-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ticket-form-grid__full {
+    grid-column: auto;
+  }
 }
 
 .ticket-detail__section {

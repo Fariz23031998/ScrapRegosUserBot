@@ -21,7 +21,9 @@ const FIRM_TYPE_LABELS = {
 
 let ticket = null;
 let userNames = {};
+let ticketUsers = [];
 let selectedFirm = null;
+let linkedClientFirms = [];
 let ticketDefaultPhone = '';
 let createOrderBusy = false;
 let chatMessages = [];
@@ -31,6 +33,7 @@ let chatHasOlder = false;
 let chatPollTimer = null;
 let chatRequestId = 0;
 let currentTicketId = null;
+let editTicketBusy = false;
 
 const CHAT_PAGE_LIMIT = 50;
 const CHAT_POLL_MS = 18000;
@@ -68,6 +71,18 @@ const firmSearchBtn = document.getElementById('firm-search-btn');
 const firmSearchStatus = document.getElementById('firm-search-status');
 const firmSearchResults = document.getElementById('firm-search-results');
 const firmSelectedEl = document.getElementById('firm-selected');
+const editTicketToggle = document.getElementById('edit-ticket-toggle');
+const editTicketModal = document.getElementById('edit-ticket-modal');
+const editTicketForm = document.getElementById('edit-ticket-form');
+const editTicketClose = document.getElementById('edit-ticket-close');
+const editTicketCancel = document.getElementById('edit-ticket-cancel');
+const editTicketSubmit = document.getElementById('edit-ticket-submit');
+const editTicketError = document.getElementById('edit-ticket-error');
+const editTicketSubject = document.getElementById('edit-ticket-subject');
+const editTicketDirection = document.getElementById('edit-ticket-direction');
+const editTicketStatus = document.getElementById('edit-ticket-status');
+const editTicketResponsible = document.getElementById('edit-ticket-responsible');
+const editTicketDescription = document.getElementById('edit-ticket-description');
 
 function setTicketView(view) {
   const nextView = view === 'detail' ? 'detail' : 'chat';
@@ -399,6 +414,35 @@ function selectFirm(firm) {
   }
 }
 
+function firmFromLinkedClient(link) {
+  if (!link) return null;
+  return {
+    type: link.firm_type || null,
+    recordId: link.firm_record_id ?? null,
+    clientName: link.firm_name || null,
+    phone: link.firm_phone || null,
+    message: link.firm_message || null,
+  };
+}
+
+function applyDefaultLinkedFirm() {
+  const firm = firmFromLinkedClient(linkedClientFirms[0]);
+  if (!firm) return;
+  selectFirm(firm);
+}
+
+async function loadLinkedClientFirms(clientId) {
+  linkedClientFirms = [];
+  const id = Number(clientId);
+  if (!Number.isInteger(id) || id <= 0) return;
+  try {
+    const data = await api(`/bot-admin/api/clients/${encodeURIComponent(id)}`);
+    linkedClientFirms = Array.isArray(data.firms) ? data.firms : [];
+  } catch {
+    linkedClientFirms = [];
+  }
+}
+
 function renderFirmResults(results) {
   if (!results.length) {
     firmSearchResults.hidden = true;
@@ -527,8 +571,54 @@ function unlockPageScroll() {
   document.body.classList.remove('modal-open');
 }
 
+function showEditTicketError(message) {
+  editTicketError.hidden = !message;
+  editTicketError.textContent = message || '';
+}
+
+function setEditTicketBusy(busy) {
+  editTicketBusy = Boolean(busy);
+  editTicketForm.querySelectorAll('input, select, textarea, button').forEach((control) => {
+    control.disabled = editTicketBusy;
+  });
+  editTicketSubmit.textContent = editTicketBusy ? 'Сохранение…' : 'Сохранить';
+}
+
+function openEditTicketModal() {
+  if (!ticket) return;
+  showEditTicketError('');
+  editTicketSubject.value = ticket.subject || '';
+  editTicketDescription.value = ticket.description || '';
+  editTicketDirection.value = ticket.direction || 'Inbound';
+  editTicketStatus.value = ticket.status || 'Open';
+  editTicketResponsible.innerHTML =
+    '<option value="">Не менять</option>' +
+    ticketUsers
+      .map(
+        (user) =>
+          `<option value="${escapeHtml(user.id)}">${escapeHtml(
+            user.full_name || user.login || `Пользователь #${user.id}`
+          )}</option>`
+      )
+      .join('');
+  editTicketResponsible.value =
+    ticket.responsible_user_id != null ? String(ticket.responsible_user_id) : '';
+  setEditTicketBusy(false);
+  editTicketModal.hidden = false;
+  lockPageScroll();
+  editTicketSubject.focus();
+}
+
+function closeEditTicketModal({ force = false } = {}) {
+  if (editTicketBusy && !force) return;
+  editTicketModal.hidden = true;
+  unlockPageScroll();
+  editTicketToggle.focus();
+}
+
 function openCreateOrderModal() {
   resetCreateOrderForm();
+  applyDefaultLinkedFirm();
   showError('');
   setCreateOrderBusy(false);
   createOrderModal.hidden = false;
@@ -561,12 +651,14 @@ function setCreateOrderBusy(busy) {
 async function loadUsers() {
   try {
     const data = await api('/bot-admin/api/tickets/users');
+    ticketUsers = data.users || [];
     userNames = {};
-    for (const user of data.users || []) {
+    for (const user of ticketUsers) {
       userNames[user.id] = user.full_name || user.login || `Пользователь #${user.id}`;
     }
   } catch {
     userNames = {};
+    ticketUsers = [];
   }
 }
 
@@ -886,10 +978,16 @@ async function loadTicket(ticketId) {
   currentTicketId = ticketId;
   const data = await api(`/bot-admin/api/tickets/${ticketId}`);
   renderTicket(data.ticket);
-  await loadChatMessages(ticketId);
+  await Promise.all([
+    loadChatMessages(ticketId),
+    loadLinkedClientFirms(data.ticket?.client_id ?? data.ticket?.client?.id),
+  ]);
 }
 
 createOrderToggle.addEventListener('click', openCreateOrderModal);
+editTicketToggle.addEventListener('click', openEditTicketModal);
+editTicketCancel.addEventListener('click', closeEditTicketModal);
+editTicketClose.addEventListener('click', closeEditTicketModal);
 createOrderCancel.addEventListener('click', closeCreateOrderModal);
 createOrderClose.addEventListener('click', closeCreateOrderModal);
 ticketViewTabs.querySelectorAll('.role-tab').forEach((tab) => {
@@ -928,8 +1026,36 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !createOrderModal.hidden) {
-    closeCreateOrderModal();
+  if (event.key !== 'Escape') return;
+  if (!editTicketModal.hidden) closeEditTicketModal();
+  else if (!createOrderModal.hidden) closeCreateOrderModal();
+});
+
+editTicketForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!ticket || editTicketBusy) return;
+  showEditTicketError('');
+  setEditTicketBusy(true);
+  const payload = {
+    subject: editTicketSubject.value.trim(),
+    description: editTicketDescription.value.trim(),
+    direction: editTicketDirection.value,
+    status: editTicketStatus.value,
+  };
+  if (editTicketResponsible.value) {
+    payload.responsible_user_id = Number(editTicketResponsible.value);
+  }
+  try {
+    const data = await api(`/bot-admin/api/tickets/${encodeURIComponent(ticket.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    renderTicket(data.ticket);
+    closeEditTicketModal({ force: true });
+    showSuccess('Тикет обновлён.');
+  } catch (error) {
+    showEditTicketError(error.message);
+    setEditTicketBusy(false);
   }
 });
 
@@ -987,7 +1113,8 @@ createOrderForm.addEventListener('submit', async (event) => {
 });
 
 async function init() {
-  await ensureSession({ requiredPermission: 'tickets_read' });
+  const session = await ensureSession({ requiredPermission: 'tickets_read' });
+  editTicketToggle.hidden = !hasPermission(session, 'tickets_edit');
   const ticketId = parseTicketIdFromPath();
   if (!ticketId) {
     showError('Некорректный идентификатор тикета.');

@@ -699,6 +699,89 @@ function searchFirmByText(query, db) {
  * Admin firm search: same as searchUser first, then name/company/text fallback.
  * Does not change Telegram bot search behavior (bots call searchUser only).
  */
+function getFirmCardByTypeAndId(db, type, recordId) {
+  const firmType = String(type || '').trim();
+  const id = String(recordId ?? '').trim();
+  if (!firmType || !id) return null;
+
+  let entry = null;
+
+  if (firmType === 'partner') {
+    const partner = db.prepare('SELECT * FROM partners WHERE CAST(id AS TEXT) = ?').get(id);
+    if (!partner) return null;
+    entry = {
+      type: 'partner',
+      phone: partner.phone,
+      recordId: partner.id,
+      clientName: partner.name,
+      message: formatWithExpiry(formatPartner(partner), partner.registered_at),
+    };
+  } else if (firmType === 'vcr1_partner') {
+    const partner = db.prepare('SELECT * FROM vcr1_partners WHERE CAST(id AS TEXT) = ?').get(id);
+    if (!partner) return null;
+    entry = {
+      type: 'vcr1_partner',
+      phone: partner.phone,
+      recordId: partner.id,
+      clientName: partner.name,
+      message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
+    };
+  } else if (firmType === 'vcr1_license') {
+    const license = db.prepare('SELECT * FROM vcr1_licenses WHERE CAST(id AS TEXT) = ?').get(id);
+    if (!license) return null;
+    const partner = findVcr1PartnerForLicense(db, license, null);
+    entry = {
+      type: 'vcr1_license',
+      phone: partner?.phone || null,
+      recordId: license.id,
+      clientName: license.partner || partner?.name || null,
+      message: formatWithExpiry(
+        formatVcr1License(license, partner),
+        resolveVcr1LicenseSupportDate(db, license, partner?.phone)
+      ),
+    };
+  } else if (firmType === 'license') {
+    const license = db.prepare('SELECT * FROM licenses WHERE CAST(id AS TEXT) = ?').get(id);
+    if (!license) return null;
+    entry = {
+      type: 'license',
+      phone: license.phone,
+      recordId: license.id,
+      clientName: license.fio,
+      message: formatWithExpiry(formatLicense(license), license.generated),
+    };
+  } else if (firmType === 'rpos_client') {
+    const client = db.prepare('SELECT * FROM rpos_clients WHERE CAST(id AS TEXT) = ?').get(id);
+    if (!client) return null;
+    entry = {
+      type: 'rpos_client',
+      phone: client.phone,
+      recordId: client.id,
+      clientName: client.name,
+      message: formatWithExpiry(formatRposClient(client), client.created_at),
+    };
+  } else if (firmType === 'rpos_account') {
+    const account = db.prepare('SELECT * FROM rpos_accounts WHERE CAST(id AS TEXT) = ?').get(id);
+    if (!account) return null;
+    entry = {
+      type: 'rpos_account',
+      phone: null,
+      recordId: account.id,
+      clientName: account.client_name,
+      message: formatWithExpiry(formatRposAccount(account), account.created_at),
+    };
+  } else {
+    return null;
+  }
+
+  const built = buildSearchResult([entry], db);
+  return built.found ? built.results[0] : entry;
+}
+
+/**
+ * Admin firm search: same as searchUser first, then name/company/text fallback.
+ * Does not change Telegram bot search behavior (bots call searchUser only).
+ */
 function searchFirmAdmin(query, db = openDb()) {
   const exact = searchUser(query, db);
   if (exact.found) {
@@ -710,6 +793,7 @@ function searchFirmAdmin(query, db = openDb()) {
 module.exports = {
   searchUser,
   searchFirmAdmin,
+  getFirmCardByTypeAndId,
   isWithinLastThreeMonths,
   parseRegosDate,
   normalizePhone,

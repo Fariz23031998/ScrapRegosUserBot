@@ -241,6 +241,33 @@ describe('Bot admin static assets and API auth', () => {
     }
   });
 
+  it('wires permission-gated ticket create and edit controls', () => {
+    const publicDir = botAdminPublicDir();
+    const ticketsHtml = fs.readFileSync(path.join(publicDir, 'tickets.html'), 'utf8');
+    const detailHtml = fs.readFileSync(path.join(publicDir, 'ticket-detail.html'), 'utf8');
+    const ticketsScript = fs.readFileSync(path.join(publicDir, 'admin-tickets.js'), 'utf8');
+    const detailScript = fs.readFileSync(path.join(publicDir, 'admin-ticket-detail.js'), 'utf8');
+
+    assert.match(ticketsHtml, /id="create-ticket-toggle"[^>]*hidden/);
+    assert.match(ticketsHtml, /id="create-ticket-form"/);
+    assert.match(ticketsHtml, /id="client-edit-modal"/);
+    assert.match(ticketsHtml, /id="client-edit-form"/);
+    assert.match(ticketsHtml, /id="firm-detail-modal"/);
+    assert.match(ticketsScript, /hasPermission\(session, 'tickets_create'\)/);
+    assert.match(ticketsScript, /hasPermission\(session, 'clients_edit'\)/);
+    assert.match(ticketsScript, /hasPermission\(session, 'clients_link_firm'\)/);
+    assert.match(ticketsScript, /renderUnpaidOrdersCell/);
+    assert.match(ticketsScript, /renderTechnicalSupportCell/);
+    assert.match(ticketsScript, /ticket-firm-open/);
+    assert.match(ticketsScript, /method:\s*'POST'/);
+    assert.match(detailHtml, /id="edit-ticket-toggle"[^>]*hidden/);
+    assert.match(detailHtml, /id="edit-ticket-form"/);
+    assert.match(detailScript, /hasPermission\(session, 'tickets_edit'\)/);
+    assert.match(detailScript, /method:\s*'PATCH'/);
+    assert.match(detailScript, /applyDefaultLinkedFirm/);
+    assert.match(detailScript, /loadLinkedClientFirms/);
+  });
+
   it('redirects /bot-admin to the canonical trailing-slash URL', async () => {
     const response = await request(server, '/bot-admin', { headers: { Cookie: sessionCookie } });
     assert.equal(response.statusCode, 302);

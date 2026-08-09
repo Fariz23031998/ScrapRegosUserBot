@@ -184,7 +184,15 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
     return match ? match.split(';')[0] : null;
   }
 
-  function mockRegos({ ticket, addResult, addError, onAdd, onSetParticipants } = {}) {
+  function mockRegos({
+    ticket,
+    addResult,
+    addError,
+    setResponsibleError,
+    onAdd,
+    onSetParticipants,
+    onSetResponsible,
+  } = {}) {
     global.fetch = async (url, options) => {
       const endpoint = String(url).split('/v1/')[1] || '';
       const body = options?.body ? JSON.parse(options.body) : {};
@@ -206,6 +214,30 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
 
       if (endpoint === 'Ticket/SetParticipants') {
         if (onSetParticipants) onSetParticipants(body);
+        return {
+          ok: true,
+          async json() {
+            return { ok: true, result: { row_affected: 1, ids: [ticket?.id].filter(Boolean) } };
+          },
+        };
+      }
+
+      if (endpoint === 'Ticket/SetResponsible') {
+        if (onSetResponsible) onSetResponsible(body);
+        if (setResponsibleError) {
+          return {
+            ok: true,
+            async json() {
+              return {
+                ok: false,
+                result: {
+                  error: setResponsibleError.code || 'PermissionDenied',
+                  description: setResponsibleError.description || 'Not allowed',
+                },
+              };
+            },
+          };
+        }
         return {
           ok: true,
           async json() {
@@ -276,6 +308,7 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
   it('sends a message as the linked Regos user', async () => {
     let addBody = null;
     let setParticipantsBody = null;
+    let setResponsibleCalled = false;
     mockRegos({
       ticket: {
         id: 42,
@@ -291,6 +324,9 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
       },
       onSetParticipants: (body) => {
         setParticipantsBody = body;
+      },
+      onSetResponsible: () => {
+        setResponsibleCalled = true;
       },
     });
 
@@ -319,6 +355,7 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
         participant_user_ids: [27],
         replace_mode: false,
       });
+      assert.equal(setResponsibleCalled, false);
       assert.equal(addBody.author_entity_type, 'User');
       assert.equal(addBody.author_entity_id, 27);
       assert.equal(addBody.text, 'Ответ сотруднику');
@@ -327,8 +364,105 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
     }
   });
 
+  it('assigns the sender as responsible when the ticket has none', async () => {
+    const callOrder = [];
+    let setResponsibleBody = null;
+    mockRegos({
+      ticket: {
+        id: 42,
+        subject: 'Unassigned',
+        status: 'Open',
+        chat_id: 'chat-uuid-42',
+        responsible_user_id: null,
+        participant_user_ids: [],
+      },
+      addResult: { new_id: 'msg-unassigned' },
+      onSetParticipants: () => {
+        callOrder.push('Ticket/SetParticipants');
+      },
+      onSetResponsible: (body) => {
+        callOrder.push('Ticket/SetResponsible');
+        setResponsibleBody = body;
+      },
+      onAdd: () => {
+        callOrder.push('ChatMessage/Add');
+      },
+    });
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const { cookie } = await loginWithTicketsRead(server, { regosUserId: 27 });
+      const res = await postJson(
+        server,
+        '/bot-admin/api/tickets/42/messages',
+        { text: 'Первый ответ' },
+        { Cookie: cookie }
+      );
+      assert.equal(res.statusCode, 201);
+      assert.deepEqual(setResponsibleBody, {
+        id: 42,
+        responsible_user_id: 27,
+      });
+      assert.deepEqual(callOrder, [
+        'Ticket/SetParticipants',
+        'Ticket/SetResponsible',
+        'ChatMessage/Add',
+      ]);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('does not send a message when SetResponsible fails', async () => {
+    let addCalled = false;
+    mockRegos({
+      ticket: {
+        id: 42,
+        subject: 'Unassigned',
+        status: 'Closed',
+        chat_id: 'chat-uuid-42',
+        responsible_user_id: 0,
+        participant_user_ids: [27],
+      },
+      setResponsibleError: {
+        code: 'TicketClosed',
+        description: 'Cannot assign closed ticket',
+      },
+      onAdd: () => {
+        addCalled = true;
+      },
+    });
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const { cookie } = await loginWithTicketsRead(server, { regosUserId: 27 });
+      const res = await postJson(
+        server,
+        '/bot-admin/api/tickets/42/messages',
+        { text: 'Не должно отправиться' },
+        { Cookie: cookie }
+      );
+      assert.equal(res.statusCode, 502);
+      assert.match(JSON.parse(res.body).message, /TicketClosed|Cannot assign/i);
+      assert.equal(addCalled, false);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it('skips SetParticipants when user is already a ticket participant', async () => {
     let setParticipantsCalled = false;
+    let setResponsibleCalled = false;
     mockRegos({
       ticket: {
         id: 42,
@@ -341,6 +475,9 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
       addResult: { new_id: 'msg-42' },
       onSetParticipants: () => {
         setParticipantsCalled = true;
+      },
+      onSetResponsible: () => {
+        setResponsibleCalled = true;
       },
     });
 
@@ -360,6 +497,7 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
       );
       assert.equal(res.statusCode, 201);
       assert.equal(setParticipantsCalled, false);
+      assert.equal(setResponsibleCalled, false);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

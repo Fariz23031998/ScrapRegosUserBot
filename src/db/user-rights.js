@@ -69,6 +69,22 @@ const RIGHTS = {
     column: 'tickets_read',
     label: 'Админ: тикеты — просмотр',
   },
+  tickets_create: {
+    column: 'tickets_create',
+    label: 'Админ: тикеты — создание',
+  },
+  tickets_edit: {
+    column: 'tickets_edit',
+    label: 'Админ: тикеты — изменение',
+  },
+  clients_edit: {
+    column: 'clients_edit',
+    label: 'Админ: клиенты — изменение',
+  },
+  clients_link_firm: {
+    column: 'clients_link_firm',
+    label: 'Админ: клиенты — связь с фирмой',
+  },
   technical_support_read: {
     column: 'technical_support_read',
     label: 'Админ: техподдержка — просмотр',
@@ -123,6 +139,10 @@ const ADMIN_PERMISSION_KEYS = [
   'mark_paid_cash',
   'renotify_order',
   'tickets_read',
+  'tickets_create',
+  'tickets_edit',
+  'clients_edit',
+  'clients_link_firm',
   'technical_support_read',
   'technical_support_create',
   'technical_support_edit',

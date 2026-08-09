@@ -553,6 +553,10 @@ describe('Telegram dashboard authentication', () => {
   it('migrates tickets_read and gates admin sections by actor', async () => {
     const cols = db.prepare('PRAGMA table_info(user_rights)').all();
     assert.ok(cols.some((col) => col.name === 'tickets_read'));
+    assert.ok(cols.some((col) => col.name === 'tickets_create'));
+    assert.ok(cols.some((col) => col.name === 'tickets_edit'));
+    assert.ok(cols.some((col) => col.name === 'clients_edit'));
+    assert.ok(cols.some((col) => col.name === 'clients_link_firm'));
     assert.ok(cols.some((col) => col.name === 'users_read'));
     assert.ok(cols.some((col) => col.name === 'order_logs_read'));
     assert.ok(cols.some((col) => col.name === 'orders_read'));
@@ -618,6 +622,10 @@ describe('Telegram dashboard authentication', () => {
       const passwordSessionBody = JSON.parse(passwordSession.body);
       assert.equal(passwordSessionBody.actor.type, 'password');
       assert.equal(passwordSessionBody.permissions.tickets_read, true);
+      assert.equal(passwordSessionBody.permissions.tickets_create, true);
+      assert.equal(passwordSessionBody.permissions.tickets_edit, true);
+      assert.equal(passwordSessionBody.permissions.clients_edit, true);
+      assert.equal(passwordSessionBody.permissions.clients_link_firm, true);
       assert.equal(passwordSessionBody.permissions.users_read, true);
       assert.equal(passwordSessionBody.permissions.prices_edit, true);
       assert.equal(passwordSessionBody.permissions.settings_read, true);
@@ -626,6 +634,31 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(passwordSessionBody.permissions.mark_paid_cash, true);
       assert.equal(passwordSessionBody.permissions.renotify_order, true);
       assert.equal(passwordSessionBody.permissions.orders_manage, undefined);
+
+      const rightsMeta = await request(server, 'GET', '/bot-admin/rights-meta', {
+        headers: { Cookie: passwordCookie },
+      });
+      const rightsMetaBody = JSON.parse(rightsMeta.body);
+      assert.ok(
+        rightsMetaBody.rights.some(
+          (right) => right.key === 'tickets_create' && /тикеты — создание/.test(right.label)
+        )
+      );
+      assert.ok(
+        rightsMetaBody.rights.some(
+          (right) => right.key === 'tickets_edit' && /тикеты — изменение/.test(right.label)
+        )
+      );
+      assert.ok(
+        rightsMetaBody.rights.some(
+          (right) => right.key === 'clients_edit' && /клиенты — изменение/.test(right.label)
+        )
+      );
+      assert.ok(
+        rightsMetaBody.rights.some(
+          (right) => right.key === 'clients_link_firm' && /связь с фирмой/.test(right.label)
+        )
+      );
 
       const passwordTickets = await request(server, 'GET', '/bot-admin/api/tickets', {
         headers: { Cookie: passwordCookie, Accept: 'application/json' },
@@ -662,6 +695,8 @@ describe('Telegram dashboard authentication', () => {
       const ticketsOnlyBody = JSON.parse(ticketsOnlySession.body);
       assert.equal(ticketsOnlyBody.actor.type, 'telegram');
       assert.equal(ticketsOnlyBody.permissions.tickets_read, true);
+      assert.equal(ticketsOnlyBody.permissions.tickets_create, false);
+      assert.equal(ticketsOnlyBody.permissions.tickets_edit, false);
       assert.equal(ticketsOnlyBody.permissions.users_read, false);
       assert.equal(ticketsOnlyBody.permissions.order_logs_read, false);
       assert.equal(ticketsOnlyBody.permissions.settings_read, false);
@@ -675,6 +710,31 @@ describe('Telegram dashboard authentication', () => {
       });
       assert.notEqual(ticketsOk.statusCode, 403);
       assert.equal(ticketsOk.statusCode, 503);
+
+      const createDenied = await request(server, 'POST', '/bot-admin/api/tickets', {
+        headers: { Cookie: ticketsOnlyCookie, Accept: 'application/json' },
+      });
+      assert.equal(createDenied.statusCode, 403);
+      const editDenied = await request(server, 'PATCH', '/bot-admin/api/tickets/1', {
+        headers: { Cookie: ticketsOnlyCookie, Accept: 'application/json' },
+      });
+      assert.equal(editDenied.statusCode, 403);
+
+      upsertUserRights(db, ticketsOnlyUser.id, { tickets_create: 1, tickets_edit: 0 });
+      const createOnlySession = await request(server, 'GET', '/bot-admin/api/session', {
+        headers: { Cookie: ticketsOnlyCookie },
+      });
+      const createOnlyBody = JSON.parse(createOnlySession.body);
+      assert.equal(createOnlyBody.permissions.tickets_create, true);
+      assert.equal(createOnlyBody.permissions.tickets_edit, false);
+      const createAllowed = await request(server, 'POST', '/bot-admin/api/tickets', {
+        headers: { Cookie: ticketsOnlyCookie, Accept: 'application/json' },
+      });
+      assert.equal(createAllowed.statusCode, 400);
+      const editStillDenied = await request(server, 'PATCH', '/bot-admin/api/tickets/1', {
+        headers: { Cookie: ticketsOnlyCookie, Accept: 'application/json' },
+      });
+      assert.equal(editStillDenied.statusCode, 403);
 
       for (const urlPath of [
         '/bot-admin/api/users',

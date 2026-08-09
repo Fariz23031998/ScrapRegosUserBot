@@ -133,6 +133,9 @@
           </div>
           <div class="card-toolbar-right">
             <div id="tickets-summary" class="tickets-summary" hidden></div>
+            <button type="button" class="btn btn-primary btn-sm" id="create-ticket-toggle" hidden>
+              Создать тикет
+            </button>
           </div>
         </div>
         <p id="tickets-error" class="message error" hidden></p>
@@ -140,6 +143,140 @@
         <div id="tickets-pagination" class="pagination-wrap"></div>
       </section>
     </main>
+
+    <div class="modal-overlay" id="create-ticket-modal" hidden>
+      <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="create-ticket-title">
+        <div class="modal-header">
+          <h3 id="create-ticket-title">Создать тикет</h3>
+          <button type="button" class="modal-close" id="create-ticket-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form id="create-ticket-form">
+          <div class="modal-body">
+            <p id="create-ticket-error" class="message error" hidden></p>
+            <div class="ticket-form-grid">
+              <div class="field ticket-form-grid__full">
+                <span>Клиент REGOS</span>
+                <div class="firm-search-row">
+                  <input type="search" id="ticket-client-search" placeholder="Имя, телефон или email" autocomplete="off" />
+                  <button type="button" class="btn btn-secondary btn-sm" id="ticket-client-search-btn">Найти</button>
+                </div>
+                <p id="ticket-client-search-status" class="firm-search-status" hidden></p>
+                <div id="ticket-client-search-results" class="firm-search-results" hidden></div>
+                <div id="ticket-client-selected" class="firm-selected" hidden></div>
+              </div>
+              <label class="field">
+                <span>Канал</span>
+                <select id="ticket-create-channel" required><option value="">Выберите канал</option></select>
+              </label>
+              <label class="field">
+                <span>Ответственный <span class="field-hint">(необязательно)</span></span>
+                <select id="ticket-create-responsible"><option value="">Автоматически</option></select>
+              </label>
+              <label class="field">
+                <span>Направление</span>
+                <select id="ticket-create-direction">
+                  <option value="Inbound">Входящий</option>
+                  <option value="Outbound">Исходящий</option>
+                </select>
+              </label>
+              <label class="field ticket-form-grid__full">
+                <span>Тема</span>
+                <input type="text" id="ticket-create-subject" maxlength="300" />
+              </label>
+              <label class="field ticket-form-grid__full">
+                <span>Описание</span>
+                <textarea id="ticket-create-description" rows="5"></textarea>
+              </label>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="create-ticket-cancel">Отмена</button>
+            <button type="submit" class="btn btn-primary" id="create-ticket-submit">Создать</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="client-edit-modal" hidden>
+      <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="client-edit-title">
+        <div class="modal-header">
+          <h3 id="client-edit-title">Клиент</h3>
+          <button type="button" class="modal-close" id="client-edit-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form id="client-edit-form">
+          <div class="modal-body">
+            <p id="client-edit-error" class="message error" hidden></p>
+            <p id="client-edit-loading" class="firm-search-status" hidden>Загрузка…</p>
+
+            <div id="client-edit-profile" class="ticket-form-grid" hidden>
+              <label class="field ticket-form-grid__full">
+                <span>Имя</span>
+                <input type="text" id="client-edit-name" maxlength="200" />
+              </label>
+              <label class="field">
+                <span>Телефон</span>
+                <input type="tel" id="client-edit-phone" maxlength="50" />
+              </label>
+              <label class="field">
+                <span>Email</span>
+                <input type="email" id="client-edit-email" maxlength="150" />
+              </label>
+              <label class="field ticket-form-grid__full">
+                <span>Внешний ID <span class="field-hint">(необязательно)</span></span>
+                <input type="text" id="client-edit-external-id" maxlength="150" />
+              </label>
+              <label class="field ticket-form-grid__full">
+                <span>Комментарий</span>
+                <textarea id="client-edit-description" rows="4"></textarea>
+              </label>
+            </div>
+
+            <div id="client-edit-firms" class="client-edit-firms" hidden>
+              <div class="field">
+                <span>Связанные фирмы</span>
+                <div id="client-linked-firms" class="client-linked-firms"></div>
+                <p id="client-linked-firms-empty" class="firm-search-status" hidden>Нет связанных фирм.</p>
+              </div>
+              <div class="field">
+                <span>Добавить фирму</span>
+                <div class="firm-search-row">
+                  <input
+                    type="search"
+                    id="client-firm-search"
+                    placeholder="Имя, компания, телефон, лицензия…"
+                    autocomplete="off"
+                  />
+                  <button type="button" class="btn btn-secondary btn-sm" id="client-firm-search-btn">Найти</button>
+                </div>
+                <p id="client-firm-search-status" class="firm-search-status" hidden></p>
+                <div id="client-firm-search-results" class="firm-search-results" hidden></div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="client-edit-cancel">Закрыть</button>
+            <button type="submit" class="btn btn-primary" id="client-edit-submit" hidden>Сохранить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="firm-detail-modal" hidden>
+      <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="firm-detail-title">
+        <div class="modal-header">
+          <h3 id="firm-detail-title">Фирма</h3>
+          <button type="button" class="modal-close" id="firm-detail-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="firm-detail-error" class="message error" hidden></p>
+          <p id="firm-detail-loading" class="firm-search-status" hidden>Загрузка…</p>
+          <pre id="firm-detail-message" class="firm-detail-message" hidden></pre>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="firm-detail-cancel">Закрыть</button>
+        </div>
+      </div>
+    </div>
 
     <div class="modal-overlay" id="ticket-recording-modal" hidden>
       <div class="modal ticket-recording-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-recording-title">

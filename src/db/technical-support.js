@@ -199,6 +199,48 @@ function getActiveTechnicalSupportSubscription(db, phone) {
   return null;
 }
 
+/**
+ * Latest technical-support subscription for a phone, whether active or expired.
+ * Returns { status: 'active'|'expired'|'none', ends_at, starts_at, subscription }.
+ */
+function getTechnicalSupportStatusByPhone(db, phone, { now = Date.now() } = {}) {
+  ensureTechnicalSupportTables(db);
+  const phoneKey = normalizePhoneKey(phone);
+  if (!phoneKey) {
+    return { status: 'none', ends_at: null, starts_at: null, subscription: null };
+  }
+
+  const tail = phoneKey.slice(-9);
+  const candidates = db
+    .prepare(
+      `SELECT *
+       FROM technical_support_subscriptions
+       WHERE phone_key = ? OR phone_key LIKE ?
+       ORDER BY datetime(ends_at) DESC`
+    )
+    .all(phoneKey, `%${tail}`);
+
+  let latest = null;
+  for (const row of candidates) {
+    if (phonesMatch(row.phone_key, phoneKey) || phonesMatch(row.phone, phone)) {
+      latest = row;
+      break;
+    }
+  }
+
+  if (!latest) {
+    return { status: 'none', ends_at: null, starts_at: null, subscription: null };
+  }
+
+  const mapped = mapSubscriptionRow(latest, { now });
+  return {
+    status: mapped.status,
+    ends_at: mapped.ends_at,
+    starts_at: mapped.starts_at,
+    subscription: mapped,
+  };
+}
+
 function getLatestTechnicalSupportEnd(db, phoneKey) {
   const row = db
     .prepare(
@@ -352,6 +394,7 @@ module.exports = {
   getTechnicalSupportPrice,
   updateTechnicalSupportPrices,
   getActiveTechnicalSupportSubscription,
+  getTechnicalSupportStatusByPhone,
   activateTechnicalSupportFromOrder,
   listTechnicalSupportSubscriptions,
   isTechnicalSupportOrder,
