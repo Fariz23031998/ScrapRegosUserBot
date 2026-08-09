@@ -8,7 +8,12 @@ const express = require('express');
 const crypto = require('crypto');
 
 const { openDb, createOrder, getOrderById, listOrders } = require('../src/db/partners-db');
-const { createEmployeeUser, linkEmployeeTelegram } = require('../src/db/bot-users-db');
+const {
+  createEmployeeUser,
+  linkEmployeeTelegram,
+  getUserRights,
+  migrateBotUsersSchema,
+} = require('../src/db/bot-users-db');
 const { createBotAdminRouter } = require('../src/admin/bot-admin');
 const { createDashboardLoginToken } = require('../src/admin/dashboard-login-tokens');
 
@@ -136,6 +141,52 @@ describe('listOrders helper', () => {
   });
 });
 
+describe('legacy order rights migration', () => {
+  let dbPath;
+  let db;
+
+  after(() => {
+    if (db) db.close();
+    if (dbPath) removeDbFiles(dbPath);
+  });
+
+  it('converts orders_manage once and keeps later granular revocations', () => {
+    dbPath = makeTempDbPath();
+    db = openDb(dbPath);
+    const employee = createEmployeeUser(db, {
+      phone: '+998901234567',
+      displayName: 'Legacy Order Manager',
+      rights: { orders_manage: 1 },
+    });
+
+    migrateBotUsersSchema(db);
+    let rights = getUserRights(db, employee.id);
+    assert.equal(rights.orders_manage, 0);
+    assert.equal(rights.delete_unpaid_order, 1);
+    assert.equal(rights.mark_paid_cash, 1);
+    assert.equal(rights.renotify_order, 1);
+
+    db.prepare('UPDATE user_rights SET delete_unpaid_order = 0 WHERE user_id = ?').run(employee.id);
+    migrateBotUsersSchema(db);
+    rights = getUserRights(db, employee.id);
+    assert.equal(rights.delete_unpaid_order, 0);
+  });
+});
+
+describe('admin orders action controls', () => {
+  it('wires each button to its matching session permission', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'public', 'bot-admin', 'admin-orders.js'),
+      'utf8'
+    );
+
+    assert.match(source, /canDeleteOrders = hasPermission\(session, 'delete_unpaid_order'\)/);
+    assert.match(source, /canMarkOrdersPaidCash = hasPermission\(session, 'mark_paid_cash'\)/);
+    assert.match(source, /canRenotifyOrders = hasPermission\(session, 'renotify_order'\)/);
+    assert.doesNotMatch(source, /hasPermission\(session, 'orders_manage'\)/);
+  });
+});
+
 describe('admin orders API', () => {
   let dbPath;
   let db;
@@ -223,7 +274,7 @@ describe('admin orders API', () => {
     return { cookie, telegramId, employee };
   }
 
-  it('requires orders_read for list and orders_manage for actions', async () => {
+  it('requires orders_read for the list and each granular right for its action', async () => {
     createOrder(db, {
       id: crypto.randomUUID(),
       telegramId: 1001,
@@ -246,7 +297,36 @@ describe('admin orders API', () => {
       const denied = await request(server, 'POST', `/bot-admin/api/orders/${pendingId}/${action}`, {
         headers: { Cookie: readOnly.cookie },
       });
-      assert.equal(denied.statusCode, 403, `${action} should require orders_manage`);
+      assert.equal(denied.statusCode, 403, `${action} should require its action right`);
+    }
+
+    const actionRights = {
+      delete: 'delete_unpaid_order',
+      'paid-cash': 'mark_paid_cash',
+      renotify: 'renotify_order',
+    };
+    for (const [allowedAction, right] of Object.entries(actionRights)) {
+      const actor = await loginEmployee({ orders_read: 1, [right]: 1 });
+      for (const action of Object.keys(actionRights)) {
+        const order = createOrder(db, {
+          id: crypto.randomUUID(),
+          telegramId: actor.telegramId,
+          botUserPhone: '998901111111',
+          clientPhone: '998902222222',
+          amount: 15000,
+        });
+        const response = await request(
+          server,
+          'POST',
+          `/bot-admin/api/orders/${order.id}/${action}`,
+          { headers: { Cookie: actor.cookie } }
+        );
+        assert.equal(
+          response.statusCode,
+          action === allowedAction ? 200 : 403,
+          `${right} should ${action === allowedAction ? 'allow' : 'deny'} ${action}`
+        );
+      }
     }
 
     const noAccess = await loginEmployee({ tickets_read: 1 });
@@ -294,7 +374,12 @@ describe('admin orders API', () => {
   });
 
   it('allows delete / paid-cash / renotify only for pending orders', async () => {
-    const manager = await loginEmployee({ orders_read: 1, orders_manage: 1 });
+    const manager = await loginEmployee({
+      orders_read: 1,
+      delete_unpaid_order: 1,
+      mark_paid_cash: 1,
+      renotify_order: 1,
+    });
 
     const pendingDelete = createOrder(db, {
       id: crypto.randomUUID(),

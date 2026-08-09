@@ -128,6 +128,16 @@ function ensureUserRightsTable(db) {
     }
   }
 
+  // Replace the legacy all-or-nothing admin order grant with revocable action rights.
+  db.exec(`
+    UPDATE user_rights
+    SET delete_unpaid_order = 1,
+        mark_paid_cash = 1,
+        renotify_order = 1,
+        orders_manage = 0
+    WHERE IFNULL(orders_manage, 0) = 1
+  `);
+
   // One-time copy: view_tickets → tickets_read (orphan view_tickets column kept).
   if (
     columnExists(db, 'user_rights', 'view_tickets') &&

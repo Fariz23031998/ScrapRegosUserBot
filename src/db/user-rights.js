@@ -65,10 +65,6 @@ const RIGHTS = {
     column: 'orders_read',
     label: 'Админ: заказы — просмотр',
   },
-  orders_manage: {
-    column: 'orders_manage',
-    label: 'Админ: заказы — управление',
-  },
   tickets_read: {
     column: 'tickets_read',
     label: 'Админ: тикеты — просмотр',
@@ -115,7 +111,9 @@ const ADMIN_PERMISSION_KEYS = [
   'users_delete',
   'order_logs_read',
   'orders_read',
-  'orders_manage',
+  'delete_unpaid_order',
+  'mark_paid_cash',
+  'renotify_order',
   'tickets_read',
   'technical_support_read',
   'technical_support_create',

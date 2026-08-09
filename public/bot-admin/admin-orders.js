@@ -6,7 +6,9 @@ let dateTo = '';
 let currentPage = 1;
 let pageLimit = 25;
 let totalOrders = 0;
-let canManageOrders = false;
+let canDeleteOrders = false;
+let canMarkOrdersPaidCash = false;
+let canRenotifyOrders = false;
 
 const searchInput = document.getElementById('order-search');
 const searchClearBtn = document.getElementById('search-clear');
@@ -63,15 +65,28 @@ function statusBadgeClass(status) {
 }
 
 function renderActions(order) {
-  if (!canManageOrders || order.status !== 'pending') {
-    return '—';
-  }
+  if (order.status !== 'pending') return '—';
   const id = escapeHtml(order.id);
+  const actions = [];
+  if (canRenotifyOrders) {
+    actions.push(
+      `<button type="button" class="btn btn-secondary btn-sm" data-action="renotify" data-order-id="${id}">Уведомить</button>`
+    );
+  }
+  if (canMarkOrdersPaidCash) {
+    actions.push(
+      `<button type="button" class="btn btn-secondary btn-sm" data-action="paid-cash" data-order-id="${id}">Наличные</button>`
+    );
+  }
+  if (canDeleteOrders) {
+    actions.push(
+      `<button type="button" class="btn btn-danger btn-sm" data-action="delete" data-order-id="${id}">Удалить</button>`
+    );
+  }
+  if (!actions.length) return '—';
   return `
     <div class="row-actions">
-      <button type="button" class="btn btn-secondary btn-sm" data-action="renotify" data-order-id="${id}">Уведомить</button>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="paid-cash" data-order-id="${id}">Наличные</button>
-      <button type="button" class="btn btn-danger btn-sm" data-action="delete" data-order-id="${id}">Удалить</button>
+      ${actions.join('')}
     </div>
   `;
 }
@@ -176,21 +191,21 @@ async function loadOrders() {
 }
 
 async function handleOrderAction(action, orderId) {
-  if (!canManageOrders || !orderId) return;
+  if (!orderId) return;
 
-  if (action === 'delete') {
+  if (action === 'delete' && canDeleteOrders) {
     if (!window.confirm('Удалить неоплаченный заказ?')) return;
     const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/delete`, {
       method: 'POST',
     });
     window.alert(data.message || 'Заказ удалён.');
-  } else if (action === 'paid-cash') {
+  } else if (action === 'paid-cash' && canMarkOrdersPaidCash) {
     if (!window.confirm('Отметить заказ как оплаченный наличными?')) return;
     const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/paid-cash`, {
       method: 'POST',
     });
     window.alert(data.message || 'Заказ закрыт.');
-  } else if (action === 'renotify') {
+  } else if (action === 'renotify' && canRenotifyOrders) {
     const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/renotify`, {
       method: 'POST',
     });
@@ -212,7 +227,9 @@ function applyFiltersFromForm() {
 
 async function init() {
   const session = await ensureSession({ requiredPermission: 'orders_read' });
-  canManageOrders = hasPermission(session, 'orders_manage');
+  canDeleteOrders = hasPermission(session, 'delete_unpaid_order');
+  canMarkOrdersPaidCash = hasPermission(session, 'mark_paid_cash');
+  canRenotifyOrders = hasPermission(session, 'renotify_order');
   await loadOrders();
 }
 

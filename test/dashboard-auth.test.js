@@ -557,6 +557,9 @@ describe('Telegram dashboard authentication', () => {
     assert.ok(cols.some((col) => col.name === 'order_logs_read'));
     assert.ok(cols.some((col) => col.name === 'orders_read'));
     assert.ok(cols.some((col) => col.name === 'orders_manage'));
+    assert.ok(cols.some((col) => col.name === 'delete_unpaid_order'));
+    assert.ok(cols.some((col) => col.name === 'mark_paid_cash'));
+    assert.ok(cols.some((col) => col.name === 'renotify_order'));
 
     const app = express();
     app.use('/bot-admin', createBotAdminRouter(db));
@@ -615,6 +618,10 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(passwordSessionBody.permissions.tickets_read, true);
       assert.equal(passwordSessionBody.permissions.users_read, true);
       assert.equal(passwordSessionBody.permissions.prices_edit, true);
+      assert.equal(passwordSessionBody.permissions.delete_unpaid_order, true);
+      assert.equal(passwordSessionBody.permissions.mark_paid_cash, true);
+      assert.equal(passwordSessionBody.permissions.renotify_order, true);
+      assert.equal(passwordSessionBody.permissions.orders_manage, undefined);
 
       const passwordTickets = await request(server, 'GET', '/bot-admin/api/tickets', {
         headers: { Cookie: passwordCookie, Accept: 'application/json' },
@@ -653,6 +660,9 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(ticketsOnlyBody.permissions.tickets_read, true);
       assert.equal(ticketsOnlyBody.permissions.users_read, false);
       assert.equal(ticketsOnlyBody.permissions.order_logs_read, false);
+      assert.equal(ticketsOnlyBody.permissions.delete_unpaid_order, false);
+      assert.equal(ticketsOnlyBody.permissions.mark_paid_cash, false);
+      assert.equal(ticketsOnlyBody.permissions.renotify_order, false);
 
       const ticketsOk = await request(server, 'GET', '/bot-admin/api/tickets', {
         headers: { Cookie: ticketsOnlyCookie, Accept: 'application/json' },

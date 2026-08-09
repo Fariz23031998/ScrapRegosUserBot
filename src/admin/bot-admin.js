@@ -945,7 +945,7 @@ function createBotAdminRouter(db) {
     });
   });
 
-  router.post('/api/orders/:id/delete', requireRight(db, 'orders_manage'), (req, res) => {
+  router.post('/api/orders/:id/delete', requireRight(db, 'delete_unpaid_order'), (req, res) => {
     const orderId = String(req.params.id || '').trim();
     if (!orderId) {
       return res.status(400).json({ message: 'Не указан ID заказа.' });
@@ -959,7 +959,7 @@ function createBotAdminRouter(db) {
     return res.json({ ok: true, message: 'Неоплаченный заказ удалён.' });
   });
 
-  router.post('/api/orders/:id/paid-cash', requireRight(db, 'orders_manage'), (req, res) => {
+  router.post('/api/orders/:id/paid-cash', requireRight(db, 'mark_paid_cash'), (req, res) => {
     const orderId = String(req.params.id || '').trim();
     if (!orderId) {
       return res.status(400).json({ message: 'Не указан ID заказа.' });
@@ -975,7 +975,7 @@ function createBotAdminRouter(db) {
 
   router.post(
     '/api/orders/:id/renotify',
-    requireRight(db, 'orders_manage'),
+    requireRight(db, 'renotify_order'),
     async (req, res) => {
       const orderId = String(req.params.id || '').trim();
       if (!orderId) {
