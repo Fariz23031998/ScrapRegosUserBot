@@ -6,6 +6,7 @@ const path = require('path');
 const {
   getAllowedRecordingHosts,
   getTicketRecordingUrl,
+  parseWavDurationSeconds,
 } = require('../src/admin/ticket-recording');
 
 const originalAllowedHosts = process.env.REGOS_RECORDING_ALLOWED_HOSTS;
@@ -16,6 +17,28 @@ afterEach(() => {
   } else {
     process.env.REGOS_RECORDING_ALLOWED_HOSTS = originalAllowedHosts;
   }
+});
+
+describe('WAV header duration parser', () => {
+  it('reads duration from fmt byteRate and data chunk size', () => {
+    // Minimal PCM WAV: 8kHz mono 16-bit, 16000 data bytes => 1.0s
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + 16000, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20); // PCM
+    header.writeUInt16LE(1, 22); // mono
+    header.writeUInt32LE(8000, 24); // sample rate
+    header.writeUInt32LE(16000, 28); // byte rate
+    header.writeUInt16LE(2, 32); // block align
+    header.writeUInt16LE(16, 34); // bits
+    header.write('data', 36);
+    header.writeUInt32LE(16000, 40);
+
+    assert.equal(parseWavDurationSeconds(header), 1);
+  });
 });
 
 describe('ticket recording URL validation', () => {

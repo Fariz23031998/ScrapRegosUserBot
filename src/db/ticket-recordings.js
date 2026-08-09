@@ -13,6 +13,28 @@ function ensureTicketRecordingsTable(db) {
   if (!cols.some((col) => col.name === 'duration_checked_at')) {
     db.exec('ALTER TABLE ticket_recordings ADD COLUMN duration_checked_at TEXT');
   }
+
+  // One-time: clear failed duration attempts so the WAV header parser can backfill NULLs.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ticket_recording_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  const parserFlag = db
+    .prepare(`SELECT value FROM ticket_recording_meta WHERE key = ?`)
+    .get('duration_parser');
+  if (parserFlag?.value !== 'wav-header-v1') {
+    db.prepare(
+      `UPDATE ticket_recordings
+       SET duration_checked_at = NULL
+       WHERE duration_seconds IS NULL OR duration_seconds <= 0`
+    ).run();
+    db.prepare(
+      `INSERT INTO ticket_recording_meta (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run('duration_parser', 'wav-header-v1');
+  }
 }
 
 function requirePositiveTicketId(value) {
