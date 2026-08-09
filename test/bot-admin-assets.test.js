@@ -250,6 +250,8 @@ describe('Bot admin static assets and API auth', () => {
 
     assert.match(ticketsHtml, /id="create-ticket-toggle"[^>]*hidden/);
     assert.match(ticketsHtml, /id="create-ticket-form"/);
+    assert.match(ticketsHtml, /id="create-order-modal"/);
+    assert.match(ticketsHtml, /id="create-order-form"/);
     assert.match(ticketsHtml, /id="client-edit-modal"/);
     assert.match(ticketsHtml, /id="client-edit-form"/);
     assert.match(ticketsHtml, /id="firm-detail-modal"/);
@@ -261,9 +263,13 @@ describe('Bot admin static assets and API auth', () => {
     assert.match(ticketsScript, /params\.set\('client'/);
     assert.match(ticketsScript, /renderTechnicalSupportCell/);
     assert.match(ticketsScript, /ticket-firm-open/);
+    assert.match(ticketsScript, /active-ticket-create-order/);
+    assert.match(ticketsScript, /openCreateOrderModal/);
+    assert.match(ticketsScript, /\/bot-admin\/api\/orders/);
     assert.match(ticketsScript, /method:\s*'POST'/);
     assert.match(detailHtml, /id="edit-ticket-toggle"[^>]*hidden/);
     assert.match(detailHtml, /id="edit-ticket-form"/);
+    assert.match(detailHtml, /id="create-order-toggle"/);
     assert.match(detailScript, /hasPermission\(session, 'tickets_edit'\)/);
     assert.match(detailScript, /method:\s*'PATCH'/);
     assert.match(detailScript, /applyDefaultLinkedFirm/);

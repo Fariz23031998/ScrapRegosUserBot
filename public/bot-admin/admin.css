@@ -1595,6 +1595,13 @@ body.modal-open {
   gap: 6px;
 }
 
+.active-ticket__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .active-ticket__extra-label {
   color: #7b8794;
 }

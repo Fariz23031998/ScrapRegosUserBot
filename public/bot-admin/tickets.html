@@ -139,10 +139,69 @@
           </div>
         </div>
         <p id="tickets-error" class="message error" hidden></p>
+        <p id="tickets-success" class="message success" hidden></p>
         <div id="tickets-wrap"></div>
         <div id="tickets-pagination" class="pagination-wrap"></div>
       </section>
     </main>
+
+    <div class="modal-overlay" id="create-order-modal" hidden>
+      <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="create-order-modal-title">
+        <div class="modal-header">
+          <h3 id="create-order-modal-title">Создать заказ услуги</h3>
+          <button type="button" class="modal-close" id="create-order-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form id="create-order-form">
+          <div class="modal-body">
+            <p id="create-order-error" class="message error" hidden></p>
+
+            <div class="ticket-order-form">
+              <div class="field">
+                <span>Данные фирмы <span class="field-hint">(необязательно)</span></span>
+                <div class="firm-search-row">
+                  <input
+                    type="search"
+                    id="firm-search-input"
+                    placeholder="Имя, компания, телефон, лицензия…"
+                    autocomplete="off"
+                  />
+                  <button type="button" class="btn btn-secondary btn-sm" id="firm-search-btn">Найти</button>
+                </div>
+                <p id="firm-search-status" class="firm-search-status" hidden></p>
+                <div id="firm-search-results" class="firm-search-results" hidden></div>
+                <div id="firm-selected" class="firm-selected" hidden></div>
+              </div>
+
+              <label class="field">
+                <span>Сумма (сум)</span>
+                <input type="number" id="order-amount" min="1" step="1" required placeholder="Например, 150000" />
+              </label>
+              <label class="field">
+                <span>Телефон клиента</span>
+                <input type="tel" id="order-client-phone" required />
+              </label>
+              <label class="field">
+                <span>Дополнительный телефон <span class="field-hint">(необязательно)</span></span>
+                <input type="tel" id="order-additional-phone" placeholder="Оставьте пустым, чтобы пропустить" />
+              </label>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="create-order-cancel">Отмена</button>
+            <button type="submit" class="btn btn-primary" id="create-order-submit">
+              <span class="btn-label">Создать</span>
+            </button>
+          </div>
+          <div class="create-order-progress" id="create-order-progress" hidden aria-live="polite" aria-busy="true">
+            <div class="create-order-progress__card">
+              <span class="process-spinner" aria-hidden="true"></span>
+              <p class="create-order-progress__title">Создание заказа…</p>
+              <p class="create-order-progress__hint">Формируем заказ и ссылку на оплату</p>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <div class="modal-overlay" id="create-ticket-modal" hidden>
       <div class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="create-ticket-title">

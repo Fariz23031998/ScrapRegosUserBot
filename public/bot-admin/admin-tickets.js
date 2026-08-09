@@ -65,6 +65,14 @@ let summaryCalculating = false;
 const recordingDurationCache = new Map();
 const recordingDurationPromises = new Map();
 let recordingModalTrigger = null;
+let orderSelectedFirm = null;
+let orderLinkedClientFirms = [];
+let orderTicketDefaultPhone = '';
+let createOrderBusy = false;
+let orderFirmSearchTimer = null;
+let orderFirmSearchRequestId = 0;
+
+const ORDER_FIRM_SEARCH_DEBOUNCE_MS = 300;
 
 const searchInput = document.getElementById('ticket-search');
 const searchClearBtn = document.getElementById('search-clear');
@@ -83,11 +91,27 @@ const ticketsPaginationEl = document.getElementById('tickets-pagination');
 const ticketsSummaryEl = document.getElementById('tickets-summary');
 const activeTicketEl = document.getElementById('active-ticket');
 const ticketsErrorEl = document.getElementById('tickets-error');
+const ticketsSuccessEl = document.getElementById('tickets-success');
 const filtersForm = document.getElementById('ticket-filters');
 const recordingModal = document.getElementById('ticket-recording-modal');
 const recordingModalClose = document.getElementById('ticket-recording-close');
 const recordingModalTicket = document.getElementById('ticket-recording-ticket');
 const recordingPlayer = document.getElementById('ticket-recording-player');
+const createOrderModal = document.getElementById('create-order-modal');
+const createOrderForm = document.getElementById('create-order-form');
+const createOrderCancel = document.getElementById('create-order-cancel');
+const createOrderClose = document.getElementById('create-order-close');
+const createOrderErrorEl = document.getElementById('create-order-error');
+const orderAmountInput = document.getElementById('order-amount');
+const orderClientPhoneInput = document.getElementById('order-client-phone');
+const orderAdditionalPhoneInput = document.getElementById('order-additional-phone');
+const createOrderSubmit = document.getElementById('create-order-submit');
+const createOrderProgress = document.getElementById('create-order-progress');
+const firmSearchInput = document.getElementById('firm-search-input');
+const firmSearchBtn = document.getElementById('firm-search-btn');
+const firmSearchStatus = document.getElementById('firm-search-status');
+const firmSearchResults = document.getElementById('firm-search-results');
+const firmSelectedEl = document.getElementById('firm-selected');
 const createTicketToggle = document.getElementById('create-ticket-toggle');
 const createTicketModal = document.getElementById('create-ticket-modal');
 const createTicketForm = document.getElementById('create-ticket-form');
@@ -955,6 +979,257 @@ function showError(message) {
   ticketsErrorEl.textContent = message;
 }
 
+function showSuccess(message) {
+  if (!message) {
+    ticketsSuccessEl.hidden = true;
+    ticketsSuccessEl.textContent = '';
+    return;
+  }
+  ticketsSuccessEl.hidden = false;
+  ticketsSuccessEl.textContent = message;
+}
+
+function showCreateOrderError(message) {
+  if (!message) {
+    createOrderErrorEl.hidden = true;
+    createOrderErrorEl.textContent = '';
+    return;
+  }
+  createOrderErrorEl.hidden = false;
+  createOrderErrorEl.textContent = message;
+}
+
+function clearOrderFirmSearchUi() {
+  firmSearchInput.value = '';
+  firmSearchStatus.hidden = true;
+  firmSearchStatus.textContent = '';
+  firmSearchResults.hidden = true;
+  firmSearchResults.innerHTML = '';
+}
+
+function renderOrderSelectedFirm() {
+  if (!orderSelectedFirm) {
+    firmSelectedEl.hidden = true;
+    firmSelectedEl.innerHTML = '';
+    return;
+  }
+
+  firmSelectedEl.hidden = false;
+  firmSelectedEl.innerHTML = `
+    <div class="firm-selected__body">
+      <strong>${escapeHtml(orderSelectedFirm.clientName || 'Без названия')}</strong>
+      <span>${escapeHtml(firmTypeLabel(orderSelectedFirm.type))}${
+        orderSelectedFirm.phone ? ` · ${escapeHtml(orderSelectedFirm.phone)}` : ''
+      }</span>
+    </div>
+    <button type="button" class="btn btn-secondary btn-sm" id="firm-clear-btn">Сбросить</button>
+  `;
+  document.getElementById('firm-clear-btn')?.addEventListener('click', clearOrderSelectedFirm);
+}
+
+function clearOrderSelectedFirm() {
+  orderSelectedFirm = null;
+  renderOrderSelectedFirm();
+  orderClientPhoneInput.value = orderTicketDefaultPhone;
+}
+
+function selectOrderFirm(firm) {
+  orderSelectedFirm = firm;
+  firmSearchResults.hidden = true;
+  firmSearchResults.innerHTML = '';
+  firmSearchStatus.hidden = true;
+  renderOrderSelectedFirm();
+  if (firm.phone) {
+    orderClientPhoneInput.value = firm.phone;
+  } else if (!orderClientPhoneInput.value.trim()) {
+    orderClientPhoneInput.value = orderTicketDefaultPhone;
+  }
+}
+
+function firmFromLinkedClient(link) {
+  if (!link) return null;
+  return {
+    type: link.firm_type || null,
+    recordId: link.firm_record_id ?? null,
+    clientName: link.firm_name || null,
+    phone: link.firm_phone || null,
+    message: link.firm_message || null,
+  };
+}
+
+function applyDefaultOrderLinkedFirm() {
+  const firm = firmFromLinkedClient(orderLinkedClientFirms[0]);
+  if (!firm) return;
+  selectOrderFirm(firm);
+}
+
+async function loadOrderLinkedClientFirms(clientId) {
+  orderLinkedClientFirms = [];
+  const id = Number(clientId);
+  if (!Number.isInteger(id) || id <= 0) return;
+  try {
+    const data = await api(`/bot-admin/api/clients/${encodeURIComponent(id)}`);
+    orderLinkedClientFirms = Array.isArray(data.firms) ? data.firms : [];
+  } catch {
+    orderLinkedClientFirms = [];
+  }
+}
+
+function renderOrderFirmResults(results) {
+  if (!results.length) {
+    firmSearchResults.hidden = true;
+    firmSearchResults.innerHTML = '';
+    firmSearchStatus.hidden = false;
+    firmSearchStatus.textContent = 'Ничего не найдено.';
+    return;
+  }
+
+  firmSearchStatus.hidden = true;
+  firmSearchResults.hidden = false;
+  firmSearchResults.innerHTML = results
+    .map((firm, index) => {
+      const preview = String(firm.message || '')
+        .split('\n')
+        .slice(0, 2)
+        .join(' · ');
+      return `
+        <button type="button" class="firm-search-result" data-firm-index="${index}">
+          <strong>${escapeHtml(firm.clientName || 'Без названия')}</strong>
+          <span class="firm-search-result__meta">${escapeHtml(firmTypeLabel(firm.type))}${
+            firm.phone ? ` · ${escapeHtml(firm.phone)}` : ''
+          }</span>
+          <span class="firm-search-result__preview">${escapeHtml(preview || '—')}</span>
+        </button>
+      `;
+    })
+    .join('');
+
+  firmSearchResults.querySelectorAll('.firm-search-result').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const index = Number(btn.getAttribute('data-firm-index'));
+      const firm = results[index];
+      if (firm) selectOrderFirm(firm);
+    });
+  });
+}
+
+function cancelOrderFirmSearchDebounce() {
+  if (orderFirmSearchTimer != null) {
+    clearTimeout(orderFirmSearchTimer);
+    orderFirmSearchTimer = null;
+  }
+}
+
+function clearOrderFirmSearchResults() {
+  firmSearchStatus.hidden = true;
+  firmSearchStatus.textContent = '';
+  firmSearchResults.hidden = true;
+  firmSearchResults.innerHTML = '';
+}
+
+async function runOrderFirmSearch() {
+  const q = firmSearchInput.value.trim();
+  if (!q) {
+    clearOrderFirmSearchResults();
+    return;
+  }
+  const requestId = ++orderFirmSearchRequestId;
+  firmSearchBtn.disabled = true;
+  firmSearchStatus.hidden = false;
+  firmSearchStatus.textContent = 'Поиск…';
+  try {
+    const data = await api(`/bot-admin/api/firm-search?q=${encodeURIComponent(q)}`);
+    if (requestId !== orderFirmSearchRequestId) return;
+    renderOrderFirmResults(data.results || []);
+  } catch (error) {
+    if (requestId !== orderFirmSearchRequestId) return;
+    firmSearchResults.hidden = true;
+    firmSearchStatus.hidden = false;
+    firmSearchStatus.textContent = error.message;
+  } finally {
+    if (requestId === orderFirmSearchRequestId) {
+      firmSearchBtn.disabled = false;
+    }
+  }
+}
+
+function scheduleOrderFirmSearch() {
+  cancelOrderFirmSearchDebounce();
+  const q = firmSearchInput.value.trim();
+  if (!q) {
+    orderFirmSearchRequestId += 1;
+    clearOrderFirmSearchResults();
+    return;
+  }
+  orderFirmSearchTimer = setTimeout(() => {
+    orderFirmSearchTimer = null;
+    runOrderFirmSearch().catch((error) => {
+      firmSearchStatus.hidden = false;
+      firmSearchStatus.textContent = error.message;
+    });
+  }, ORDER_FIRM_SEARCH_DEBOUNCE_MS);
+}
+
+function triggerOrderFirmSearchNow() {
+  cancelOrderFirmSearchDebounce();
+  runOrderFirmSearch().catch((error) => {
+    firmSearchStatus.hidden = false;
+    firmSearchStatus.textContent = error.message;
+  });
+}
+
+function resetCreateOrderForm() {
+  cancelOrderFirmSearchDebounce();
+  orderFirmSearchRequestId += 1;
+  createOrderForm.reset();
+  orderSelectedFirm = null;
+  clearOrderFirmSearchUi();
+  renderOrderSelectedFirm();
+  orderClientPhoneInput.value = orderTicketDefaultPhone;
+  showCreateOrderError('');
+}
+
+function setCreateOrderBusy(busy) {
+  createOrderBusy = Boolean(busy);
+  createOrderProgress.hidden = !createOrderBusy;
+  createOrderForm.setAttribute('aria-busy', createOrderBusy ? 'true' : 'false');
+  createOrderSubmit.disabled = createOrderBusy;
+  createOrderCancel.disabled = createOrderBusy;
+  createOrderClose.disabled = createOrderBusy;
+  createOrderSubmit.classList.toggle('is-loading', createOrderBusy);
+  createOrderForm.querySelectorAll('input, button').forEach((el) => {
+    if (el === createOrderSubmit || el === createOrderCancel || el === createOrderClose) return;
+    el.disabled = createOrderBusy;
+  });
+}
+
+async function openCreateOrderModal() {
+  if (!activeTicket) return;
+  orderTicketDefaultPhone = activeTicket.client?.phone || '';
+  resetCreateOrderForm();
+  setCreateOrderBusy(false);
+  showError('');
+  showSuccess('');
+  createOrderModal.hidden = false;
+  document.documentElement.classList.add('modal-open');
+  document.body.classList.add('modal-open');
+  orderAmountInput.focus();
+  await loadOrderLinkedClientFirms(activeTicket.client_id ?? activeTicket.client?.id);
+  if (!createOrderModal.hidden && !createOrderBusy && !orderSelectedFirm) {
+    applyDefaultOrderLinkedFirm();
+  }
+}
+
+function closeCreateOrderModal({ force = false } = {}) {
+  if (createOrderBusy && !force) return;
+  setCreateOrderBusy(false);
+  createOrderModal.hidden = true;
+  document.documentElement.classList.remove('modal-open');
+  document.body.classList.remove('modal-open');
+  resetCreateOrderForm();
+  document.getElementById('active-ticket-create-order')?.focus();
+}
+
 function renderSummary() {
   if (summaryCalculating) {
     ticketsSummaryEl.hidden = false;
@@ -1022,12 +1297,25 @@ function renderActiveTicket() {
         <span class="active-ticket__extra-label">ТП:</span>
         ${renderTechnicalSupportCell(activeTicket)}
       </span>
+      <span class="active-ticket__actions">
+        <button type="button" class="btn btn-primary btn-sm" id="active-ticket-create-order">
+          Создать заказ
+        </button>
+      </span>
     </div>
   `;
 
   const openBtn = document.getElementById('active-ticket-open');
   if (openBtn) {
     openBtn.addEventListener('click', () => openTicketPage(activeTicket.id));
+  }
+  const createOrderBtn = document.getElementById('active-ticket-create-order');
+  if (createOrderBtn) {
+    createOrderBtn.addEventListener('click', () => {
+      openCreateOrderModal().catch((error) => {
+        showCreateOrderError(error.message || 'Не удалось открыть форму заказа.');
+      });
+    });
   }
 }
 
@@ -1601,9 +1889,68 @@ firmDetailModal.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (!firmDetailModal.hidden) closeFirmDetailModal();
+  else if (!createOrderModal.hidden) closeCreateOrderModal();
   else if (!clientEditModal.hidden) closeClientEditModal();
   else if (!createTicketModal.hidden) closeCreateTicketModal();
   else if (!recordingModal.hidden) closeRecordingModal();
+});
+
+createOrderCancel.addEventListener('click', () => closeCreateOrderModal());
+createOrderClose.addEventListener('click', () => closeCreateOrderModal());
+createOrderModal.addEventListener('click', (event) => {
+  if (event.target === createOrderModal) closeCreateOrderModal();
+});
+firmSearchBtn.addEventListener('click', () => {
+  triggerOrderFirmSearchNow();
+});
+firmSearchInput.addEventListener('input', () => {
+  scheduleOrderFirmSearch();
+});
+firmSearchInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    triggerOrderFirmSearchNow();
+  }
+});
+createOrderForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!activeTicket || createOrderBusy) return;
+  showCreateOrderError('');
+  showSuccess('');
+  setCreateOrderBusy(true);
+  try {
+    const payload = {
+      amount: orderAmountInput.value,
+      client_phone: orderClientPhoneInput.value.trim(),
+      additional_phone: orderAdditionalPhoneInput.value.trim() || undefined,
+      ticket_id: activeTicket.id,
+    };
+
+    if (orderSelectedFirm) {
+      payload.client_name = orderSelectedFirm.clientName || undefined;
+      payload.client_type = orderSelectedFirm.type || undefined;
+      payload.record_id = orderSelectedFirm.recordId ?? undefined;
+      payload.firm_message = orderSelectedFirm.message || undefined;
+    } else {
+      payload.client_name = activeTicket.client?.name || undefined;
+    }
+
+    const data = await api('/bot-admin/api/orders', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    const payUrl = data.payment_page_url;
+    closeCreateOrderModal({ force: true });
+    showSuccess(
+      payUrl
+        ? `Заказ ${data.order.id} создан. Страница оплаты: ${payUrl}`
+        : `Заказ ${data.order.id} создан.`
+    );
+    await loadTickets().catch((error) => showError(error.message));
+  } catch (error) {
+    showCreateOrderError(error.message);
+    setCreateOrderBusy(false);
+  }
 });
 
 setupLogout();
