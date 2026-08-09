@@ -201,11 +201,12 @@ function isRecordingField(field) {
   );
 }
 
-function formatAudioPlayer(url) {
+function formatAudioPlayer(url, ticketId) {
   const safeUrl = escapeHtml(url);
+  const mediaUrl = `/bot-admin/api/tickets/${encodeURIComponent(ticketId)}/recording`;
   return `
     <div class="ticket-audio">
-      <audio class="ticket-audio__player" controls preload="metadata" src="${safeUrl}">
+      <audio class="ticket-audio__player" controls preload="metadata" src="${mediaUrl}">
         Ваш браузер не поддерживает воспроизведение аудио.
       </audio>
       <a class="ticket-audio__link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a>
@@ -213,11 +214,11 @@ function formatAudioPlayer(url) {
   `;
 }
 
-function formatFieldValue(value, field = null) {
+function formatFieldValue(value, field = null, ticketId = null) {
   if (value == null || value === '') return '—';
   const text = String(value).trim();
-  if (isAudioUrl(text) || (isHttpUrl(text) && isRecordingField(field))) {
-    return formatAudioPlayer(text);
+  if (ticketId != null && (isAudioUrl(text) || (isHttpUrl(text) && isRecordingField(field)))) {
+    return formatAudioPlayer(text, ticketId);
   }
   if (isHttpUrl(text)) {
     return `<a href="${escapeHtml(text)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
@@ -225,13 +226,13 @@ function formatFieldValue(value, field = null) {
   return escapeHtml(text);
 }
 
-function renderAdditionalFields(fields) {
+function renderAdditionalFields(fields, ticketId) {
   if (!Array.isArray(fields) || fields.length === 0) {
     return detailRow('Нет данных', '—');
   }
   return fields
     .map((field) =>
-      detailRow(field.name || field.key || 'Поле', formatFieldValue(field.value, field))
+      detailRow(field.name || field.key || 'Поле', formatFieldValue(field.value, field, ticketId))
     )
     .join('');
 }
@@ -343,7 +344,7 @@ function renderTicket(detail) {
     <section class="ticket-detail__section">
       <h4>Дополнительные поля</h4>
       <dl class="ticket-detail">
-        ${renderAdditionalFields(detail.fields)}
+        ${renderAdditionalFields(detail.fields, detail.id)}
       </dl>
     </section>
   `;

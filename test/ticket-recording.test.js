@@ -1,5 +1,7 @@
 const { describe, it, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 
 const {
   getAllowedRecordingHosts,
@@ -65,5 +67,21 @@ describe('ticket recording URL validation', () => {
       })?.href,
       'https://calls.example.uz/audio/42.mp3'
     );
+  });
+});
+
+describe('ticket detail recording player', () => {
+  it('uses the authenticated media proxy while retaining the direct link', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'public', 'bot-admin', 'admin-ticket-detail.js'),
+      'utf8'
+    );
+
+    assert.match(
+      source,
+      /const mediaUrl = `\/bot-admin\/api\/tickets\/\$\{encodeURIComponent\(ticketId\)\}\/recording`/
+    );
+    assert.match(source, /<audio[^>]+src="\$\{mediaUrl\}"/);
+    assert.match(source, /<a[^>]+href="\$\{safeUrl\}"/);
   });
 });
