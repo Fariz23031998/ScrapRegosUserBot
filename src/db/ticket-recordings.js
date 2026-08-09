@@ -21,13 +21,12 @@ function requirePositiveTicketId(value) {
 
 function mapRecordingRow(row) {
   if (!row) return null;
+  const duration = Number(row.duration_seconds);
   return {
     ticket_id: Number(row.ticket_id),
     recording_url: row.recording_url || null,
-    duration_seconds:
-      row.duration_seconds == null || !Number.isFinite(Number(row.duration_seconds))
-        ? null
-        : Number(row.duration_seconds),
+    // Treat 0 / negative as missing so callers can retry a failed parse.
+    duration_seconds: Number.isFinite(duration) && duration > 0 ? duration : null,
     updated_at: row.updated_at || null,
   };
 }
@@ -96,8 +95,11 @@ function upsertTicketRecording(db, input = {}) {
 
   if (durationProvided) {
     const raw = input.durationSeconds ?? input.duration_seconds;
+    const duration = Number(raw);
     nextDuration =
-      raw == null || raw === '' || !Number.isFinite(Number(raw)) ? null : Number(raw);
+      raw == null || raw === '' || !Number.isFinite(duration) || duration <= 0
+        ? null
+        : duration;
   }
 
   db.prepare(
@@ -121,7 +123,7 @@ function listTicketRecordingsMissingDuration(db, { limit = 100 } = {}) {
        FROM ticket_recordings
        WHERE recording_url IS NOT NULL
          AND recording_url != ''
-         AND duration_seconds IS NULL
+         AND (duration_seconds IS NULL OR duration_seconds <= 0)
        ORDER BY updated_at DESC
        LIMIT ?`
     )

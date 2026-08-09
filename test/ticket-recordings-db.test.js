@@ -78,6 +78,21 @@ describe('ticket_recordings db helpers', () => {
     assert.equal(row.duration_seconds, null);
   });
 
+  it('rejects non-positive durations as null', () => {
+    upsertTicketRecording(db, {
+      ticketId: 12,
+      recordingUrl: 'http://rofeev.7x.uz/zero.wav',
+      durationSeconds: 0,
+    });
+    assert.equal(getTicketRecording(db, 12)?.duration_seconds, null);
+
+    upsertTicketRecording(db, {
+      ticketId: 12,
+      durationSeconds: 8,
+    });
+    assert.equal(getTicketRecording(db, 12)?.duration_seconds, 8);
+  });
+
   it('supports partial duration updates and batch get', () => {
     upsertTicketRecording(db, {
       ticketId: 21,

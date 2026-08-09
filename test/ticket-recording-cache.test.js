@@ -126,6 +126,27 @@ describe('resolveTicketRecordingCache', () => {
       null
     );
   });
+
+  it('does not persist zero duration and retries later', async () => {
+    const ticket = ticketWithRecording(9, 'http://rofeev.7x.uz/zero.wav');
+    const first = await resolveTicketRecordingCache(db, ticket, {
+      fetchDurationFn: async () => 0,
+    });
+    assert.equal(first.duration_seconds, null);
+    assert.equal(getTicketRecording(db, 9)?.duration_seconds, null);
+
+    db.prepare(
+      `UPDATE ticket_recordings
+       SET duration_seconds = 0
+       WHERE ticket_id = 9`
+    ).run();
+    assert.equal(getTicketRecording(db, 9)?.duration_seconds, null);
+
+    const retried = await resolveTicketRecordingCache(db, ticket, {
+      fetchDurationFn: async () => 15.5,
+    });
+    assert.equal(retried.duration_seconds, 15.5);
+  });
 });
 
 describe('list enrichment recording cache', () => {

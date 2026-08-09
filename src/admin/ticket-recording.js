@@ -8,6 +8,12 @@ const DEFAULT_RECORDING_HOSTS = ['rofeev.7x.uz'];
 const DEFAULT_DURATION_TIMEOUT_MS = 8_000;
 const DEFAULT_DURATION_MAX_BYTES = 8 * 1024 * 1024;
 
+/** Zero/negative values are treated as parse failures (common with truncated audio). */
+function isValidRecordingDuration(value) {
+  const duration = Number(value);
+  return Number.isFinite(duration) && duration > 0;
+}
+
 function getAllowedRecordingHosts() {
   const configured = String(process.env.REGOS_RECORDING_ALLOWED_HOSTS || '')
     .split(',')
@@ -79,6 +85,7 @@ async function fetchRecordingDurationSeconds(
     if (![200, 206].includes(response.status) || !response.body) return null;
 
     const contentType = response.headers.get('content-type') || undefined;
+    const contentLengthHeader = Number(response.headers.get('content-length'));
     const chunks = [];
     let total = 0;
     for await (const chunk of Readable.fromWeb(response.body)) {
@@ -89,16 +96,24 @@ async function fetchRecordingDurationSeconds(
     }
 
     const buffer = Buffer.concat(chunks, total);
-    if (!buffer.length) return null;
+    // Tiny bodies are usually error pages / aborted downloads, not usable audio.
+    if (buffer.length < 256) return null;
 
     const parser = parseBuffer || (await import('music-metadata')).parseBuffer;
     const metadata = await parser(
       buffer,
-      { mimeType: contentType, size: buffer.length },
+      {
+        mimeType: contentType,
+        // Prefer full Content-Length so truncated downloads can still estimate duration.
+        size:
+          Number.isFinite(contentLengthHeader) && contentLengthHeader > 0
+            ? contentLengthHeader
+            : buffer.length,
+      },
       { duration: true }
     );
     const duration = metadata?.format?.duration;
-    return Number.isFinite(duration) ? duration : null;
+    return isValidRecordingDuration(duration) ? duration : null;
   } catch {
     return null;
   } finally {
@@ -135,13 +150,17 @@ async function resolveTicketRecordingCache(
   }
 
   const recordingUrl = row?.recording_url || fieldHref || null;
-  let durationSeconds = row?.duration_seconds ?? null;
+  let durationSeconds = isValidRecordingDuration(row?.duration_seconds)
+    ? row.duration_seconds
+    : null;
 
   if (fetchDuration && recordingUrl && durationSeconds == null) {
     const duration = await fetchDurationFn(recordingUrl, { signal, timeoutMs });
-    if (Number.isFinite(duration)) {
+    if (isValidRecordingDuration(duration)) {
       row = upsertTicketRecording(db, { ticketId, durationSeconds: duration });
-      durationSeconds = row?.duration_seconds ?? duration;
+      durationSeconds = isValidRecordingDuration(row?.duration_seconds)
+        ? row.duration_seconds
+        : duration;
     }
   }
 
@@ -155,6 +174,7 @@ module.exports = {
   DEFAULT_RECORDING_HOSTS,
   DEFAULT_DURATION_TIMEOUT_MS,
   DEFAULT_DURATION_MAX_BYTES,
+  isValidRecordingDuration,
   getAllowedRecordingHosts,
   getTicketRecordingUrl,
   fetchRecordingDurationSeconds,

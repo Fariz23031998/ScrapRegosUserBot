@@ -451,7 +451,8 @@ function getCachedRecording(ticket) {
 
 function getCachedRecordingDuration(ticket) {
   const duration = Number(getCachedRecording(ticket)?.duration_seconds);
-  return Number.isFinite(duration) ? duration : null;
+  // 0 is not a usable duration (failed server parse); keep probing via Audio.
+  return Number.isFinite(duration) && duration > 0 ? duration : null;
 }
 
 function getRecordingUrl(ticket) {
@@ -517,7 +518,8 @@ function loadRecordingDuration(ticketId) {
     }
 
     function onLoaded() {
-      finish(Number.isFinite(audio.duration) ? audio.duration : null);
+      const duration = Number(audio.duration);
+      finish(Number.isFinite(duration) && duration > 0 ? duration : null);
     }
 
     function onError() {

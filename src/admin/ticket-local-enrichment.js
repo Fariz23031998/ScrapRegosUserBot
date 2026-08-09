@@ -90,9 +90,10 @@ function pickBetterTsStatus(current, candidate) {
 
 function mapLocalRecording(row, ticket) {
   const fieldUrl = getTicketRecordingUrl(ticket);
+  const duration = Number(row?.duration_seconds);
   return {
     url: row?.recording_url || fieldUrl?.href || null,
-    duration_seconds: row?.duration_seconds ?? null,
+    duration_seconds: Number.isFinite(duration) && duration > 0 ? duration : null,
   };
 }
 
@@ -194,12 +195,15 @@ async function resolveMissingTicketRecordings(
     const recording = ticket?.local?.recording;
     const hasUrl = Boolean(recording?.url || getTicketRecordingUrl(ticket));
     if (!hasUrl) return false;
-    return !recording?.url || recording.duration_seconds == null;
+    const duration = Number(recording?.duration_seconds);
+    const hasDuration = Number.isFinite(duration) && duration > 0;
+    return !recording?.url || !hasDuration;
   });
   if (misses.length === 0) return rows;
 
   await mapWithConcurrency(misses, concurrency, async (ticket) => {
-    const needsDuration = ticket?.local?.recording?.duration_seconds == null;
+    const duration = Number(ticket?.local?.recording?.duration_seconds);
+    const needsDuration = !(Number.isFinite(duration) && duration > 0);
     const resolved = await resolveCache(db, ticket, {
       fetchDuration: needsDuration,
       timeoutMs,

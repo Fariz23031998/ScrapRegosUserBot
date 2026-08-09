@@ -100,5 +100,9 @@ describe('tickets table recording cache UI', () => {
       source,
       /Number\.isFinite\(getCachedRecordingDuration\(ticket\)\)[\s\S]*formatCallDuration\(getCachedRecordingDuration\(ticket\)\)/
     );
+    assert.match(
+      source,
+      /Number\.isFinite\(duration\) && duration > 0 \? duration : null/
+    );
   });
 });
