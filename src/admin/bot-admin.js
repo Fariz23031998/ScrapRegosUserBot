@@ -42,6 +42,11 @@ const {
   replaceServicePricesCatalog,
 } = require('../db/service-prices');
 const {
+  listRegosChannelSettings,
+  replaceRegosChannelSettings,
+  mergeRegosChannelsWithSettings,
+} = require('../db/regos-channel-settings');
+const {
   RegosCrmError,
   DEFAULT_DUPLICATE_INTERVAL_MINUTES,
   fetchAllTickets,
@@ -94,6 +99,11 @@ function parseRightsBody(body = {}) {
     }
   }
   return rights;
+}
+
+async function loadMergedChannelSettings(db) {
+  const channels = (await fetchAllChannels()).map(mapRegosChannelSummary);
+  return mergeRegosChannelsWithSettings(channels, listRegosChannelSettings(db));
 }
 
 function resolveSessionRegosUserId(db, req) {
@@ -332,6 +342,35 @@ async function loadActiveTicketForRequest(db, req) {
   return {
     active_ticket: activeTicket,
     active_ticket_user_id: activeForUserId ? Number(activeForUserId) : null,
+  };
+}
+
+function buildDurationSummary(tickets, channelSettings) {
+  const callChannelIds = new Set(
+    (channelSettings || [])
+      .filter((setting) => setting.interaction_mode === 'call')
+      .map((setting) => String(setting.channel_id))
+  );
+  const messageTickets = [];
+  const calls = [];
+
+  for (const ticket of tickets || []) {
+    const channelId = ticket?.channel_id == null ? '' : String(ticket.channel_id);
+    if (!callChannelIds.has(channelId)) {
+      messageTickets.push(ticket);
+      continue;
+    }
+    calls.push({
+      id: ticket.id,
+      slaBreached: Boolean(ticket.sla_breached),
+      rated: ticket.rating != null,
+      hasRecording: Boolean(getTicketRecordingUrl(ticket)),
+    });
+  }
+
+  return {
+    base: summarizeTickets(messageTickets),
+    calls,
   };
 }
 
@@ -683,6 +722,79 @@ function createBotAdminRouter(db) {
       return res.status(500).json({ message: 'Не удалось загрузить каналы REGOS.' });
     }
   });
+
+  router.get('/api/settings/channels', requireRight(db, 'settings_read'), async (_req, res) => {
+    try {
+      return res.json({ channels: await loadMergedChannelSettings(db) });
+    } catch (error) {
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      console.error('Load channel settings error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить настройки каналов.' });
+    }
+  });
+
+  router.put(
+    '/api/settings/channels',
+    requireRight(db, 'settings_edit'),
+    express.json(),
+    async (req, res) => {
+      try {
+        const current = await loadMergedChannelSettings(db);
+        const submitted = Array.isArray(req.body?.channels) ? req.body.channels : null;
+        if (!submitted) {
+          return res.status(400).json({ message: 'Передайте полный список каналов.' });
+        }
+
+        const submittedById = new Map(
+          submitted.map((item) => [String(item?.id ?? item?.channel_id ?? '').trim(), item])
+        );
+        if (
+          submitted.length !== current.length ||
+          submittedById.size !== current.length ||
+          current.some((channel) => !submittedById.has(channel.id))
+        ) {
+          return res.status(400).json({ message: 'Список каналов устарел. Обновите страницу.' });
+        }
+
+        const saved = replaceRegosChannelSettings(
+          db,
+          current.map((channel) => ({
+            channel_id: channel.id,
+            channel_name: channel.name,
+            interaction_mode: submittedById.get(channel.id)?.interaction_mode,
+          }))
+        );
+        const savedById = new Map(saved.map((setting) => [String(setting.channel_id), setting]));
+        return res.json({
+          ok: true,
+          channels: current.map((channel) => ({
+            ...channel,
+            interaction_mode:
+              savedById.get(channel.id)?.interaction_mode || 'message_only',
+          })),
+        });
+      } catch (error) {
+        if (
+          [
+            'INVALID_CHANNEL_ID',
+            'INVALID_CHANNEL_MODE',
+            'INVALID_CHANNEL_NAME',
+            'INVALID_CHANNEL_SETTINGS',
+            'DUPLICATE_CHANNEL_ID',
+          ].includes(error.message)
+        ) {
+          return res.status(400).json({ message: 'Некорректные настройки каналов.' });
+        }
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        console.error('Save channel settings error:', error);
+        return res.status(500).json({ message: 'Не удалось сохранить настройки каналов.' });
+      }
+    }
+  );
 
   router.get('/api/tickets/:id', requireRight(db, 'tickets_read'), async (req, res) => {
     try {
@@ -1119,6 +1231,15 @@ function createBotAdminRouter(db) {
       const toDate = String(req.query.to_date || '').trim();
       const responsibleUserId = String(req.query.responsible_user_id || '').trim();
       const channelId = String(req.query.channel_id || '').trim();
+      const minimumCallDurationRaw = String(req.query.minimum_call_duration_seconds || '').trim();
+      const durationFilterActive = minimumCallDurationRaw !== '';
+      const minimumCallDuration = Number(minimumCallDurationRaw);
+      if (
+        durationFilterActive &&
+        (!Number.isFinite(minimumCallDuration) || minimumCallDuration < 0)
+      ) {
+        return res.status(400).json({ message: 'Минимальная длительность должна быть неотрицательной.' });
+      }
       const withoutDuplicates =
         req.query.without_duplicates === '1' || req.query.without_duplicates === 'true';
       let duplicateIntervalMinutes = Number(req.query.duplicate_interval_minutes);
@@ -1155,6 +1276,12 @@ function createBotAdminRouter(db) {
       }
 
       const summary = summarizeTickets(tickets);
+      const durationSummary = durationFilterActive
+        ? buildDurationSummary(tickets, listRegosChannelSettings(db))
+        : null;
+      if (durationSummary) {
+        tickets.forEach(cacheTicketRecordingUrl);
+      }
       const total = tickets.length;
       const totalPages = Math.max(1, Math.ceil(total / limit) || 1);
       if (page > totalPages) {
@@ -1170,6 +1297,7 @@ function createBotAdminRouter(db) {
         page,
         limit,
         summary,
+        duration_summary: durationSummary,
         active_ticket: activeTicket,
         active_ticket_user_id: activeForUserId ? Number(activeForUserId) : null,
       });
@@ -1597,6 +1725,10 @@ function createBotAdminRouter(db) {
     return sendPublicFile(res, publicDir, 'prices.html');
   });
 
+  router.get('/settings', requireRight(db, 'settings_read'), (_req, res) => {
+    return sendPublicFile(res, publicDir, 'settings.html');
+  });
+
   router.get('/', (req, res) => {
     // Without the trailing slash the browser resolves page-relative asset URLs
     // against the site root, so redirect to the canonical directory form.
@@ -1616,6 +1748,7 @@ function createBotAdminRouter(db) {
       if (permissions.tickets_read) return res.redirect('/bot-admin/tickets');
       if (permissions.technical_support_read) return res.redirect('/bot-admin/technical-support');
       if (permissions.prices_read) return res.redirect('/bot-admin/prices');
+      if (permissions.settings_read) return res.redirect('/bot-admin/settings');
     }
     return sendPublicFile(res, publicDir, 'index.html');
   });
@@ -1627,4 +1760,5 @@ function createBotAdminRouter(db) {
 
 module.exports = {
   createBotAdminRouter,
+  buildDurationSummary,
 };

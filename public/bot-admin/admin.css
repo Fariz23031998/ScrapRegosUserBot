@@ -916,6 +916,20 @@ body.modal-open {
   color: #15803d;
 }
 
+.settings-hint {
+  margin: 0;
+}
+
+.settings-channels-table .channel-mode-select {
+  width: min(100%, 220px);
+  background: #fff;
+}
+
+.settings-channels-table .channel-mode-select:disabled {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
 .breadcrumb {
   margin: 0 0 8px;
   font-size: 14px;
@@ -1259,6 +1273,7 @@ body.modal-open {
 }
 
 .ticket-filters .field-inline select,
+.ticket-filters .field-inline input[type='number'],
 .ticket-filters .field-inline input[type='date'],
 .ticket-filters .field-inline input[type='datetime-local'] {
   height: 38px;
@@ -1283,6 +1298,11 @@ body.modal-open {
 .ticket-filters .field-inline input[type='datetime-local'] {
   min-width: 190px;
   color-scheme: light;
+}
+
+.ticket-filters #minimum-call-duration {
+  width: 130px;
+  min-width: 130px;
 }
 
 .ticket-filters #status-filter {
@@ -1859,6 +1879,7 @@ body:has(.page--ticket-detail) {
   }
 
   .ticket-filters .field-inline select,
+  .ticket-filters .field-inline input[type='number'],
   .ticket-filters .field-inline input[type='date'],
   .ticket-filters .field-inline input[type='datetime-local'] {
     min-width: 0;

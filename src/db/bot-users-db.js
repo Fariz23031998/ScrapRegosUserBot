@@ -35,6 +35,8 @@ const DEFAULT_RIGHTS = {
   prices_create: 0,
   prices_edit: 0,
   prices_delete: 0,
+  settings_read: 0,
+  settings_edit: 0,
 };
 
 const RIGHTS_COLUMNS = Object.keys(DEFAULT_RIGHTS);
@@ -56,6 +58,8 @@ const ADMIN_RIGHTS_COLUMNS = [
   'prices_create',
   'prices_edit',
   'prices_delete',
+  'settings_read',
+  'settings_edit',
 ];
 
 function normalizePhoneKey(phone) {

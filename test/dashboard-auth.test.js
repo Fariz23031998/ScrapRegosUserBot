@@ -560,6 +560,8 @@ describe('Telegram dashboard authentication', () => {
     assert.ok(cols.some((col) => col.name === 'delete_unpaid_order'));
     assert.ok(cols.some((col) => col.name === 'mark_paid_cash'));
     assert.ok(cols.some((col) => col.name === 'renotify_order'));
+    assert.ok(cols.some((col) => col.name === 'settings_read'));
+    assert.ok(cols.some((col) => col.name === 'settings_edit'));
 
     const app = express();
     app.use('/bot-admin', createBotAdminRouter(db));
@@ -618,6 +620,8 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(passwordSessionBody.permissions.tickets_read, true);
       assert.equal(passwordSessionBody.permissions.users_read, true);
       assert.equal(passwordSessionBody.permissions.prices_edit, true);
+      assert.equal(passwordSessionBody.permissions.settings_read, true);
+      assert.equal(passwordSessionBody.permissions.settings_edit, true);
       assert.equal(passwordSessionBody.permissions.delete_unpaid_order, true);
       assert.equal(passwordSessionBody.permissions.mark_paid_cash, true);
       assert.equal(passwordSessionBody.permissions.renotify_order, true);
@@ -660,6 +664,8 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(ticketsOnlyBody.permissions.tickets_read, true);
       assert.equal(ticketsOnlyBody.permissions.users_read, false);
       assert.equal(ticketsOnlyBody.permissions.order_logs_read, false);
+      assert.equal(ticketsOnlyBody.permissions.settings_read, false);
+      assert.equal(ticketsOnlyBody.permissions.settings_edit, false);
       assert.equal(ticketsOnlyBody.permissions.delete_unpaid_order, false);
       assert.equal(ticketsOnlyBody.permissions.mark_paid_cash, false);
       assert.equal(ticketsOnlyBody.permissions.renotify_order, false);
@@ -676,12 +682,43 @@ describe('Telegram dashboard authentication', () => {
         '/bot-admin/api/order-logs',
         '/bot-admin/api/technical-support/prices',
         '/bot-admin/api/prices',
+        '/bot-admin/api/settings/channels',
       ]) {
         const denied = await request(server, 'GET', urlPath, {
           headers: { Cookie: ticketsOnlyCookie, Accept: 'application/json' },
         });
         assert.equal(denied.statusCode, 403, `${urlPath} should be 403`);
       }
+
+      const settingsReaderId = 555002;
+      const settingsReader = createEmployeeUser(db, {
+        phone: '+998905550002',
+        displayName: 'Settings Reader',
+        rights: { open_admin_dashboard: 1, settings_read: 1, settings_edit: 0 },
+      });
+      linkEmployeeTelegram(db, settingsReader.id, settingsReaderId, {});
+      const settingsReaderToken = createDashboardLoginToken(db, settingsReaderId).rawToken;
+      const settingsReaderAuth = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(settingsReaderToken)}`
+      );
+      const settingsReaderCookie = cookieFromSetCookie(settingsReaderAuth.headers['set-cookie']);
+      assert.ok(settingsReaderCookie);
+
+      const settingsPage = await request(server, 'GET', '/bot-admin/settings', {
+        headers: { Cookie: settingsReaderCookie },
+      });
+      assert.equal(settingsPage.statusCode, 200);
+      const settingsWriteDenied = await request(
+        server,
+        'PUT',
+        '/bot-admin/api/settings/channels',
+        {
+          headers: { Cookie: settingsReaderCookie, 'Content-Type': 'application/json' },
+        }
+      );
+      assert.equal(settingsWriteDenied.statusCode, 403);
 
       const usersReadId = 555003;
       const usersReadEmployee = createEmployeeUser(db, {

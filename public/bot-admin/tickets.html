@@ -32,6 +32,7 @@
           <a class="admin-nav__link admin-nav__link--active" href="/bot-admin/tickets" aria-current="page">Тикеты</a>
           <a class="admin-nav__link" href="/bot-admin/technical-support">Техподдержка</a>
           <a class="admin-nav__link" href="/bot-admin/prices">Прайс</a>
+          <a class="admin-nav__link" href="/bot-admin/settings">Настройки</a>
         </nav>
       </header>
 
@@ -95,6 +96,11 @@
               <input type="datetime-local" id="date-to" />
             </label>
 
+            <label class="field field-inline">
+              <span>Звонки дольше, сек</span>
+              <input type="number" id="minimum-call-duration" min="0" step="1" placeholder="Не учитывать" />
+            </label>
+
             <label class="field field-inline field-checkbox">
               <input type="checkbox" id="without-duplicates" />
               <span>Без дубликатов</span>
@@ -151,6 +157,7 @@
     </div>
 
     <script src="/bot-admin/admin-common.js"></script>
+    <script src="/bot-admin/admin-ticket-summary.js"></script>
     <script src="/bot-admin/admin-tickets.js"></script>
   </body>
 </html>

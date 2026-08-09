@@ -24,6 +24,7 @@ let dateFrom = '';
 let dateTo = '';
 let withoutDuplicates = false;
 let duplicateIntervalMinutes = 10;
+let minimumCallDuration = '';
 let currentPage = 1;
 let pageLimit = 25;
 let totalTickets = 0;
@@ -40,7 +41,10 @@ let realtimeTicketsRefreshTimer = null;
 let realtimeTicketsRefreshInFlight = false;
 let realtimeTicketsRefreshPending = false;
 let durationLoadGeneration = 0;
+let summaryCalculationGeneration = 0;
+let summaryCalculating = false;
 const recordingDurationCache = new Map();
+const recordingDurationPromises = new Map();
 let recordingModalTrigger = null;
 
 const searchInput = document.getElementById('ticket-search');
@@ -51,6 +55,7 @@ const userSelect = document.getElementById('user-filter');
 const channelSelect = document.getElementById('channel-filter');
 const dateFromInput = document.getElementById('date-from');
 const dateToInput = document.getElementById('date-to');
+const minimumCallDurationInput = document.getElementById('minimum-call-duration');
 const withoutDuplicatesInput = document.getElementById('without-duplicates');
 const duplicateIntervalWrap = document.getElementById('duplicate-interval-wrap');
 const duplicateIntervalSelect = document.getElementById('duplicate-interval');
@@ -104,33 +109,100 @@ function setDurationCell(index, duration) {
   if (cell) cell.textContent = formatCallDuration(duration);
 }
 
+function loadRecordingDuration(ticketId) {
+  const key = String(ticketId);
+  if (recordingDurationCache.has(key)) {
+    return Promise.resolve(recordingDurationCache.get(key));
+  }
+  if (recordingDurationPromises.has(key)) {
+    return recordingDurationPromises.get(key);
+  }
+
+  const promise = new Promise((resolve) => {
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    const timeout = setTimeout(() => finish(null), 15_000);
+
+    function finish(duration) {
+      clearTimeout(timeout);
+      audio.removeEventListener('loadedmetadata', onLoaded);
+      audio.removeEventListener('error', onError);
+      audio.removeAttribute('src');
+      audio.load();
+      if (Number.isFinite(duration)) {
+        recordingDurationCache.set(key, duration);
+        resolve(duration);
+      } else {
+        resolve(null);
+      }
+    }
+
+    function onLoaded() {
+      finish(Number.isFinite(audio.duration) ? audio.duration : null);
+    }
+
+    function onError() {
+      finish(null);
+    }
+
+    audio.addEventListener('loadedmetadata', onLoaded, { once: true });
+    audio.addEventListener('error', onError, { once: true });
+    audio.src = `/bot-admin/api/tickets/${encodeURIComponent(ticketId)}/recording`;
+  }).finally(() => recordingDurationPromises.delete(key));
+
+  recordingDurationPromises.set(key, promise);
+  return promise;
+}
+
 function loadVisibleCallDurations() {
   const generation = ++durationLoadGeneration;
   tickets.forEach((ticket, index) => {
     const recordingUrl = getRecordingUrl(ticket);
     if (!recordingUrl) return;
-    const mediaUrl = getRecordingMediaUrl(ticket);
-
-    if (recordingDurationCache.has(recordingUrl)) {
-      setDurationCell(index, recordingDurationCache.get(recordingUrl));
-      return;
-    }
-
-    const audio = new Audio();
-    audio.preload = 'metadata';
-    audio.addEventListener(
-      'loadedmetadata',
-      () => {
-        if (!Number.isFinite(audio.duration)) return;
-        recordingDurationCache.set(recordingUrl, audio.duration);
-        if (generation === durationLoadGeneration) setDurationCell(index, audio.duration);
-        audio.removeAttribute('src');
-        audio.load();
-      },
-      { once: true }
-    );
-    audio.src = mediaUrl;
+    loadRecordingDuration(ticket.id).then((duration) => {
+      if (generation === durationLoadGeneration && Number.isFinite(duration)) {
+        setDurationCell(index, duration);
+      }
+    });
   });
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  let nextIndex = 0;
+  const runners = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await worker(items[index], index);
+      }
+    }
+  );
+  await Promise.all(runners);
+}
+
+async function calculateDurationAwareSummary(durationSummary, threshold, generation) {
+  const durationsByTicketId = {};
+  const calls = Array.isArray(durationSummary?.calls)
+    ? durationSummary.calls.filter((call) => call.hasRecording)
+    : [];
+
+  await mapWithConcurrency(calls, 4, async (call) => {
+    const duration = await loadRecordingDuration(call.id);
+    if (Number.isFinite(duration)) {
+      durationsByTicketId[String(call.id)] = duration;
+    }
+  });
+
+  if (generation !== summaryCalculationGeneration) return;
+  summary = TicketSummary.summarizeByDuration(
+    durationSummary,
+    durationsByTicketId,
+    threshold
+  );
+  summaryCalculating = false;
+  renderSummary();
 }
 
 function openRecordingModal(ticket, trigger) {
@@ -235,6 +307,13 @@ function loadSavedFilters() {
       channelId:
         parsed.channelId != null && parsed.channelId !== '' ? String(parsed.channelId) : '',
       withoutDuplicates: Boolean(parsed.withoutDuplicates),
+      minimumCallDuration:
+        parsed.minimumCallDuration != null &&
+        parsed.minimumCallDuration !== '' &&
+        Number.isFinite(Number(parsed.minimumCallDuration)) &&
+        Number(parsed.minimumCallDuration) >= 0
+          ? String(parsed.minimumCallDuration)
+          : '',
     };
   } catch {
     return null;
@@ -250,6 +329,7 @@ function saveFiltersToStorage() {
         responsibleUserId: userFilter,
         channelId: channelFilter,
         withoutDuplicates,
+        minimumCallDuration,
       })
     );
   } catch {
@@ -270,6 +350,8 @@ function applySavedFiltersToForm(saved) {
 
   withoutDuplicatesInput.checked = saved.withoutDuplicates;
   withoutDuplicates = saved.withoutDuplicates;
+  minimumCallDurationInput.value = saved.minimumCallDuration;
+  minimumCallDuration = saved.minimumCallDuration;
   syncDuplicateIntervalVisibility();
 }
 
@@ -278,6 +360,7 @@ function persistSelectableFilters() {
   userFilter = userSelect.value;
   channelFilter = channelSelect.value;
   withoutDuplicates = withoutDuplicatesInput.checked;
+  minimumCallDuration = minimumCallDurationInput.value.trim();
   saveFiltersToStorage();
 }
 
@@ -290,6 +373,7 @@ function readFiltersFromForm() {
   dateTo = dateToInput.value;
   withoutDuplicates = withoutDuplicatesInput.checked;
   duplicateIntervalMinutes = Number(duplicateIntervalSelect.value) || 10;
+  minimumCallDuration = minimumCallDurationInput.value.trim();
   saveFiltersToStorage();
 }
 
@@ -304,6 +388,12 @@ function showError(message) {
 }
 
 function renderSummary() {
+  if (summaryCalculating) {
+    ticketsSummaryEl.hidden = false;
+    ticketsSummaryEl.innerHTML =
+      '<span class="tickets-summary__calculating">Расчёт итогов по длительности звонков…</span>';
+    return;
+  }
   if (!summary || summary.count == null) {
     ticketsSummaryEl.hidden = true;
     return;
@@ -560,6 +650,7 @@ async function loadChannels({ preferredChannelId = undefined } = {}) {
 
 async function loadTickets() {
   showError('');
+  const summaryGeneration = ++summaryCalculationGeneration;
   const params = new URLSearchParams({
     page: String(currentPage),
     limit: String(pageLimit),
@@ -568,6 +659,9 @@ async function loadTickets() {
   if (statusFilter) params.set('status', statusFilter);
   if (userFilter) params.set('responsible_user_id', userFilter);
   if (channelFilter) params.set('channel_id', channelFilter);
+  if (minimumCallDuration !== '') {
+    params.set('minimum_call_duration_seconds', minimumCallDuration);
+  }
 
   const fromUnix = datetimeLocalToUnix(dateFrom);
   const toUnix = datetimeLocalToUnix(dateTo);
@@ -585,6 +679,7 @@ async function loadTickets() {
   currentPage = data.page ?? currentPage;
   pageLimit = data.limit ?? pageLimit;
   summary = data.summary || { count: totalTickets, slaBreached: 0, rated: 0 };
+  summaryCalculating = Boolean(data.duration_summary);
   activeTicket = data.active_ticket || null;
   activeTicketUserId =
     data.active_ticket_user_id != null ? Number(data.active_ticket_user_id) : null;
@@ -594,6 +689,18 @@ async function loadTickets() {
   renderActiveTicket();
   renderTicketsTable();
   renderTicketsPagination();
+
+  if (data.duration_summary) {
+    const threshold = Number(minimumCallDuration);
+    calculateDurationAwareSummary(data.duration_summary, threshold, summaryGeneration).catch(
+      (error) => {
+        if (summaryGeneration !== summaryCalculationGeneration) return;
+        console.warn('Не удалось рассчитать итоги по длительности звонков:', error);
+        summaryCalculating = false;
+        renderSummary();
+      }
+    );
+  }
 }
 
 async function runRealtimeTicketsRefresh() {
@@ -713,6 +820,7 @@ document.getElementById('refresh-tickets-btn').addEventListener('click', () => {
 statusSelect.addEventListener('change', persistSelectableFilters);
 userSelect.addEventListener('change', persistSelectableFilters);
 channelSelect.addEventListener('change', persistSelectableFilters);
+minimumCallDurationInput.addEventListener('change', persistSelectableFilters);
 withoutDuplicatesInput.addEventListener('change', () => {
   syncDuplicateIntervalVisibility();
   persistSelectableFilters();

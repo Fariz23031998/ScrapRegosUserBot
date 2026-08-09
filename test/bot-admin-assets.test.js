@@ -17,6 +17,7 @@ const ADMIN_PAGES = [
   'order-logs.html',
   'technical-support.html',
   'prices.html',
+  'settings.html',
   'tickets.html',
   'ticket-detail.html',
 ];
@@ -26,6 +27,8 @@ const ADMIN_SCRIPTS = [
   'admin-order-logs.js',
   'admin-technical-support.js',
   'admin-prices.js',
+  'admin-settings.js',
+  'admin-ticket-summary.js',
   'admin-tickets.js',
   'admin-ticket-detail.js',
 ];
@@ -199,6 +202,19 @@ describe('Bot admin static assets and API auth', () => {
     );
   });
 
+  it('includes the permission-controlled Settings link on every admin page', () => {
+    const publicDir = botAdminPublicDir();
+    for (const page of ADMIN_PAGES) {
+      const html = fs.readFileSync(path.join(publicDir, page), 'utf8');
+      assert.match(html, /href="\/bot-admin\/settings"/, `${page} should link to Settings`);
+    }
+    const commonScript = fs.readFileSync(path.join(publicDir, 'admin-common.js'), 'utf8');
+    assert.match(
+      commonScript,
+      /\{ href: '\/bot-admin\/settings', permission: 'settings_read' \}/
+    );
+  });
+
   it('defines every table class the renderers use', () => {
     const publicDir = botAdminPublicDir();
     const css = fs.readFileSync(path.join(publicDir, 'admin.css'), 'utf8');
@@ -250,6 +266,8 @@ describe('Bot admin static assets and API auth', () => {
       '/bot-admin/admin-order-logs.js': 'application/javascript',
       '/bot-admin/admin-technical-support.js': 'application/javascript',
       '/bot-admin/admin-prices.js': 'application/javascript',
+      '/bot-admin/admin-settings.js': 'application/javascript',
+      '/bot-admin/admin-ticket-summary.js': 'application/javascript',
     };
 
     for (const [urlPath, contentType] of Object.entries(expected)) {
@@ -275,6 +293,7 @@ describe('Bot admin static assets and API auth', () => {
       '/bot-admin/order-logs',
       '/bot-admin/technical-support',
       '/bot-admin/prices',
+      '/bot-admin/settings',
     ]) {
       const response = await request(server, urlPath, { headers: { Accept: 'text/html' } });
       assert.equal(response.statusCode, 302);

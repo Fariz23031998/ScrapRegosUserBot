@@ -7,6 +7,7 @@ const NAV_PERMISSION_LINKS = [
   { href: '/bot-admin/tickets', permission: 'tickets_read' },
   { href: '/bot-admin/technical-support', permission: 'technical_support_read' },
   { href: '/bot-admin/prices', permission: 'prices_read' },
+  { href: '/bot-admin/settings', permission: 'settings_read' },
 ];
 
 const LANDING_REDIRECTS = [
@@ -16,6 +17,7 @@ const LANDING_REDIRECTS = [
   { permission: 'tickets_read', href: '/bot-admin/tickets' },
   { permission: 'technical_support_read', href: '/bot-admin/technical-support' },
   { permission: 'prices_read', href: '/bot-admin/prices' },
+  { permission: 'settings_read', href: '/bot-admin/settings' },
 ];
 
 async function api(path, options = {}) {

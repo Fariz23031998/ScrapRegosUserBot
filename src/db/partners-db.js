@@ -272,6 +272,8 @@ function migrateSchema(db) {
   ensureTechnicalSupportTables(db);
   const { ensureServicePricesTables } = require('./service-prices');
   ensureServicePricesTables(db);
+  const { ensureRegosChannelSettingsTable } = require('./regos-channel-settings');
+  ensureRegosChannelSettingsTable(db);
 }
 
 const upsertPartnerStmt = (db) =>

@@ -101,6 +101,14 @@ const RIGHTS = {
     column: 'prices_delete',
     label: 'Админ: прайс — удаление',
   },
+  settings_read: {
+    column: 'settings_read',
+    label: 'Админ: настройки — просмотр',
+  },
+  settings_edit: {
+    column: 'settings_edit',
+    label: 'Админ: настройки — изменение',
+  },
 };
 
 /** Admin UI section permission keys returned by /api/session. */
@@ -123,6 +131,8 @@ const ADMIN_PERMISSION_KEYS = [
   'prices_create',
   'prices_edit',
   'prices_delete',
+  'settings_read',
+  'settings_edit',
 ];
 
 function hasRight(db, telegramId, rightKey) {
