@@ -821,7 +821,23 @@ function orderMatchesQuery(order, query) {
   return searchable.includes(lower);
 }
 
-function listOrders(db, { query, status, from, to, offset = 0, limit = 25 } = {}) {
+function parseClientPhoneFilter(value) {
+  return String(value || '')
+    .split(/[,;\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function orderMatchesClientPhone(order, clientPhone) {
+  const phones = parseClientPhoneFilter(clientPhone);
+  if (!phones.length) return true;
+  return phones.some(
+    (phone) =>
+      phonesMatch(order.client_phone, phone) || phonesMatch(order.additional_phone, phone)
+  );
+}
+
+function listOrders(db, { query, clientPhone, status, from, to, offset = 0, limit = 25 } = {}) {
   let sql = 'SELECT * FROM orders WHERE 1=1';
   const params = [];
 
@@ -845,6 +861,9 @@ function listOrders(db, { query, status, from, to, offset = 0, limit = 25 } = {}
   sql += ' ORDER BY datetime(created_at) DESC';
 
   let rows = db.prepare(sql).all(...params);
+  if (clientPhone) {
+    rows = rows.filter((row) => orderMatchesClientPhone(row, clientPhone));
+  }
   if (query) {
     rows = rows.filter((row) => orderMatchesQuery(row, query));
   }

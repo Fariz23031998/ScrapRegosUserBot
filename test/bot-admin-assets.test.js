@@ -257,6 +257,8 @@ describe('Bot admin static assets and API auth', () => {
     assert.match(ticketsScript, /hasPermission\(session, 'clients_edit'\)/);
     assert.match(ticketsScript, /hasPermission\(session, 'clients_link_firm'\)/);
     assert.match(ticketsScript, /renderUnpaidOrdersCell/);
+    assert.match(ticketsScript, /collectUnpaidClientPhones/);
+    assert.match(ticketsScript, /params\.set\('client'/);
     assert.match(ticketsScript, /renderTechnicalSupportCell/);
     assert.match(ticketsScript, /ticket-firm-open/);
     assert.match(ticketsScript, /method:\s*'POST'/);
@@ -266,6 +268,13 @@ describe('Bot admin static assets and API auth', () => {
     assert.match(detailScript, /method:\s*'PATCH'/);
     assert.match(detailScript, /applyDefaultLinkedFirm/);
     assert.match(detailScript, /loadLinkedClientFirms/);
+
+    const ordersHtml = fs.readFileSync(path.join(publicDir, 'orders.html'), 'utf8');
+    const ordersScript = fs.readFileSync(path.join(publicDir, 'admin-orders.js'), 'utf8');
+    assert.match(ordersHtml, /id="client-filter"/);
+    assert.match(ordersScript, /clientFilter/);
+    assert.match(ordersScript, /params\.set\('client'/);
+    assert.match(ordersScript, /applyFiltersFromUrl/);
   });
 
   it('redirects /bot-admin to the canonical trailing-slash URL', async () => {

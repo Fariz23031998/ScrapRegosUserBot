@@ -652,6 +652,32 @@ function formatShortDate(iso) {
   });
 }
 
+function collectUnpaidClientPhones(ticket) {
+  const unpaid = ticket.local?.unpaid_orders;
+  const phones = [];
+  const seen = new Set();
+
+  function pushPhone(value) {
+    const phone = String(value || '').trim();
+    if (!phone) return;
+    const key = phone.replace(/\D/g, '');
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    phones.push(phone);
+  }
+
+  for (const order of unpaid?.orders || []) {
+    pushPhone(order.client_phone);
+  }
+  if (!phones.length) {
+    pushPhone(ticket.client?.phone);
+    for (const firm of ticket.local?.firms || []) {
+      pushPhone(firm.firm_phone);
+    }
+  }
+  return phones;
+}
+
 function renderUnpaidOrdersCell(ticket) {
   const unpaid = ticket.local?.unpaid_orders;
   const firmPhones = (ticket.local?.firms || []).map((firm) => firm.firm_phone).filter(Boolean);
@@ -660,9 +686,12 @@ function renderUnpaidOrdersCell(ticket) {
     return hasLookupPhone ? '<span class="badge badge--muted">Нет</span>' : '—';
   }
   const label = `${unpaid.count} · ${formatMoneyAmount(unpaid.total_amount)}`;
-  const searchPhone =
-    unpaid.orders?.[0]?.client_phone || ticket.client?.phone || firmPhones[0] || '';
-  const href = `/bot-admin/orders?status=pending&q=${encodeURIComponent(searchPhone)}`;
+  const clientPhones = collectUnpaidClientPhones(ticket);
+  const params = new URLSearchParams({ status: 'pending' });
+  if (clientPhones.length) {
+    params.set('client', clientPhones.join(','));
+  }
+  const href = `/bot-admin/orders?${params.toString()}`;
   return `<a class="ticket-unpaid-link" href="${escapeHtml(href)}" title="Открыть неоплаченные заказы">${escapeHtml(
     label
   )}</a>`;

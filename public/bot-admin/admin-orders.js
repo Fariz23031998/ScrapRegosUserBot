@@ -1,5 +1,6 @@
 let orders = [];
 let searchQuery = '';
+let clientFilter = '';
 let statusFilter = '';
 let dateFrom = '';
 let dateTo = '';
@@ -13,6 +14,7 @@ let canRenotifyOrders = false;
 const searchInput = document.getElementById('order-search');
 const searchClearBtn = document.getElementById('search-clear');
 const searchBox = document.getElementById('search-box');
+const clientFilterInput = document.getElementById('client-filter');
 const statusSelect = document.getElementById('status-filter');
 const dateFromInput = document.getElementById('date-from');
 const dateToInput = document.getElementById('date-to');
@@ -64,6 +66,10 @@ function statusBadgeClass(status) {
   return 'order-status';
 }
 
+function hasActiveFilters() {
+  return Boolean(searchQuery || clientFilter || statusFilter || dateFrom || dateTo);
+}
+
 function renderActions(order) {
   if (order.status !== 'pending') return '—';
   const id = escapeHtml(order.id);
@@ -93,10 +99,9 @@ function renderActions(order) {
 
 function renderOrdersTable() {
   if (!orders.length) {
-    const emptyMessage =
-      searchQuery || statusFilter || dateFrom || dateTo
-        ? 'Ничего не найдено. Измените фильтры.'
-        : 'Заказов пока нет.';
+    const emptyMessage = hasActiveFilters()
+      ? 'Ничего не найдено. Измените фильтры.'
+      : 'Заказов пока нет.';
     ordersWrap.innerHTML = `<p class="empty-state">${emptyMessage}</p>`;
     return;
   }
@@ -176,6 +181,7 @@ async function loadOrders() {
     limit: String(pageLimit),
   });
   if (searchQuery) params.set('q', searchQuery);
+  if (clientFilter) params.set('client', clientFilter);
   if (statusFilter) params.set('status', statusFilter);
   if (dateFrom) params.set('from_date', dateFrom);
   if (dateTo) params.set('to_date', dateTo);
@@ -219,10 +225,41 @@ async function handleOrderAction(action, orderId) {
 
 function applyFiltersFromForm() {
   searchQuery = searchInput.value.trim();
+  clientFilter = clientFilterInput.value.trim();
   statusFilter = statusSelect.value;
   dateFrom = dateFromInput.value;
   dateTo = dateToInput.value;
   currentPage = 1;
+}
+
+function applyFiltersFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const q = String(params.get('q') || '').trim();
+  const client = String(params.get('client') || params.get('client_phone') || '').trim();
+  const status = String(params.get('status') || '').trim();
+  const from = String(params.get('from_date') || '').trim();
+  const to = String(params.get('to_date') || '').trim();
+
+  if (q) {
+    searchQuery = q;
+    searchInput.value = q;
+  }
+  if (client) {
+    clientFilter = client;
+    clientFilterInput.value = client;
+  }
+  if (status) {
+    statusFilter = status;
+    statusSelect.value = status;
+  }
+  if (from) {
+    dateFrom = from;
+    dateFromInput.value = from;
+  }
+  if (to) {
+    dateTo = to;
+    dateToInput.value = to;
+  }
 }
 
 async function init() {
@@ -231,17 +268,7 @@ async function init() {
   canMarkOrdersPaidCash = hasPermission(session, 'mark_paid_cash');
   canRenotifyOrders = hasPermission(session, 'renotify_order');
 
-  const params = new URLSearchParams(window.location.search);
-  const q = String(params.get('q') || '').trim();
-  const status = String(params.get('status') || '').trim();
-  if (q) {
-    searchQuery = q;
-    searchInput.value = q;
-  }
-  if (status) {
-    statusFilter = status;
-    statusSelect.value = status;
-  }
+  applyFiltersFromUrl();
   updateSearchBoxUi(searchInput, searchClearBtn, searchBox, searchQuery);
 
   await loadOrders();

@@ -182,6 +182,48 @@ describe('ticket local enrichment', () => {
     assert.equal(enriched.local.technical_support.status, 'expired');
   });
 
+  it('matches unpaid orders by additional phone but not by employee phone', () => {
+    createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 1,
+      botUserPhone: '998973923303',
+      clientPhone: '998911321818',
+      additionalPhone: '998900011122',
+      amount: 1000,
+      currency: 'UZS',
+      paymentProvider: 'payme',
+    });
+    createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 1,
+      botUserPhone: '998973923303',
+      clientPhone: '979950011',
+      additionalPhone: null,
+      amount: 1000,
+      currency: 'UZS',
+      paymentProvider: 'payme',
+    });
+
+    const [byAdditional] = enrichTicketsWithLocalData(db, [
+      {
+        id: 98,
+        client_id: null,
+        client: { id: null, name: 'Extra', phone: '998900011122' },
+      },
+    ]);
+    assert.equal(byAdditional.local.unpaid_orders.count, 1);
+    assert.equal(byAdditional.local.unpaid_orders.orders[0].client_phone, '998911321818');
+
+    const [byEmployee] = enrichTicketsWithLocalData(db, [
+      {
+        id: 99,
+        client_id: null,
+        client: { id: null, name: 'Staff', phone: '998973923303' },
+      },
+    ]);
+    assert.equal(byEmployee.local.unpaid_orders.count, 0);
+  });
+
   it('returns none TS status when phone has no subscription', () => {
     const status = getTechnicalSupportStatusByPhone(db, '998911111111');
     assert.equal(status.status, 'none');

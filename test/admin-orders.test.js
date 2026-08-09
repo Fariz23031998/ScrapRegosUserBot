@@ -136,6 +136,22 @@ describe('listOrders helper', () => {
     assert.equal(byPhone.total, 1);
     assert.equal(byPhone.orders[0].additional_phone, '998905555555');
 
+    const byClientPhone = listOrders(db, { clientPhone: '998902222222', limit: 50 });
+    assert.equal(byClientPhone.total, 1);
+    assert.equal(byClientPhone.orders[0].id, pending.id);
+
+    const byClientPhoneTail = listOrders(db, { clientPhone: '2222222', status: 'pending', limit: 50 });
+    assert.equal(byClientPhoneTail.total, 1);
+    assert.equal(byClientPhoneTail.orders[0].client_phone, '998902222222');
+
+    // additional_phone is part of the client filter; employee bot_user_phone is not
+    const byAdditionalOnly = listOrders(db, { clientPhone: '998905555555', limit: 50 });
+    assert.equal(byAdditionalOnly.total, 1);
+    assert.equal(byAdditionalOnly.orders[0].additional_phone, '998905555555');
+
+    const byEmployeePhone = listOrders(db, { clientPhone: '998901111111', limit: 50 });
+    assert.equal(byEmployeePhone.total, 0);
+
     const byId = listOrders(db, { query: pending.id.slice(0, 8), limit: 50 });
     assert.ok(byId.orders.some((row) => row.id === pending.id));
   });
@@ -371,6 +387,17 @@ describe('admin orders API', () => {
     assert.equal(filteredBody.orders[0].id, pending.id);
     assert.equal(filteredBody.orders[0].status, 'pending');
     assert.ok(filteredBody.orders[0].status_label);
+
+    const byClient = await request(
+      server,
+      'GET',
+      '/bot-admin/api/orders?status=pending&client=998902222222',
+      { headers: { Cookie: cookie } }
+    );
+    assert.equal(byClient.statusCode, 200);
+    const byClientBody = JSON.parse(byClient.body);
+    assert.equal(byClientBody.total, 1);
+    assert.equal(byClientBody.orders[0].id, pending.id);
   });
 
   it('allows delete / paid-cash / renotify only for pending orders', async () => {

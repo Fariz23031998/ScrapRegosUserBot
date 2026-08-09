@@ -1326,12 +1326,14 @@ function createBotAdminRouter(db) {
 
   router.get('/api/orders', requireRight(db, 'orders_read'), (req, res) => {
     const query = String(req.query.q || '').trim();
+    const clientPhone = String(req.query.client || req.query.client_phone || '').trim();
     const status = String(req.query.status || '').trim();
     const fromDate = String(req.query.from_date || '').trim();
     const toDate = String(req.query.to_date || '').trim();
     let { page, limit, offset } = parsePaginationQuery(req);
     const options = {
       query: query || undefined,
+      clientPhone: clientPhone || undefined,
       status: status || undefined,
       from: fromDate || undefined,
       to: toDate || undefined,
