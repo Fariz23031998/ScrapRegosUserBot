@@ -199,4 +199,5 @@ scripts/       Windows service + scheduled-task installers
 - [docs/payme-integration.md](docs/payme-integration.md) — Payme receipts setup
 - [docs/click-deploy-linux.md](docs/click-deploy-linux.md) — CLICK deployment
 - [docs/server-deploy-linux.md](docs/server-deploy-linux.md) — Linux server deployment
+- [docs/regos-webhook-troubleshooting.md](docs/regos-webhook-troubleshooting.md) — verify REGOS webhook delivery and ticket SSE updates on Ubuntu
 - [docs/sms-gateway.md](docs/sms-gateway.md) / [docs/getsms.md](docs/getsms.md) — SMS gateway

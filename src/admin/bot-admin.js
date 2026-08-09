@@ -1,5 +1,7 @@
 const path = require('path');
 const express = require('express');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const {
   createEmployeeUser,
   updateEmployeeUser,
@@ -78,7 +80,11 @@ const { formatPaymentPageUrl, getDefaultPaymentProvider } = require('../payments
 const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
+const { getTicketRecordingUrl } = require('./ticket-recording');
 const crypto = require('crypto');
+
+const RECORDING_URL_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECORDING_URL_CACHE_MAX = 1000;
 
 function parseRightsBody(body = {}) {
   const rights = {};
@@ -361,6 +367,32 @@ function writeSseEvent(res, event) {
 function createBotAdminRouter(db) {
   const router = express.Router();
   const publicDir = botAdminPublicDir();
+  const recordingUrlCache = new Map();
+
+  function cacheTicketRecordingUrl(ticket) {
+    const url = getTicketRecordingUrl(ticket);
+    if (!url || ticket?.id == null) return url;
+    const key = String(ticket.id);
+    if (!recordingUrlCache.has(key) && recordingUrlCache.size >= RECORDING_URL_CACHE_MAX) {
+      recordingUrlCache.delete(recordingUrlCache.keys().next().value);
+    }
+    recordingUrlCache.set(key, {
+      href: url.href,
+      expiresAt: Date.now() + RECORDING_URL_CACHE_TTL_MS,
+    });
+    return url;
+  }
+
+  function getCachedTicketRecordingUrl(ticketId) {
+    const key = String(ticketId);
+    const cached = recordingUrlCache.get(key);
+    if (!cached) return null;
+    if (cached.expiresAt <= Date.now()) {
+      recordingUrlCache.delete(key);
+      return null;
+    }
+    return new URL(cached.href);
+  }
 
   router.get('/login', (_req, res) => sendPublicFile(res, publicDir, 'login.html'));
   router.get('/login.css', (_req, res) => sendPublicFile(res, publicDir, 'login.css'));
@@ -658,6 +690,7 @@ function createBotAdminRouter(db) {
       if (!ticket) {
         return res.status(404).json({ message: 'Тикет не найден.' });
       }
+      cacheTicketRecordingUrl(ticket);
       return res.json({ ticket });
     } catch (error) {
       if (error instanceof RegosCrmError) {
@@ -665,6 +698,69 @@ function createBotAdminRouter(db) {
       }
       console.error('Get ticket error:', error);
       return res.status(500).json({ message: 'Не удалось загрузить тикет.' });
+    }
+  });
+
+  router.get('/api/tickets/:id/recording', requireRight(db, 'tickets_read'), async (req, res) => {
+    const abortController = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abortController.abort();
+    });
+
+    try {
+      let recordingUrl = getCachedTicketRecordingUrl(req.params.id);
+      if (!recordingUrl) {
+        const ticket = await findTicketById(req.params.id);
+        if (!ticket) {
+          return res.status(404).json({ message: 'Тикет не найден.' });
+        }
+        recordingUrl = cacheTicketRecordingUrl(ticket);
+      }
+      if (!recordingUrl) {
+        return res.status(404).json({ message: 'Запись звонка не найдена.' });
+      }
+
+      const range = String(req.headers.range || '').trim();
+      const upstream = await fetch(recordingUrl, {
+        headers: /^bytes=\d*-\d*$/i.test(range) ? { Range: range } : {},
+        redirect: 'manual',
+        signal: abortController.signal,
+      });
+
+      if (![200, 206].includes(upstream.status) || !upstream.body) {
+        console.error(
+          `[bot-admin] Recording server returned ${upstream.status} for ticket ${req.params.id}`
+        );
+        return res.status(502).json({ message: 'Не удалось загрузить запись звонка.' });
+      }
+
+      res.status(upstream.status);
+      for (const header of [
+        'accept-ranges',
+        'content-length',
+        'content-range',
+        'content-type',
+        'etag',
+        'last-modified',
+      ]) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+      }
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Content-Disposition', 'inline');
+      await pipeline(Readable.fromWeb(upstream.body), res);
+      return undefined;
+    } catch (error) {
+      if (abortController.signal.aborted) return undefined;
+      console.error('Get ticket recording error:', error);
+      if (res.headersSent) {
+        res.destroy(error);
+        return undefined;
+      }
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      return res.status(502).json({ message: 'Не удалось загрузить запись звонка.' });
     }
   });
 
@@ -1066,6 +1162,7 @@ function createBotAdminRouter(db) {
       }
       const safeOffset = (page - 1) * limit;
       const pageTickets = tickets.slice(safeOffset, safeOffset + limit);
+      pageTickets.forEach(cacheTicketRecordingUrl);
 
       return res.json({
         tickets: pageTickets,

@@ -84,6 +84,10 @@ function getRecordingUrl(ticket) {
   return /^https?:\/\//i.test(value) ? value : null;
 }
 
+function getRecordingMediaUrl(ticket) {
+  return `/bot-admin/api/tickets/${encodeURIComponent(ticket.id)}/recording`;
+}
+
 function formatCallDuration(totalSeconds) {
   const seconds = Math.max(0, Math.round(Number(totalSeconds)));
   if (!Number.isFinite(seconds)) return '—';
@@ -103,11 +107,12 @@ function setDurationCell(index, duration) {
 function loadVisibleCallDurations() {
   const generation = ++durationLoadGeneration;
   tickets.forEach((ticket, index) => {
-    const url = getRecordingUrl(ticket);
-    if (!url) return;
+    const recordingUrl = getRecordingUrl(ticket);
+    if (!recordingUrl) return;
+    const mediaUrl = getRecordingMediaUrl(ticket);
 
-    if (recordingDurationCache.has(url)) {
-      setDurationCell(index, recordingDurationCache.get(url));
+    if (recordingDurationCache.has(recordingUrl)) {
+      setDurationCell(index, recordingDurationCache.get(recordingUrl));
       return;
     }
 
@@ -117,23 +122,22 @@ function loadVisibleCallDurations() {
       'loadedmetadata',
       () => {
         if (!Number.isFinite(audio.duration)) return;
-        recordingDurationCache.set(url, audio.duration);
+        recordingDurationCache.set(recordingUrl, audio.duration);
         if (generation === durationLoadGeneration) setDurationCell(index, audio.duration);
         audio.removeAttribute('src');
         audio.load();
       },
       { once: true }
     );
-    audio.src = url;
+    audio.src = mediaUrl;
   });
 }
 
 function openRecordingModal(ticket, trigger) {
-  const url = getRecordingUrl(ticket);
-  if (!url) return;
+  if (!getRecordingUrl(ticket)) return;
   recordingModalTrigger = trigger || null;
   recordingModalTicket.textContent = `Тикет #${ticket.id} — ${ticket.subject || 'Без темы'}`;
-  recordingPlayer.src = url;
+  recordingPlayer.src = getRecordingMediaUrl(ticket);
   recordingModal.hidden = false;
   document.documentElement.classList.add('modal-open');
   document.body.classList.add('modal-open');
