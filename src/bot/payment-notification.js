@@ -7,7 +7,7 @@ const {
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
-const { TELEGRAM_HTML, bold, field } = require('./telegram-html');
+const { withHtml, bold, field } = require('./telegram-html');
 
 let outboundBot = null;
 
@@ -61,7 +61,8 @@ async function notifyCreatorOrderPaid(order, { provider, db } = {}) {
   try {
     const detailedOrder = db ? enrichOrderParties(db, order) : order;
     const text = formatOrderPaidMessage(detailedOrder, { provider });
-    await bot.sendMessage(formatChatId(telegramId), text, TELEGRAM_HTML);
+    // withHtml() returns a mutable copy — node-telegram-bot-api assigns chat_id onto options.
+    await bot.sendMessage(formatChatId(telegramId), text, withHtml());
     return { sent: true };
   } catch (err) {
     console.error(

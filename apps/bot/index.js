@@ -31,7 +31,7 @@ const { registerPricesHandlers } = require('../../src/bot/prices-bot');
 const { formatUnpaidOrdersBlock } = require('../../src/bot/bot-format');
 const { enrichOrderParties } = require('../../src/bot/order-parties');
 const { sendChatActionSafe } = require('../../src/bot/telegram-safe');
-const { TELEGRAM_HTML, withHtml } = require('../../src/bot/telegram-html');
+const { withHtml } = require('../../src/bot/telegram-html');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -191,7 +191,7 @@ async function sendSearchResultWithAction(chatId, telegramId, entry, { appendUnp
         withHtml(makeServiceButtonForResult(entry, telegramId, db))
       );
     } else {
-      await bot.sendMessage(chatId, chunks[i], TELEGRAM_HTML);
+      await bot.sendMessage(chatId, chunks[i], withHtml());
     }
   }
 

@@ -42,6 +42,7 @@ function link(url, label) {
   return `<a href="${escapeAttr(href)}">${escapeHtml(text)}</a>`;
 }
 
+/** Mutable HTML parse_mode options for node-telegram-bot-api (it assigns chat_id onto form). */
 function withHtml(options) {
   return { ...(options || {}), parse_mode: 'HTML' };
 }

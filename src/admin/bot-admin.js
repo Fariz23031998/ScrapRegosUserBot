@@ -118,7 +118,7 @@ const {
 const { enrichOrderParties } = require('../bot/order-parties');
 const { formatRenotifyResultMessage } = require('../bot/order-actions-bot');
 const { getOutboundBot } = require('../bot/payment-notification');
-const { TELEGRAM_HTML } = require('../bot/telegram-html');
+const { withHtml } = require('../bot/telegram-html');
 const { formatPaymentPageUrl, getDefaultPaymentProvider } = require('../payments/payments-api');
 const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
@@ -1938,7 +1938,7 @@ function createBotAdminRouter(db) {
           await outboundBot.sendMessage(
             botUser.telegram_id,
             formatOrderPaymentMessage(detailedOrder, paymentPageUrl, paymentUrl),
-            TELEGRAM_HTML
+            withHtml()
           );
         } catch (err) {
           console.warn('[bot-admin] Creator notify failed:', err.message);

@@ -14,7 +14,7 @@ const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
-const { TELEGRAM_HTML, bold, field, link } = require('./telegram-html');
+const { withHtml, bold, field, link } = require('./telegram-html');
 
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const ACCESS_DENIED = 'Сначала пройдите регистрацию: отправьте свой номер телефона.';
@@ -158,7 +158,7 @@ async function notifyCustomersAboutOrder(bot, db, botUser, order, months) {
   const text = formatCustomerCreatedOrderMessage(order, months);
   for (const user of byTelegramId.values()) {
     try {
-      await bot.sendMessage(user.telegram_id, text, TELEGRAM_HTML);
+      await bot.sendMessage(user.telegram_id, text, withHtml());
     } catch (err) {
       console.warn(
         `[tech-support] Skip Bot API notify for telegram_id=${user.telegram_id}: ${err.message}`
@@ -247,7 +247,7 @@ async function completeSupportPurchase(bot, chatId, telegramId, db, botUser, mon
   await bot.sendMessage(
     chatId,
     formatOrderPaymentMessage(order, paymentPageUrl, paymentUrl, price.months),
-    TELEGRAM_HTML
+    withHtml()
   );
   try {
     await notifyCustomersAboutOrder(bot, db, botUser, order, price.months);

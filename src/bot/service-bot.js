@@ -12,7 +12,7 @@ const { answerCallbackQuerySafe, onCallbackQuery, sendChatActionSafe } = require
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
-const { TELEGRAM_HTML, bold, field, link, withHtml } = require('./telegram-html');
+const { bold, field, link, withHtml } = require('./telegram-html');
 
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const ORDER_ACCESS_DENIED = 'Сначала пройдите регистрацию: отправьте свой номер телефона.';
@@ -205,7 +205,7 @@ async function notifyCustomersAboutOrder(bot, db, botUser, order) {
   const text = formatCustomerCreatedOrderMessage(order);
   for (const u of byTelegramId.values()) {
     try {
-      await bot.sendMessage(u.telegram_id, text, TELEGRAM_HTML);
+      await bot.sendMessage(u.telegram_id, text, withHtml());
     } catch (err) {
       // Bot API cannot DM users who never started the bot / deleted the chat.
       console.warn(
