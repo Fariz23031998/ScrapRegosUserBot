@@ -19,6 +19,13 @@ const {
 const { RIGHTS } = require('../db/user-rights');
 const { listOrderLogs, mapOrderLogRow, formatPaymentProviderLabel } = require('../db/order-logs');
 const {
+  listAdminAuditLogs,
+  mapAdminAuditLogRow,
+  logAdminAudit,
+  buildAuditDetails,
+  buildFieldChanges,
+} = require('../db/admin-audit-logs');
+const {
   getAdminCredentials,
   isAuthenticated,
   getSessionActor,
@@ -41,6 +48,7 @@ const {
   deactivateTechnicalSupportSubscription,
   updateTechnicalSupportSubscriptionEndsAt,
   deleteTechnicalSupportSubscription,
+  getTechnicalSupportSubscriptionById,
   mapSubscriptionRow,
 } = require('../db/technical-support');
 const {
@@ -249,6 +257,66 @@ function mapUserResponse(user) {
   };
 }
 
+function snapshotUserForAudit(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    role: user.role ?? null,
+    phone: user.phone ?? null,
+    display_name: user.display_name ?? null,
+    admin_login: user.admin_login || null,
+    has_password: Boolean(user.password_hash || user.has_password),
+    regos_user_id: user.regos_user_id ?? null,
+    regos_login: user.regos_login || null,
+    regos_full_name: user.regos_full_name || null,
+    rights: user.rights || null,
+  };
+}
+
+function snapshotOrderForAudit(order) {
+  if (!order) return null;
+  return {
+    id: order.id,
+    status: order.status ?? null,
+    amount: order.order_amount ?? order.amount ?? null,
+    client_phone: order.client_phone ?? null,
+    additional_phone: order.additional_phone ?? null,
+    payment_provider: order.payment_provider ?? null,
+    ticket_id: order.ticket_id ?? null,
+  };
+}
+
+function snapshotPricesForAudit(prices) {
+  if (!Array.isArray(prices)) return null;
+  return prices.map((row) => ({
+    months: row.months,
+    amount: row.amount,
+    configured: row.configured,
+  }));
+}
+
+function snapshotCatalogForAudit(catalog) {
+  if (!catalog || typeof catalog !== 'object') return null;
+  return {
+    title_ru: catalog.title_ru ?? null,
+    title_uz: catalog.title_uz ?? null,
+    categories_count: Array.isArray(catalog.categories) ? catalog.categories.length : 0,
+    items_count: Array.isArray(catalog.categories)
+      ? catalog.categories.reduce(
+          (sum, category) => sum + (Array.isArray(category.items) ? category.items.length : 0),
+          0
+        )
+      : 0,
+    categories: Array.isArray(catalog.categories)
+      ? catalog.categories.map((category) => ({
+          name_ru: category.name_ru ?? null,
+          name_uz: category.name_uz ?? null,
+          items_count: Array.isArray(category.items) ? category.items.length : 0,
+        }))
+      : [],
+  };
+}
+
 function parseOptionalCredential(value) {
   if (value === undefined || value === null) return undefined;
   return String(value);
@@ -381,6 +449,21 @@ function mapAdminOrderRow(order) {
 function resolveActorTelegramId(db, req) {
   const botUser = resolveSessionBotUser(db, req);
   return botUser?.telegram_id != null ? botUser.telegram_id : null;
+}
+
+function auditAdminChange(db, req, { entityType, entityId, action, summary, details }) {
+  try {
+    logAdminAudit(db, {
+      entityType,
+      entityId,
+      action,
+      summary,
+      details,
+      actor: getSessionActor(req),
+    });
+  } catch (error) {
+    console.error('[bot-admin] Audit log write failed:', error);
+  }
 }
 
 function mapEnrichedActiveTicket(db, ticket) {
@@ -627,6 +710,30 @@ function createBotAdminRouter(db) {
       }
 
       const updated = getBotUserById(db, botUser.id);
+      const before = {
+        login: botUser.admin_login || null,
+        password: botUser.password_hash ? '[задано]' : null,
+      };
+      const after = {
+        login: updated?.admin_login || null,
+        password: passwordProvided ? '[изменено]' : before.password,
+      };
+      auditAdminChange(db, req, {
+        entityType: 'account',
+        entityId: botUser.id,
+        action: 'update',
+        summary: `Обновлены учётные данные: ${[
+          loginProvided ? 'login' : null,
+          passwordProvided ? 'password' : null,
+        ]
+          .filter(Boolean)
+          .join(', ')}`,
+        details: buildAuditDetails({
+          before,
+          after,
+          changes: buildFieldChanges(before, after, ['login', 'password']),
+        }),
+      });
       return res.json({
         ok: true,
         profile: {
@@ -719,6 +826,24 @@ function createBotAdminRouter(db) {
     }
     res.json({
       logs: result.logs.map(mapOrderLogRow),
+      total: result.total,
+      page,
+      limit,
+    });
+  });
+
+  router.get('/api/logs', requireRight(db, 'logs_read'), (req, res) => {
+    const query = String(req.query.q || '').trim();
+    let { page, limit, offset } = parsePaginationQuery(req);
+    let result = listAdminAuditLogs(db, { query: query || undefined, offset, limit });
+    const totalPages = Math.max(1, Math.ceil(result.total / limit) || 1);
+    if (page > totalPages) {
+      page = totalPages;
+      offset = (page - 1) * limit;
+      result = listAdminAuditLogs(db, { query: query || undefined, offset, limit });
+    }
+    res.json({
+      logs: result.logs.map(mapAdminAuditLogRow),
       total: result.total,
       page,
       limit,
@@ -904,6 +1029,19 @@ function createBotAdminRouter(db) {
           });
         }
         const firms = listLinksByClient(db, client.id).map(mapAdminFirmLink);
+        const before = {};
+        const after = {};
+        for (const key of Object.keys(changes)) {
+          before[key] = current[key] ?? null;
+          after[key] = client[key] ?? changes[key] ?? null;
+        }
+        auditAdminChange(db, req, {
+          entityType: 'client',
+          entityId: clientId,
+          action: 'update',
+          summary: `Изменён клиент #${clientId}`,
+          details: buildAuditDetails({ before, after }),
+        });
         return res.json({ client: mapAdminClient(client), firms });
       } catch (error) {
         if (error instanceof RegosCrmError) {
@@ -929,6 +1067,22 @@ function createBotAdminRouter(db) {
           clientName: body.clientName,
           phone: body.phone,
           message: body.message,
+        });
+        auditAdminChange(db, req, {
+          entityType: 'firm_link',
+          entityId: link?.id,
+          action: 'create',
+          summary: `Привязана фирма к клиенту #${req.params.id}`,
+          details: buildAuditDetails({
+            before: null,
+            after: {
+              regos_client_id: req.params.id,
+              type: body.type ?? null,
+              record_id: body.recordId ?? null,
+              client_name: body.clientName ?? null,
+              phone: body.phone ?? null,
+            },
+          }),
         });
         return res.status(201).json({ firm: mapAdminFirmLink(link) });
       } catch (error) {
@@ -963,6 +1117,22 @@ function createBotAdminRouter(db) {
         if (!removed) {
           return res.status(404).json({ message: 'Связь с фирмой не найдена.' });
         }
+        auditAdminChange(db, req, {
+          entityType: 'firm_link',
+          entityId: req.params.linkId,
+          action: 'delete',
+          summary: `Отвязана фирма от клиента #${req.params.id}`,
+          details: buildAuditDetails({
+            before: {
+              regos_client_id: existing.regos_client_id ?? req.params.id,
+              type: existing.type ?? null,
+              record_id: existing.record_id ?? null,
+              client_name: existing.client_name ?? null,
+              phone: existing.phone ?? null,
+            },
+            after: null,
+          }),
+        });
         return res.json({ ok: true });
       } catch (error) {
         if (error?.code === 'INVALID_CLIENT_ID') {
@@ -996,6 +1166,23 @@ function createBotAdminRouter(db) {
           });
         }
         cacheTicketRecordingUrl(ticket);
+        auditAdminChange(db, req, {
+          entityType: 'ticket',
+          entityId: created.id,
+          action: 'create',
+          summary: `Создан тикет #${created.id}`,
+          details: buildAuditDetails({
+            before: null,
+            after: {
+              id: created.id,
+              client_id: req.body?.client_id ?? null,
+              channel_id: req.body?.channel_id ?? null,
+              subject: req.body?.subject ?? null,
+              direction: req.body?.direction ?? null,
+              responsible_user_id: req.body?.responsible_user_id ?? null,
+            },
+          }),
+        });
         return res.status(201).json({ ticket });
       } catch (error) {
         if (error instanceof RegosCrmError) {
@@ -1056,6 +1243,33 @@ function createBotAdminRouter(db) {
           });
         }
         cacheTicketRecordingUrl(ticket);
+        const before = {};
+        const after = {};
+        for (const key of Object.keys(scalarChanges)) {
+          before[key] = current[key] ?? null;
+          after[key] = ticket[key] ?? scalarChanges[key] ?? null;
+        }
+        if (
+          Object.hasOwn(body, 'responsible_user_id') &&
+          Number(body.responsible_user_id) !== Number(current.responsible_user_id)
+        ) {
+          before.responsible_user_id = current.responsible_user_id ?? null;
+          after.responsible_user_id = ticket.responsible_user_id ?? body.responsible_user_id ?? null;
+        }
+        if (
+          Object.hasOwn(body, 'status') &&
+          String(body.status || '') !== String(current.status || '')
+        ) {
+          before.status = current.status ?? null;
+          after.status = ticket.status ?? body.status ?? null;
+        }
+        auditAdminChange(db, req, {
+          entityType: 'ticket',
+          entityId: current.id,
+          action: 'update',
+          summary: `Изменён тикет #${current.id}`,
+          details: buildAuditDetails({ before, after }),
+        });
         return res.json({ ticket });
       } catch (error) {
         if (error instanceof RegosCrmError) {
@@ -1111,6 +1325,29 @@ function createBotAdminRouter(db) {
           }))
         );
         const savedById = new Map(saved.map((setting) => [String(setting.channel_id), setting]));
+        const beforeModes = {};
+        const afterModes = {};
+        for (const channel of current) {
+          const nextMode =
+            savedById.get(channel.id)?.interaction_mode ||
+            submittedById.get(channel.id)?.interaction_mode ||
+            channel.interaction_mode ||
+            'message_only';
+          if (String(channel.interaction_mode || '') !== String(nextMode || '')) {
+            beforeModes[channel.id] = channel.interaction_mode || null;
+            afterModes[channel.id] = nextMode;
+          }
+        }
+        auditAdminChange(db, req, {
+          entityType: 'channel_settings',
+          entityId: null,
+          action: 'update',
+          summary: `Обновлены настройки каналов (${Object.keys(afterModes).length || saved.length})`,
+          details: buildAuditDetails({
+            before: beforeModes,
+            after: afterModes,
+          }),
+        });
         return res.json({
           ok: true,
           channels: current.map((channel) => ({
@@ -1350,6 +1587,20 @@ function createBotAdminRouter(db) {
           authorEntityId: regosUserId,
           authorEntityType: 'User',
         });
+        auditAdminChange(db, req, {
+          entityType: 'ticket',
+          entityId: ticket.id,
+          action: 'send_message',
+          summary: `Сообщение в тикет #${ticket.id}`,
+          details: buildAuditDetails({
+            before: null,
+            after: {
+              chat_id: chatId,
+              message_id: created.id,
+              text_preview: text.slice(0, 120),
+            },
+          }),
+        });
         return res.status(201).json({
           id: created.id,
           chat_id: chatId,
@@ -1453,12 +1704,23 @@ function createBotAdminRouter(db) {
     if (!orderId) {
       return res.status(400).json({ message: 'Не указан ID заказа.' });
     }
+    const existing = getOrderById(db, orderId);
     const deleted = deletePendingOrder(db, orderId, resolveActorTelegramId(db, req));
     if (!deleted) {
       return res.status(409).json({
         message: 'Не удалось удалить заказ. Возможно, он уже оплачен или удалён.',
       });
     }
+    auditAdminChange(db, req, {
+      entityType: 'order',
+      entityId: orderId,
+      action: 'delete_unpaid',
+      summary: `Удалён неоплаченный заказ ${orderId}`,
+      details: buildAuditDetails({
+        before: snapshotOrderForAudit(existing),
+        after: null,
+      }),
+    });
     return res.json({ ok: true, message: 'Неоплаченный заказ удалён.' });
   });
 
@@ -1467,12 +1729,23 @@ function createBotAdminRouter(db) {
     if (!orderId) {
       return res.status(400).json({ message: 'Не указан ID заказа.' });
     }
+    const existing = getOrderById(db, orderId);
     const deleted = deletePaidCashOrder(db, orderId, resolveActorTelegramId(db, req));
     if (!deleted) {
       return res.status(409).json({
         message: 'Не удалось удалить заказ. Возможно, он не оплачен наличными или уже удалён.',
       });
     }
+    auditAdminChange(db, req, {
+      entityType: 'order',
+      entityId: orderId,
+      action: 'delete_cash',
+      summary: `Удалён заказ „Наличные“ ${orderId}`,
+      details: buildAuditDetails({
+        before: snapshotOrderForAudit(existing),
+        after: null,
+      }),
+    });
     return res.json({ ok: true, message: 'Заказ „Наличные“ удалён.' });
   });
 
@@ -1481,12 +1754,24 @@ function createBotAdminRouter(db) {
     if (!orderId) {
       return res.status(400).json({ message: 'Не указан ID заказа.' });
     }
+    const existing = getOrderById(db, orderId);
     const closed = markPendingOrderPaidCash(db, orderId, resolveActorTelegramId(db, req));
     if (!closed) {
       return res.status(409).json({
         message: 'Не удалось закрыть заказ. Возможно, он уже оплачен или удалён.',
       });
     }
+    const updated = getOrderById(db, orderId);
+    auditAdminChange(db, req, {
+      entityType: 'order',
+      entityId: orderId,
+      action: 'paid_cash',
+      summary: `Заказ ${orderId} отмечен как оплаченный наличными`,
+      details: buildAuditDetails({
+        before: snapshotOrderForAudit(existing),
+        after: snapshotOrderForAudit(updated || { ...existing, status: 'paid', payment_provider: 'cash' }),
+      }),
+    });
     return res.json({ ok: true, message: 'Заказ закрыт: оплачено наличными.' });
   });
 
@@ -1507,6 +1792,18 @@ function createBotAdminRouter(db) {
       try {
         const paymentPageUrl = formatPaymentPageUrl(order.id);
         const result = await enqueueOrderPaymentSms(db, order, paymentPageUrl);
+        auditAdminChange(db, req, {
+          entityType: 'order',
+          entityId: orderId,
+          action: 'renotify',
+          summary: `Повторное уведомление по заказу ${orderId}`,
+          details: buildAuditDetails({
+            before: snapshotOrderForAudit(order),
+            after: snapshotOrderForAudit(order),
+            changes: null,
+            result,
+          }),
+        });
         return res.json({
           ok: true,
           message: formatRenotifyResultMessage(result),
@@ -1659,6 +1956,21 @@ function createBotAdminRouter(db) {
         }
       }
 
+      auditAdminChange(db, req, {
+        entityType: 'order',
+        entityId: order.id,
+        action: 'create',
+        summary: `Создан заказ ${order.id} на ${amount} сум`,
+        details: buildAuditDetails({
+          before: null,
+          after: {
+            ...snapshotOrderForAudit(detailedOrder),
+            ticket_id: ticketId,
+            firm_link: firmLink,
+          },
+        }),
+      });
+
       return res.status(201).json({
         order: detailedOrder,
         payment_page_url: paymentPageUrl,
@@ -1791,7 +2103,23 @@ function createBotAdminRouter(db) {
     express.json(),
     (req, res) => {
     try {
+      const beforePrices = snapshotPricesForAudit(listTechnicalSupportPrices(db));
       const prices = updateTechnicalSupportPrices(db, req.body?.prices || req.body || {});
+      const afterPrices = snapshotPricesForAudit(prices);
+      auditAdminChange(db, req, {
+        entityType: 'technical_support_price',
+        entityId: null,
+        action: 'update',
+        summary: 'Обновлены цены технической поддержки',
+        details: buildAuditDetails({
+          before: Object.fromEntries(
+            (beforePrices || []).map((row) => [String(row.months), row.amount])
+          ),
+          after: Object.fromEntries(
+            (afterPrices || []).map((row) => [String(row.months), row.amount])
+          ),
+        }),
+      });
       return res.json({ prices });
     } catch (error) {
       if (error.message === 'INVALID_AMOUNT') {
@@ -1849,6 +2177,16 @@ function createBotAdminRouter(db) {
           amount: req.body?.amount,
           ends_at: req.body?.ends_at,
         });
+        auditAdminChange(db, req, {
+          entityType: 'technical_support_subscription',
+          entityId: result.subscription?.id,
+          action: 'create',
+          summary: `Создана подписка ТП для ${result.subscription?.phone || req.body?.phone}`,
+          details: buildAuditDetails({
+            before: null,
+            after: mapSubscriptionRow(result.subscription),
+          }),
+        });
         return res.status(201).json({
           subscription: mapSubscriptionRow(result.subscription),
         });
@@ -1878,7 +2216,18 @@ function createBotAdminRouter(db) {
     requireRight(db, 'technical_support_edit'),
     (req, res) => {
       try {
+        const before = getTechnicalSupportSubscriptionById(db, req.params.id);
         const result = deactivateTechnicalSupportSubscription(db, req.params.id);
+        auditAdminChange(db, req, {
+          entityType: 'technical_support_subscription',
+          entityId: req.params.id,
+          action: 'deactivate',
+          summary: `Деактивирована подписка ТП #${req.params.id}`,
+          details: buildAuditDetails({
+            before: before ? mapSubscriptionRow(before) : null,
+            after: mapSubscriptionRow(result.subscription),
+          }),
+        });
         return res.json({
           changed: result.changed,
           reason: result.reason || null,
@@ -1900,7 +2249,23 @@ function createBotAdminRouter(db) {
     express.json(),
     (req, res) => {
       try {
+        const before = getTechnicalSupportSubscriptionById(db, req.params.id);
         const result = updateTechnicalSupportSubscriptionEndsAt(db, req.params.id, req.body?.ends_at);
+        auditAdminChange(db, req, {
+          entityType: 'technical_support_subscription',
+          entityId: req.params.id,
+          action: 'update',
+          summary: `Обновлена дата окончания подписки ТП #${req.params.id}`,
+          details: buildAuditDetails({
+            before: before
+              ? { ends_at: before.ends_at ?? null, phone: before.phone ?? null }
+              : null,
+            after: {
+              ends_at: result.subscription?.ends_at ?? req.body?.ends_at ?? null,
+              phone: result.subscription?.phone ?? before?.phone ?? null,
+            },
+          }),
+        });
         return res.json({
           subscription: mapSubscriptionRow(result.subscription),
         });
@@ -1922,7 +2287,18 @@ function createBotAdminRouter(db) {
     requireRight(db, 'technical_support_delete'),
     (req, res) => {
       try {
+        const before = getTechnicalSupportSubscriptionById(db, req.params.id);
         const result = deleteTechnicalSupportSubscription(db, req.params.id);
+        auditAdminChange(db, req, {
+          entityType: 'technical_support_subscription',
+          entityId: req.params.id,
+          action: 'delete',
+          summary: `Удалена подписка ТП #${req.params.id}`,
+          details: buildAuditDetails({
+            before: before ? mapSubscriptionRow(before) : null,
+            after: null,
+          }),
+        });
         return res.json({ deleted: result.deleted, id: result.id });
       } catch (error) {
         if (error.message === 'NOT_FOUND') {
@@ -1949,7 +2325,19 @@ function createBotAdminRouter(db) {
     express.json({ limit: '1mb' }),
     (req, res) => {
     try {
+      const beforeCatalog = snapshotCatalogForAudit(getServicePricesCatalog(db));
       const catalog = replaceServicePricesCatalog(db, req.body || {});
+      const afterCatalog = snapshotCatalogForAudit(catalog);
+      auditAdminChange(db, req, {
+        entityType: 'service_price',
+        entityId: null,
+        action: 'update',
+        summary: `Обновлён прайс (${catalog?.categories?.length ?? 0} кат.)`,
+        details: buildAuditDetails({
+          before: beforeCatalog,
+          after: afterCatalog,
+        }),
+      });
       return res.json(catalog);
     } catch (error) {
       const messages = {
@@ -2003,6 +2391,17 @@ function createBotAdminRouter(db) {
         autoLink: !hasExplicitRegos || req.body?.auto_link_regos !== false,
       });
 
+      auditAdminChange(db, req, {
+        entityType: 'user',
+        entityId: user.id,
+        action: 'create',
+        summary: `Создан сотрудник ${user.phone || user.id}`,
+        details: buildAuditDetails({
+          before: null,
+          after: snapshotUserForAudit(user),
+        }),
+      });
+
       return res.status(201).json({ user: mapUserResponse(user) });
     } catch (error) {
       const mapped = mapRegosLinkError(error);
@@ -2029,6 +2428,8 @@ function createBotAdminRouter(db) {
   router.put('/api/users/:id', requireRight(db, 'users_edit'), express.json(), async (req, res) => {
     try {
       const userId = Number(req.params.id);
+      const beforeUser =
+        getEmployeeWithRights(db, userId) || getBotUserById(db, userId);
       const updates = {
         phone: req.body?.phone,
         displayName: req.body?.display_name,
@@ -2049,6 +2450,20 @@ function createBotAdminRouter(db) {
           autoLink: Boolean(req.body?.auto_link_regos) || !hasExplicitRegos,
         });
       }
+
+      const before = snapshotUserForAudit(beforeUser);
+      const after = snapshotUserForAudit(user);
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'password')) {
+        before.password = beforeUser?.password_hash ? '[задано]' : null;
+        after.password = '[изменено]';
+      }
+      auditAdminChange(db, req, {
+        entityType: 'user',
+        entityId: userId,
+        action: 'update',
+        summary: `Изменён сотрудник #${userId}`,
+        details: buildAuditDetails({ before, after }),
+      });
 
       return res.json({ user: mapUserResponse(user) });
     } catch (error) {
@@ -2079,6 +2494,7 @@ function createBotAdminRouter(db) {
   router.post('/api/users/:id/promote', requireRight(db, 'users_edit'), express.json(), async (req, res) => {
     try {
       const userId = Number(req.params.id);
+      const beforeUser = getBotUserById(db, userId);
       let user = convertCustomerToEmployee(db, userId, {
         displayName: req.body?.display_name,
         rights: parseRightsBody(req.body?.rights || req.body),
@@ -2090,6 +2506,17 @@ function createBotAdminRouter(db) {
       user = await applyRegosLinkToUser(db, user.id, {
         regosUserId: hasExplicitRegos ? req.body.regos_user_id : undefined,
         autoLink: !hasExplicitRegos || req.body?.auto_link_regos !== false,
+      });
+
+      auditAdminChange(db, req, {
+        entityType: 'user',
+        entityId: user.id,
+        action: 'promote',
+        summary: `Клиент #${userId} назначен сотрудником`,
+        details: buildAuditDetails({
+          before: snapshotUserForAudit(beforeUser),
+          after: snapshotUserForAudit(user),
+        }),
       });
 
       return res.json({ user: mapUserResponse(user) });
@@ -2164,11 +2591,43 @@ function createBotAdminRouter(db) {
             regosLogin: match.user.login,
             regosFullName: mapRegosUserSummary(match.user).full_name,
           });
+          auditAdminChange(db, req, {
+            entityType: 'user',
+            entityId: userId,
+            action: 'link_regos',
+            summary: `REGOS привязан к сотруднику #${userId} по телефону`,
+            details: buildAuditDetails({
+              before: {
+                regos_user_id: botUser.regos_user_id ?? null,
+                regos_login: botUser.regos_login || null,
+              },
+              after: {
+                regos_user_id: match.user.id,
+                regos_login: match.user.login || null,
+              },
+            }),
+          });
           return res.json({ user: mapUserResponse(linked), match: 'phone' });
         }
 
         const linked = await applyRegosLinkToUser(db, userId, {
           regosUserId: req.body.regos_user_id,
+        });
+        auditAdminChange(db, req, {
+          entityType: 'user',
+          entityId: userId,
+          action: 'link_regos',
+          summary: `REGOS привязан к сотруднику #${userId}`,
+          details: buildAuditDetails({
+            before: {
+              regos_user_id: botUser.regos_user_id ?? null,
+              regos_login: botUser.regos_login || null,
+            },
+            after: {
+              regos_user_id: linked?.regos_user_id ?? req.body.regos_user_id ?? null,
+              regos_login: linked?.regos_login || null,
+            },
+          }),
         });
         return res.json({ user: mapUserResponse(linked), match: 'manual' });
       } catch (error) {
@@ -2190,6 +2649,24 @@ function createBotAdminRouter(db) {
         return res.status(404).json({ message: 'Пользователь не найден.' });
       }
       const user = clearBotUserRegosLink(db, userId);
+      auditAdminChange(db, req, {
+        entityType: 'user',
+        entityId: userId,
+        action: 'unlink_regos',
+        summary: `REGOS отвязан от сотрудника #${userId}`,
+        details: buildAuditDetails({
+          before: {
+            regos_user_id: botUser.regos_user_id ?? null,
+            regos_login: botUser.regos_login || null,
+            regos_full_name: botUser.regos_full_name || null,
+          },
+          after: {
+            regos_user_id: null,
+            regos_login: null,
+            regos_full_name: null,
+          },
+        }),
+      });
       return res.json({ user: mapUserResponse(user) });
     } catch (error) {
       if (error.message === 'NOT_FOUND') {
@@ -2241,6 +2718,14 @@ function createBotAdminRouter(db) {
           }
         }
 
+        auditAdminChange(db, req, {
+          entityType: 'user',
+          entityId: null,
+          action: 'auto_link_regos',
+          summary: `Автопривязка REGOS: matched=${summary.matched || 0}`,
+          details: { summary, force },
+        });
+
         return res.json({ ok: true, summary, items });
       } catch (error) {
         if (error instanceof RegosCrmError) {
@@ -2255,7 +2740,18 @@ function createBotAdminRouter(db) {
   router.delete('/api/users/:id', requireRight(db, 'users_delete'), (req, res) => {
     try {
       const userId = Number(req.params.id);
+      const existing = getEmployeeWithRights(db, userId) || getBotUserById(db, userId);
       deleteEmployeeUser(db, userId);
+      auditAdminChange(db, req, {
+        entityType: 'user',
+        entityId: userId,
+        action: 'delete',
+        summary: `Удалён сотрудник #${userId}${existing?.phone ? ` (${existing.phone})` : ''}`,
+        details: buildAuditDetails({
+          before: snapshotUserForAudit(existing),
+          after: null,
+        }),
+      });
       return res.json({ ok: true });
     } catch (error) {
       if (error.message === 'NOT_FOUND') {
@@ -2271,6 +2767,10 @@ function createBotAdminRouter(db) {
 
   router.get('/order-logs', requireRight(db, 'order_logs_read'), (_req, res) => {
     return sendPublicFile(res, publicDir, 'order-logs.html');
+  });
+
+  router.get('/logs', requireRight(db, 'logs_read'), (_req, res) => {
+    return sendPublicFile(res, publicDir, 'logs.html');
   });
 
   router.get('/orders', requireRight(db, 'orders_read'), (_req, res) => {
@@ -2313,6 +2813,7 @@ function createBotAdminRouter(db) {
     if (!permissions.users_read) {
       if (permissions.orders_read) return res.redirect('/bot-admin/orders');
       if (permissions.order_logs_read) return res.redirect('/bot-admin/order-logs');
+      if (permissions.logs_read) return res.redirect('/bot-admin/logs');
       if (permissions.tickets_read) return res.redirect('/bot-admin/tickets');
       if (permissions.technical_support_read) return res.redirect('/bot-admin/technical-support');
       if (permissions.prices_read) return res.redirect('/bot-admin/prices');

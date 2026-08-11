@@ -15,6 +15,7 @@ const ADMIN_PAGES = [
   'index.html',
   'orders.html',
   'order-logs.html',
+  'logs.html',
   'technical-support.html',
   'prices.html',
   'settings.html',
@@ -25,6 +26,7 @@ const ADMIN_SCRIPTS = [
   'admin.js',
   'admin-orders.js',
   'admin-order-logs.js',
+  'admin-logs.js',
   'admin-technical-support.js',
   'admin-prices.js',
   'admin-settings.js',
@@ -202,6 +204,19 @@ describe('Bot admin static assets and API auth', () => {
     );
   });
 
+  it('includes the permission-controlled Logs link on every admin page', () => {
+    const publicDir = botAdminPublicDir();
+    for (const page of ADMIN_PAGES) {
+      const html = fs.readFileSync(path.join(publicDir, page), 'utf8');
+      assert.match(html, /href="\/bot-admin\/logs"/, `${page} should link to Logs`);
+    }
+    const commonScript = fs.readFileSync(path.join(publicDir, 'admin-common.js'), 'utf8');
+    assert.match(
+      commonScript,
+      /\{ href: '\/bot-admin\/logs', permission: 'logs_read' \}/
+    );
+  });
+
   it('includes the permission-controlled Settings link on every admin page', () => {
     const publicDir = botAdminPublicDir();
     for (const page of ADMIN_PAGES) {
@@ -308,6 +323,7 @@ describe('Bot admin static assets and API auth', () => {
       '/bot-admin/admin-common.js': 'application/javascript',
       '/bot-admin/admin.js': 'application/javascript',
       '/bot-admin/admin-order-logs.js': 'application/javascript',
+      '/bot-admin/admin-logs.js': 'application/javascript',
       '/bot-admin/admin-technical-support.js': 'application/javascript',
       '/bot-admin/admin-prices.js': 'application/javascript',
       '/bot-admin/admin-settings.js': 'application/javascript',
@@ -335,6 +351,7 @@ describe('Bot admin static assets and API auth', () => {
       '/bot-admin/',
       '/bot-admin/orders',
       '/bot-admin/order-logs',
+      '/bot-admin/logs',
       '/bot-admin/technical-support',
       '/bot-admin/prices',
       '/bot-admin/settings',

@@ -142,6 +142,8 @@ function migrateSchema(db) {
   migrateBotUsersSchema(db);
   const { ensureOrderLogsTable } = require('./order-logs');
   ensureOrderLogsTable(db);
+  const { ensureAdminAuditLogsTable } = require('./admin-audit-logs');
+  ensureAdminAuditLogsTable(db);
   const { ensureDashboardLoginTokensTable } = require('../admin/dashboard-login-tokens');
   ensureDashboardLoginTokensTable(db);
   const { ensureTechnicalSupportTables } = require('./technical-support');

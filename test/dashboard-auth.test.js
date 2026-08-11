@@ -752,6 +752,7 @@ describe('Telegram dashboard authentication', () => {
         '/bot-admin/api/users',
         '/bot-admin/api/orders',
         '/bot-admin/api/order-logs',
+        '/bot-admin/api/logs',
         '/bot-admin/api/technical-support/prices',
         '/bot-admin/api/prices',
         '/bot-admin/api/settings/channels',

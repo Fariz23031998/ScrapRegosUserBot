@@ -65,6 +65,10 @@ const RIGHTS = {
     column: 'order_logs_read',
     label: 'Админ: журнал заказов — просмотр',
   },
+  logs_read: {
+    column: 'logs_read',
+    label: 'Админ: журнал изменений — просмотр',
+  },
   orders_read: {
     column: 'orders_read',
     label: 'Админ: заказы — просмотр',
@@ -142,6 +146,7 @@ const ADMIN_PERMISSION_KEYS = [
   'users_edit',
   'users_delete',
   'order_logs_read',
+  'logs_read',
   'orders_read',
   'delete_unpaid_order',
   'delete_cash_order',
