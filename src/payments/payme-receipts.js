@@ -10,6 +10,7 @@ const {
   checkReceipt,
   RECEIPT_STATE_OPEN,
   RECEIPT_STATE_PAID,
+  RECEIPT_STATE_CANCELLED,
 } = require('./payme-api');
 const { notifyCreatorOrderPaid } = require('../bot/payment-notification');
 
@@ -54,15 +55,6 @@ function formatReceiptCheckoutUrl(receiptId) {
   return `${getPaymeCheckoutBase()}/${receiptId}`;
 }
 
-async function isReceiptReusable(receiptId) {
-  try {
-    const { state } = await checkReceipt(receiptId);
-    return state === RECEIPT_STATE_OPEN;
-  } catch {
-    return false;
-  }
-}
-
 async function markOrderPaidFromReceipt(db, order, receiptId) {
   const { claimed, order: paidOrder } = markOrderPaid(db, order.id, {
     transactionId: receiptId,
@@ -104,6 +96,44 @@ async function syncPaymeReceiptStatus(db, orderId) {
   return { status: 'pending', receiptId: order.payme_receipt_id, receiptState: state };
 }
 
+/**
+ * Decide what to do with an existing Payme receipt before creating another.
+ * Fail closed on API errors: reuse the stored receipt instead of creating a duplicate.
+ */
+async function resolveExistingReceipt(db, order) {
+  const receiptId = order.payme_receipt_id;
+  if (!receiptId) {
+    return { action: 'create' };
+  }
+
+  let state;
+  try {
+    ({ state } = await checkReceipt(receiptId));
+  } catch (error) {
+    console.error(
+      `Payme receipt check failed for ${receiptId}, reusing existing checkout:`,
+      error.message || error
+    );
+    return { action: 'reuse', receiptId };
+  }
+
+  if (state === RECEIPT_STATE_PAID) {
+    await markOrderPaidFromReceipt(db, order, receiptId);
+    return { action: 'paid', receiptId, receiptState: state };
+  }
+
+  if (state === RECEIPT_STATE_CANCELLED) {
+    return { action: 'create', receiptId, receiptState: state };
+  }
+
+  // OPEN or any other non-terminal in-progress state: reuse unless abandoned OPEN past TTL.
+  if (state === RECEIPT_STATE_OPEN && isReceiptStale(order)) {
+    return { action: 'create', receiptId, receiptState: state };
+  }
+
+  return { action: 'reuse', receiptId, receiptState: state };
+}
+
 async function getOrCreatePaymeCheckoutUrl(db, order) {
   const freshOrder = getOrderById(db, order.id);
   if (!freshOrder) {
@@ -113,12 +143,14 @@ async function getOrCreatePaymeCheckoutUrl(db, order) {
     return null;
   }
 
-  if (
-    freshOrder.payme_receipt_id &&
-    !isReceiptStale(freshOrder) &&
-    (await isReceiptReusable(freshOrder.payme_receipt_id))
-  ) {
-    return formatReceiptCheckoutUrl(freshOrder.payme_receipt_id);
+  if (freshOrder.payme_receipt_id) {
+    const resolved = await resolveExistingReceipt(db, freshOrder);
+    if (resolved.action === 'paid') {
+      return null;
+    }
+    if (resolved.action === 'reuse') {
+      return formatReceiptCheckoutUrl(resolved.receiptId);
+    }
   }
 
   const account = buildReceiptAccount(freshOrder);
@@ -137,4 +169,6 @@ module.exports = {
   getOrCreatePaymeCheckoutUrl,
   syncPaymeReceiptStatus,
   formatReceiptCheckoutUrl,
+  resolveExistingReceipt,
+  markOrderPaidFromReceipt,
 };

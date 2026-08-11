@@ -1,6 +1,9 @@
 const { getOrderById } = require('../db/partners-db');
 const { formatClickUrl, isClickPaymentEnabled } = require('./click');
-const { getOrCreatePaymeCheckoutUrl } = require('./payme-receipts');
+const {
+  getOrCreatePaymeCheckoutUrl,
+  syncPaymeReceiptStatus,
+} = require('./payme-receipts');
 
 function getPublicBaseUrl() {
   return (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
@@ -60,9 +63,19 @@ async function buildPaymePaymentOption(db, order) {
 }
 
 async function getPaymentOptionsForOrder(db, orderId) {
-  const order = getOrderById(db, orderId);
+  let order = getOrderById(db, orderId);
   if (!order) {
     return null;
+  }
+
+  // Sync Payme receipt before offering checkout so a paid receipt is not replaced.
+  if (order.status === 'pending' && order.payme_receipt_id) {
+    try {
+      await syncPaymeReceiptStatus(db, orderId);
+    } catch (error) {
+      console.error('Payme sync before payment options failed:', error.message || error);
+    }
+    order = getOrderById(db, orderId) || order;
   }
 
   const payments = [];

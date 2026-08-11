@@ -182,6 +182,28 @@ async function loadPaymentData() {
   setStatus('Загрузка данных...', 'loading');
 
   try {
+    // Check existing Payme receipt first so a paid order is recognized
+    // before GET /payments would otherwise create a new checkout.
+    const earlyCheck = await checkPaymeStatus(orderId);
+    if (earlyCheck?.status === 'paid') {
+      const paidResponse = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payments`);
+      if (paidResponse.ok) {
+        const paidData = await paidResponse.json();
+        renderOrderInfo(paidData.order);
+      } else if (earlyCheck.order) {
+        renderOrderInfo({
+          id: earlyCheck.order.id,
+          status: earlyCheck.order.status,
+          paid_at: earlyCheck.order.paid_at,
+          amount: earlyCheck.order.amount,
+          currency: earlyCheck.order.currency || 'UZS',
+          client_phone: earlyCheck.order.client_phone,
+        });
+      }
+      setStatus('Этот заказ уже оплачен.', 'success');
+      return;
+    }
+
     const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payments`);
     const data = await response.json();
 

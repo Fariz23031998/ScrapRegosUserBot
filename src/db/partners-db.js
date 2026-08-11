@@ -497,6 +497,18 @@ function getLatestUnpaidOrderByClientPhone(db, clientPhone) {
   return getUnpaidOrdersByClientPhone(db, clientPhone)[0] ?? null;
 }
 
+function listPendingOrdersWithPaymeReceipt(db) {
+  return db
+    .prepare(
+      `SELECT * FROM orders
+       WHERE status = 'pending'
+         AND payme_receipt_id IS NOT NULL
+         AND TRIM(payme_receipt_id) != ''
+       ORDER BY datetime(created_at) ASC`
+    )
+    .all();
+}
+
 module.exports = {
   DEFAULT_DB_PATH,
   openDb,
@@ -546,4 +558,5 @@ module.exports = {
   getUnpaidOrdersByUserPhone,
   getUnpaidOrdersByCreatorTelegramId,
   getLatestUnpaidOrderByClientPhone,
+  listPendingOrdersWithPaymeReceipt,
 };

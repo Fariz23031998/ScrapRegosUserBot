@@ -2,6 +2,7 @@ const { requiredEnv, isTestMode, getPaymeSecretKey } = require('./payme');
 
 const RECEIPT_STATE_OPEN = 0;
 const RECEIPT_STATE_PAID = 4;
+const RECEIPT_STATE_CANCELLED = 50;
 
 class PaymeApiError extends Error {
   constructor(error) {
@@ -71,6 +72,7 @@ module.exports = {
   PaymeApiError,
   RECEIPT_STATE_OPEN,
   RECEIPT_STATE_PAID,
+  RECEIPT_STATE_CANCELLED,
   createReceipt,
   checkReceipt,
   getReceipt,

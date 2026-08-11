@@ -7,6 +7,7 @@ const express = require('express');
 const { openDb, getOrderById, createPayment, markOrderPaid } = require('../../src/db/partners-db');
 const { verifyClickSignature, isClickPaymentEnabled } = require('../../src/payments/click');
 const { syncPaymeReceiptStatus } = require('../../src/payments/payme-receipts');
+const { startPaymeReceiptReconciler } = require('../../src/payments/payme-reconcile');
 const { getPaymentOptionsForOrder, getPublicDir, isOrderId } = require('../../src/payments/payments-api');
 const { createBotAdminRouter } = require('../../src/admin/bot-admin');
 const { attachSmsGateway } = require('../../src/sms/sms-gateway-ws');
@@ -196,6 +197,8 @@ app.get('/health', (_req, res) => {
 const server = http.createServer(app);
 attachSmsGateway(server, { db });
 
+const paymeReconciler = startPaymeReceiptReconciler(db);
+
 server.listen(port, () => {
   const adminConfigured = Boolean(
     process.env.BOT_ADMIN_LOGIN?.trim() && process.env.BOT_ADMIN_PASSWORD?.trim()
@@ -207,11 +210,13 @@ server.listen(port, () => {
 });
 
 process.on('SIGINT', () => {
+  paymeReconciler.stop();
   db.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
+  paymeReconciler.stop();
   db.close();
   process.exit(0);
 });
