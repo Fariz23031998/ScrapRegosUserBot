@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const ALLOWED_DURATIONS = [1, 3, 6, 12];
 const PRODUCT_TYPE = 'technical_support';
 
@@ -314,6 +316,157 @@ function activateTechnicalSupportFromOrder(db, order, { paidAt = null } = {}) {
   return { created: true, subscription };
 }
 
+/**
+ * Manually create a subscription without a paid order.
+ * Stacks after the latest ends_at for the same phone_key (same as paid activation),
+ * unless a custom ends_at is provided (then start = now, months stored as 0 → "custom").
+ */
+function createManualTechnicalSupportSubscription(
+  db,
+  { phone, months, amount = 0, ends_at: endsAtInput = null } = {}
+) {
+  ensureTechnicalSupportTables(db);
+
+  const normalizedPhone = String(phone || '').trim();
+  const phoneKey = normalizePhoneKey(normalizedPhone);
+  if (!phoneKey) {
+    throw new Error('INVALID_PHONE');
+  }
+
+  const hasCustomEnd =
+    endsAtInput !== undefined && endsAtInput !== null && String(endsAtInput).trim() !== '';
+  const duration = Number(months);
+
+  if (!hasCustomEnd && !isAllowedDuration(duration)) {
+    throw new Error('INVALID_MONTHS');
+  }
+
+  const amountValue = amount === undefined || amount === null || amount === '' ? 0 : Number(amount);
+  if (!Number.isFinite(amountValue) || amountValue < 0 || !Number.isInteger(amountValue)) {
+    throw new Error('INVALID_AMOUNT');
+  }
+
+  const now = new Date();
+  let startBase;
+  let endsAt;
+  let storedMonths;
+
+  if (hasCustomEnd) {
+    const parsedEnd = new Date(endsAtInput);
+    if (Number.isNaN(parsedEnd.getTime())) {
+      throw new Error('INVALID_ENDS_AT');
+    }
+    if (parsedEnd.getTime() <= now.getTime()) {
+      throw new Error('INVALID_ENDS_AT');
+    }
+    startBase = now;
+    endsAt = parsedEnd;
+    storedMonths = 0;
+  } else {
+    const latestEnd = getLatestTechnicalSupportEnd(db, phoneKey);
+    const latestEndMs = latestEnd ? Date.parse(latestEnd) : NaN;
+    startBase =
+      Number.isFinite(latestEndMs) && latestEndMs > now.getTime() ? new Date(latestEndMs) : now;
+    endsAt = addCalendarMonths(startBase, duration);
+    storedMonths = duration;
+  }
+
+  const orderId = `manual:${crypto.randomUUID()}`;
+
+  const result = db
+    .prepare(
+      `INSERT INTO technical_support_subscriptions (
+         phone, phone_key, order_id, months, amount, starts_at, ends_at, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+    )
+    .run(
+      normalizedPhone,
+      phoneKey,
+      orderId,
+      storedMonths,
+      amountValue,
+      toIsoUtc(startBase),
+      toIsoUtc(endsAt)
+    );
+
+  const subscription = db
+    .prepare('SELECT * FROM technical_support_subscriptions WHERE id = ?')
+    .get(result.lastInsertRowid);
+
+  return { created: true, subscription };
+}
+
+function getTechnicalSupportSubscriptionById(db, id) {
+  ensureTechnicalSupportTables(db);
+  const subscriptionId = Number(id);
+  if (!Number.isInteger(subscriptionId) || subscriptionId <= 0) {
+    return null;
+  }
+  return (
+    db.prepare('SELECT * FROM technical_support_subscriptions WHERE id = ?').get(subscriptionId) ||
+    null
+  );
+}
+
+/**
+ * End an active subscription immediately by setting ends_at to now.
+ * Already-expired rows are left unchanged (changed: false).
+ */
+function deactivateTechnicalSupportSubscription(db, id) {
+  ensureTechnicalSupportTables(db);
+  const row = getTechnicalSupportSubscriptionById(db, id);
+  if (!row) {
+    throw new Error('NOT_FOUND');
+  }
+
+  const mapped = mapSubscriptionRow(row);
+  if (mapped.status !== 'active') {
+    return { changed: false, reason: 'already_expired', subscription: row };
+  }
+
+  const endsAt = toIsoUtc(new Date());
+  db.prepare('UPDATE technical_support_subscriptions SET ends_at = ? WHERE id = ?').run(
+    endsAt,
+    row.id
+  );
+
+  const subscription = getTechnicalSupportSubscriptionById(db, row.id);
+  return { changed: true, subscription };
+}
+
+function updateTechnicalSupportSubscriptionEndsAt(db, id, endsAt) {
+  ensureTechnicalSupportTables(db);
+  const row = getTechnicalSupportSubscriptionById(db, id);
+  if (!row) {
+    throw new Error('NOT_FOUND');
+  }
+
+  const parsed = new Date(endsAt);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error('INVALID_ENDS_AT');
+  }
+
+  const endsAtIso = toIsoUtc(parsed);
+  db.prepare(
+    `UPDATE technical_support_subscriptions
+     SET ends_at = ?, months = 0
+     WHERE id = ?`
+  ).run(endsAtIso, row.id);
+
+  return { subscription: getTechnicalSupportSubscriptionById(db, row.id) };
+}
+
+function deleteTechnicalSupportSubscription(db, id) {
+  ensureTechnicalSupportTables(db);
+  const row = getTechnicalSupportSubscriptionById(db, id);
+  if (!row) {
+    throw new Error('NOT_FOUND');
+  }
+
+  const result = db.prepare('DELETE FROM technical_support_subscriptions WHERE id = ?').run(row.id);
+  return { deleted: result.changes > 0, id: row.id };
+}
+
 function mapSubscriptionRow(row, { now = Date.now() } = {}) {
   if (!row) return null;
   const endsAtMs = Date.parse(row.ends_at);
@@ -380,10 +533,20 @@ function listTechnicalSupportSubscriptions(
   };
 }
 
-function formatSupportUntilLabel(endsAt) {
+function formatSupportUntilDate(endsAt) {
   const date = new Date(endsAt);
   if (Number.isNaN(date.getTime())) return null;
-  return 'Есть платные подписки ТП';
+  return date.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+function formatSupportUntilLabel(endsAt) {
+  const formatted = formatSupportUntilDate(endsAt);
+  if (!formatted) return null;
+  return `Есть платные подписки ТП\n📅 До: ${formatted}`;
 }
 
 module.exports = {
@@ -396,6 +559,11 @@ module.exports = {
   getActiveTechnicalSupportSubscription,
   getTechnicalSupportStatusByPhone,
   activateTechnicalSupportFromOrder,
+  createManualTechnicalSupportSubscription,
+  getTechnicalSupportSubscriptionById,
+  deactivateTechnicalSupportSubscription,
+  updateTechnicalSupportSubscriptionEndsAt,
+  deleteTechnicalSupportSubscription,
   listTechnicalSupportSubscriptions,
   isTechnicalSupportOrder,
   getTechnicalSupportOrderDetails,
@@ -404,4 +572,5 @@ module.exports = {
   addCalendarMonths,
   normalizePhoneKey,
   formatSupportUntilLabel,
+  formatSupportUntilDate,
 };

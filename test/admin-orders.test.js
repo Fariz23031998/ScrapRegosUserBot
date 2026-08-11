@@ -197,6 +197,7 @@ describe('admin orders action controls', () => {
     );
 
     assert.match(source, /canDeleteOrders = hasPermission\(session, 'delete_unpaid_order'\)/);
+    assert.match(source, /canDeleteCashOrders = hasPermission\(session, 'delete_cash_order'\)/);
     assert.match(source, /canMarkOrdersPaidCash = hasPermission\(session, 'mark_paid_cash'\)/);
     assert.match(source, /canRenotifyOrders = hasPermission\(session, 'renotify_order'\)/);
     assert.doesNotMatch(source, /hasPermission\(session, 'orders_manage'\)/);
@@ -309,7 +310,7 @@ describe('admin orders API', () => {
     assert.equal(listBody.orders.length, 1);
 
     const pendingId = listBody.orders[0].id;
-    for (const action of ['delete', 'paid-cash', 'renotify']) {
+    for (const action of ['delete', 'paid-cash', 'renotify', 'delete-cash']) {
       const denied = await request(server, 'POST', `/bot-admin/api/orders/${pendingId}/${action}`, {
         headers: { Cookie: readOnly.cookie },
       });
@@ -344,6 +345,32 @@ describe('admin orders API', () => {
         );
       }
     }
+
+    const cashDeleter = await loginEmployee({ orders_read: 1, delete_cash_order: 1 });
+    const cashOrder = createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: cashDeleter.telegramId,
+      botUserPhone: '998901111111',
+      clientPhone: '998902222222',
+      amount: 16000,
+      status: 'paid_cash',
+      paymentProvider: 'cash',
+    });
+    const cashDeleteDenied = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${cashOrder.id}/delete-cash`,
+      { headers: { Cookie: readOnly.cookie } }
+    );
+    assert.equal(cashDeleteDenied.statusCode, 403);
+    const cashDeleteOk = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${cashOrder.id}/delete-cash`,
+      { headers: { Cookie: cashDeleter.cookie } }
+    );
+    assert.equal(cashDeleteOk.statusCode, 200);
+    assert.equal(getOrderById(db, cashOrder.id).status, 'deleted');
 
     const noAccess = await loginEmployee({ tickets_read: 1 });
     const listDenied = await request(server, 'GET', '/bot-admin/api/orders', {
@@ -404,6 +431,7 @@ describe('admin orders API', () => {
     const manager = await loginEmployee({
       orders_read: 1,
       delete_unpaid_order: 1,
+      delete_cash_order: 1,
       mark_paid_cash: 1,
       renotify_order: 1,
     });
@@ -437,6 +465,15 @@ describe('admin orders API', () => {
       amount: 14000,
       status: 'paid',
     });
+    const paidCash = createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: manager.telegramId,
+      botUserPhone: '998901111111',
+      clientPhone: '998906666666',
+      amount: 15000,
+      status: 'paid_cash',
+      paymentProvider: 'cash',
+    });
 
     const deleted = await request(
       server,
@@ -469,11 +506,45 @@ describe('admin orders API', () => {
     assert.ok(renotifyBody.message);
     assert.equal(getOrderById(db, pendingRenotify.id).status, 'pending');
 
-    for (const action of ['delete', 'paid-cash', 'renotify']) {
+    for (const action of ['delete', 'paid-cash', 'renotify', 'delete-cash']) {
       const fail = await request(server, 'POST', `/bot-admin/api/orders/${paid.id}/${action}`, {
         headers: { Cookie: manager.cookie },
       });
       assert.equal(fail.statusCode, 409, `${action} on paid should be 409`);
     }
+
+    const unpaidDeleteOnCash = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${paidCash.id}/delete`,
+      { headers: { Cookie: manager.cookie } }
+    );
+    assert.equal(unpaidDeleteOnCash.statusCode, 409);
+    assert.equal(getOrderById(db, paidCash.id).status, 'paid_cash');
+
+    const deleteCashOnPending = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${pendingRenotify.id}/delete-cash`,
+      { headers: { Cookie: manager.cookie } }
+    );
+    assert.equal(deleteCashOnPending.statusCode, 409);
+
+    const deletedCash = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${paidCash.id}/delete-cash`,
+      { headers: { Cookie: manager.cookie } }
+    );
+    assert.equal(deletedCash.statusCode, 200);
+    assert.equal(getOrderById(db, paidCash.id).status, 'deleted');
+
+    const deleteCashAgain = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${paidCash.id}/delete-cash`,
+      { headers: { Cookie: manager.cookie } }
+    );
+    assert.equal(deleteCashAgain.statusCode, 409);
   });
 });

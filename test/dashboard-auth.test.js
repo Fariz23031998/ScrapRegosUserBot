@@ -555,6 +555,7 @@ describe('Telegram dashboard authentication', () => {
     assert.ok(cols.some((col) => col.name === 'tickets_read'));
     assert.ok(cols.some((col) => col.name === 'tickets_create'));
     assert.ok(cols.some((col) => col.name === 'tickets_edit'));
+    assert.ok(cols.some((col) => col.name === 'tickets_edit_closed'));
     assert.ok(cols.some((col) => col.name === 'clients_edit'));
     assert.ok(cols.some((col) => col.name === 'clients_link_firm'));
     assert.ok(cols.some((col) => col.name === 'users_read'));
@@ -562,6 +563,7 @@ describe('Telegram dashboard authentication', () => {
     assert.ok(cols.some((col) => col.name === 'orders_read'));
     assert.ok(cols.some((col) => col.name === 'orders_manage'));
     assert.ok(cols.some((col) => col.name === 'delete_unpaid_order'));
+    assert.ok(cols.some((col) => col.name === 'delete_cash_order'));
     assert.ok(cols.some((col) => col.name === 'mark_paid_cash'));
     assert.ok(cols.some((col) => col.name === 'renotify_order'));
     assert.ok(cols.some((col) => col.name === 'settings_read'));
@@ -624,6 +626,7 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(passwordSessionBody.permissions.tickets_read, true);
       assert.equal(passwordSessionBody.permissions.tickets_create, true);
       assert.equal(passwordSessionBody.permissions.tickets_edit, true);
+      assert.equal(passwordSessionBody.permissions.tickets_edit_closed, true);
       assert.equal(passwordSessionBody.permissions.clients_edit, true);
       assert.equal(passwordSessionBody.permissions.clients_link_firm, true);
       assert.equal(passwordSessionBody.permissions.users_read, true);
@@ -631,6 +634,7 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(passwordSessionBody.permissions.settings_read, true);
       assert.equal(passwordSessionBody.permissions.settings_edit, true);
       assert.equal(passwordSessionBody.permissions.delete_unpaid_order, true);
+      assert.equal(passwordSessionBody.permissions.delete_cash_order, true);
       assert.equal(passwordSessionBody.permissions.mark_paid_cash, true);
       assert.equal(passwordSessionBody.permissions.renotify_order, true);
       assert.equal(passwordSessionBody.permissions.orders_manage, undefined);
@@ -647,6 +651,12 @@ describe('Telegram dashboard authentication', () => {
       assert.ok(
         rightsMetaBody.rights.some(
           (right) => right.key === 'tickets_edit' && /тикеты — изменение/.test(right.label)
+        )
+      );
+      assert.ok(
+        rightsMetaBody.rights.some(
+          (right) =>
+            right.key === 'tickets_edit_closed' && /тикеты — изменение закрытых/.test(right.label)
         )
       );
       assert.ok(
@@ -697,11 +707,13 @@ describe('Telegram dashboard authentication', () => {
       assert.equal(ticketsOnlyBody.permissions.tickets_read, true);
       assert.equal(ticketsOnlyBody.permissions.tickets_create, false);
       assert.equal(ticketsOnlyBody.permissions.tickets_edit, false);
+      assert.equal(ticketsOnlyBody.permissions.tickets_edit_closed, false);
       assert.equal(ticketsOnlyBody.permissions.users_read, false);
       assert.equal(ticketsOnlyBody.permissions.order_logs_read, false);
       assert.equal(ticketsOnlyBody.permissions.settings_read, false);
       assert.equal(ticketsOnlyBody.permissions.settings_edit, false);
       assert.equal(ticketsOnlyBody.permissions.delete_unpaid_order, false);
+      assert.equal(ticketsOnlyBody.permissions.delete_cash_order, false);
       assert.equal(ticketsOnlyBody.permissions.mark_paid_cash, false);
       assert.equal(ticketsOnlyBody.permissions.renotify_order, false);
 

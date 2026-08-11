@@ -6,13 +6,19 @@ const state = {
   total: 0,
   query: '',
   status: '',
+  canCreate: false,
+  canEdit: false,
+  canDelete: false,
+  itemsById: new Map(),
 };
 
 function durationLabel(months) {
-  if (months === 1) return '1 месяц';
-  if (months === 3) return '3 месяца';
-  if (months === 6) return '6 месяцев';
-  return '12 месяцев';
+  const value = Number(months);
+  if (value === 1) return '1 месяц';
+  if (value === 3) return '3 месяца';
+  if (value === 6) return '6 месяцев';
+  if (value === 12) return '12 месяцев';
+  return 'custom';
 }
 
 function formatAmount(value) {
@@ -36,6 +42,46 @@ function formatPhone(value) {
   return escapeHtml(`+998 ${code} ${first}-${second}-${third}`);
 }
 
+function toDateInputValue(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function addLocalMonths(date, months) {
+  const result = new Date(date.getTime());
+  const day = result.getDate();
+  result.setMonth(result.getMonth() + Number(months));
+  if (result.getDate() < day) {
+    result.setDate(0);
+  }
+  return result;
+}
+
+function suggestedEndsAtFromMonths(months) {
+  return toDateInputValue(addLocalMonths(new Date(), months));
+}
+
+/** Convert YYYY-MM-DD to ISO at end of that local day. */
+function fromDateInputValue(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || '').trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day, 23, 59, 59, 999);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date.toISOString();
+}
+
 function showPricesMessage(text, isError = false) {
   const el = document.getElementById('prices-message');
   if (!text) {
@@ -46,6 +92,54 @@ function showPricesMessage(text, isError = false) {
   el.hidden = false;
   el.textContent = text;
   el.className = `message ${isError ? 'error' : 'success'}`;
+}
+
+function showModalError(id, text) {
+  const el = document.getElementById(id);
+  if (!text) {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+}
+
+function setModalOpen(overlay, open) {
+  overlay.hidden = !open;
+  document.documentElement.classList.toggle('modal-open', open);
+  document.body.classList.toggle('modal-open', open);
+}
+
+function closeCreateModal() {
+  setModalOpen(document.getElementById('create-subscription-modal'), false);
+  showModalError('create-subscription-error', '');
+}
+
+function closeEditModal() {
+  setModalOpen(document.getElementById('edit-subscription-modal'), false);
+  showModalError('edit-subscription-error', '');
+}
+
+function openCreateModal() {
+  const form = document.getElementById('create-subscription-form');
+  form.reset();
+  document.getElementById('create-months').value = '3';
+  document.getElementById('create-amount').value = '0';
+  document.getElementById('create-ends-at').value = suggestedEndsAtFromMonths(3);
+  showModalError('create-subscription-error', '');
+  setModalOpen(document.getElementById('create-subscription-modal'), true);
+  document.getElementById('create-phone').focus();
+}
+
+function openEditModal(row) {
+  document.getElementById('edit-subscription-id').value = String(row.id);
+  document.getElementById('edit-subscription-meta').textContent =
+    `${row.phone || ''} · ${durationLabel(row.months)}`;
+  document.getElementById('edit-ends-at').value = toDateInputValue(row.ends_at);
+  showModalError('edit-subscription-error', '');
+  setModalOpen(document.getElementById('edit-subscription-modal'), true);
+  document.getElementById('edit-ends-at').focus();
 }
 
 function renderPricesForm(prices, { canEdit = true } = {}) {
@@ -119,13 +213,37 @@ function statusBadge(status) {
   return '<span class="badge badge--muted">Истекла</span>';
 }
 
+function renderRowActions(row) {
+  const actions = [];
+  const id = Number(row.id);
+  if (state.canEdit && row.status === 'active') {
+    actions.push(
+      `<button type="button" class="btn btn-secondary btn-sm" data-action="deactivate" data-id="${id}">Деактивировать</button>`
+    );
+  }
+  if (state.canEdit) {
+    actions.push(
+      `<button type="button" class="btn btn-secondary btn-sm" data-action="edit" data-id="${id}">Изменить</button>`
+    );
+  }
+  if (state.canDelete) {
+    actions.push(
+      `<button type="button" class="btn btn-danger btn-sm" data-action="delete" data-id="${id}">Удалить</button>`
+    );
+  }
+  if (!actions.length) return '—';
+  return `<div class="row-actions">${actions.join('')}</div>`;
+}
+
 function renderSubscriptions(items) {
   const wrap = document.getElementById('subscriptions-wrap');
+  state.itemsById = new Map((items || []).map((row) => [Number(row.id), row]));
   if (!items.length) {
     wrap.innerHTML = '<p class="empty-state">Подписки не найдены.</p>';
     return;
   }
 
+  const showActions = state.canCreate || state.canEdit || state.canDelete;
   wrap.innerHTML = `
     <div class="table-scroll">
       <table class="data-table">
@@ -138,6 +256,7 @@ function renderSubscriptions(items) {
             <th>Начало</th>
             <th>Окончание</th>
             <th>Статус</th>
+            ${showActions ? '<th>Действия</th>' : ''}
           </tr>
         </thead>
         <tbody>
@@ -152,6 +271,11 @@ function renderSubscriptions(items) {
               <td class="cell-nowrap" data-label="Начало">${formatDateTime(row.starts_at)}</td>
               <td class="cell-nowrap" data-label="Окончание">${formatDateTime(row.ends_at)}</td>
               <td data-label="Статус">${statusBadge(row.status)}</td>
+              ${
+                showActions
+                  ? `<td data-label="Действия">${renderRowActions(row)}</td>`
+                  : ''
+              }
             </tr>
           `
             )
@@ -160,6 +284,14 @@ function renderSubscriptions(items) {
       </table>
     </div>
   `;
+
+  wrap.querySelectorAll('button[data-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      handleSubscriptionAction(button.dataset.action, Number(button.dataset.id), button).catch(
+        (error) => window.alert(error.message)
+      );
+    });
+  });
 }
 
 async function loadSubscriptions() {
@@ -196,19 +328,178 @@ async function loadSubscriptions() {
   });
 }
 
+async function handleSubscriptionAction(action, id, button) {
+  const row = state.itemsById.get(id);
+  if (!row) return;
+
+  if (action === 'edit' && state.canEdit) {
+    openEditModal(row);
+    return;
+  }
+
+  if (action === 'deactivate' && state.canEdit) {
+    if (!window.confirm('Деактивировать подписку сейчас?')) return;
+    setButtonLoading(button, true);
+    try {
+      await api(`/bot-admin/api/technical-support/subscriptions/${id}/deactivate`, {
+        method: 'POST',
+      });
+      await loadSubscriptions();
+    } finally {
+      setButtonLoading(button, false);
+    }
+    return;
+  }
+
+  if (action === 'delete' && state.canDelete) {
+    if (!window.confirm('Удалить подписку безвозвратно?')) return;
+    setButtonLoading(button, true);
+    try {
+      await api(`/bot-admin/api/technical-support/subscriptions/${id}`, { method: 'DELETE' });
+      await loadSubscriptions();
+    } finally {
+      setButtonLoading(button, false);
+    }
+  }
+}
+
+async function submitCreateSubscription(event) {
+  event.preventDefault();
+  showModalError('create-subscription-error', '');
+  const phone = document.getElementById('create-phone').value.trim();
+  const monthsRaw = document.getElementById('create-months').value;
+  const isCustom = monthsRaw === 'custom';
+  const months = isCustom ? 0 : Number(monthsRaw);
+  const endsAt = fromDateInputValue(document.getElementById('create-ends-at').value);
+  const amountRaw = document.getElementById('create-amount').value;
+  const amount = amountRaw === '' ? 0 : Number(amountRaw);
+  if (!phone) {
+    showModalError('create-subscription-error', 'Укажите телефон.');
+    return;
+  }
+  if (!isCustom && !DURATIONS.includes(months)) {
+    showModalError('create-subscription-error', 'Срок должен быть 1, 3, 6 или 12 месяцев.');
+    return;
+  }
+  if (!endsAt) {
+    showModalError('create-subscription-error', 'Укажите корректную дату окончания.');
+    return;
+  }
+  if (Date.parse(endsAt) <= Date.now()) {
+    showModalError('create-subscription-error', 'Дата окончания должна быть в будущем.');
+    return;
+  }
+  if (!Number.isInteger(amount) || amount < 0) {
+    showModalError('create-subscription-error', 'Сумма должна быть целым числом ≥ 0.');
+    return;
+  }
+
+  const payload = isCustom
+    ? { phone, months: 0, amount, ends_at: endsAt }
+    : { phone, months, amount };
+
+  const submitBtn = document.getElementById('create-subscription-submit');
+  setButtonLoading(submitBtn, true);
+  try {
+    await api('/bot-admin/api/technical-support/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    closeCreateModal();
+    state.page = 1;
+    await loadSubscriptions();
+  } catch (error) {
+    showModalError('create-subscription-error', error.message || 'Не удалось создать подписку.');
+  } finally {
+    setButtonLoading(submitBtn, false);
+  }
+}
+
+async function submitEditSubscription(event) {
+  event.preventDefault();
+  showModalError('edit-subscription-error', '');
+  const id = Number(document.getElementById('edit-subscription-id').value);
+  const endsAt = fromDateInputValue(document.getElementById('edit-ends-at').value);
+  if (!endsAt) {
+    showModalError('edit-subscription-error', 'Укажите корректную дату окончания.');
+    return;
+  }
+
+  const submitBtn = document.getElementById('edit-subscription-submit');
+  setButtonLoading(submitBtn, true);
+  try {
+    await api(`/bot-admin/api/technical-support/subscriptions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ends_at: endsAt }),
+    });
+    closeEditModal();
+    await loadSubscriptions();
+  } catch (error) {
+    showModalError('edit-subscription-error', error.message || 'Не удалось обновить подписку.');
+  } finally {
+    setButtonLoading(submitBtn, false);
+  }
+}
+
+function bindModals() {
+  document.getElementById('create-subscription-btn').addEventListener('click', openCreateModal);
+  document.getElementById('create-subscription-close').addEventListener('click', closeCreateModal);
+  document.getElementById('create-subscription-cancel').addEventListener('click', closeCreateModal);
+  document.getElementById('create-months').addEventListener('change', (event) => {
+    const value = event.target.value;
+    if (value === 'custom') return;
+    const months = Number(value);
+    if (DURATIONS.includes(months)) {
+      document.getElementById('create-ends-at').value = suggestedEndsAtFromMonths(months);
+    }
+  });
+  document.getElementById('create-ends-at').addEventListener('input', () => {
+    document.getElementById('create-months').value = 'custom';
+  });
+  document
+    .getElementById('create-subscription-form')
+    .addEventListener('submit', (event) => {
+      submitCreateSubscription(event).catch((error) => window.alert(error.message));
+    });
+
+  document.getElementById('edit-subscription-close').addEventListener('click', closeEditModal);
+  document.getElementById('edit-subscription-cancel').addEventListener('click', closeEditModal);
+  document.getElementById('edit-subscription-form').addEventListener('submit', (event) => {
+    submitEditSubscription(event).catch((error) => window.alert(error.message));
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const createModal = document.getElementById('create-subscription-modal');
+    const editModal = document.getElementById('edit-subscription-modal');
+    if (!createModal.hidden) closeCreateModal();
+    if (!editModal.hidden) closeEditModal();
+  });
+}
+
 async function init() {
   const session = await ensureSession({ requiredPermission: 'technical_support_read' });
-  const canEdit = Boolean(session.permissions?.technical_support_edit);
+  state.canCreate = Boolean(session.permissions?.technical_support_create);
+  state.canEdit = Boolean(session.permissions?.technical_support_edit);
+  state.canDelete = Boolean(session.permissions?.technical_support_delete);
   setupLogout();
-  await loadPrices(canEdit);
+  await loadPrices(state.canEdit);
   await loadSubscriptions();
 
   const submitBtn = document.getElementById('prices-submit');
-  if (!canEdit) {
+  if (!state.canEdit) {
     submitBtn.hidden = true;
   } else {
     document.getElementById('prices-form').addEventListener('submit', savePrices);
   }
+
+  const createBtn = document.getElementById('create-subscription-btn');
+  if (state.canCreate) {
+    createBtn.hidden = false;
+  }
+
+  bindModals();
+
   document.getElementById('refresh-subscriptions-btn').addEventListener('click', () => {
     loadSubscriptions().catch((error) => {
       document.getElementById('subscriptions-wrap').innerHTML =

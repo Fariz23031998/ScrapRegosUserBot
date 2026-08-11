@@ -12,7 +12,7 @@
         <div class="header-top">
           <div>
             <h1>Техподдержка</h1>
-            <p>Цены на подписки 1/3/6/12 месяцев и история оплаченных подписок.</p>
+            <p>Цены, ручная активация и управление подписками техподдержки.</p>
           </div>
           <div class="account-menu" id="account-menu">
             <button type="button" class="account-menu__avatar" id="account-menu-toggle" aria-haspopup="true" aria-expanded="false" aria-label="Аккаунт">
@@ -79,12 +79,75 @@
               </select>
             </label>
             <button type="button" class="btn btn-secondary btn-sm" id="refresh-subscriptions-btn">Обновить</button>
+            <button type="button" class="btn btn-primary btn-sm" id="create-subscription-btn" hidden>Добавить подписку</button>
           </div>
         </div>
         <div id="subscriptions-wrap"></div>
         <div id="subscriptions-pagination" class="pagination-wrap"></div>
       </section>
     </main>
+
+    <div class="modal-overlay" id="create-subscription-modal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-subscription-title">
+        <div class="modal-header">
+          <h3 id="create-subscription-title">Новая подписка</h3>
+          <button type="button" class="modal-close" id="create-subscription-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form id="create-subscription-form" class="modal-body">
+          <label class="field">
+            <span>Телефон</span>
+            <input type="text" name="phone" id="create-phone" required placeholder="+998901112233" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Срок</span>
+            <select name="months" id="create-months" required>
+              <option value="1">1 месяц</option>
+              <option value="3" selected>3 месяца</option>
+              <option value="6">6 месяцев</option>
+              <option value="12">12 месяцев</option>
+              <option value="custom">custom</option>
+            </select>
+            <span class="field-hint">При ручном выборе даты окончания срок станет custom</span>
+          </label>
+          <label class="field">
+            <span>Дата окончания</span>
+            <input type="date" name="ends_at" id="create-ends-at" required />
+          </label>
+          <label class="field">
+            <span>Сумма (необязательно)</span>
+            <input type="number" name="amount" id="create-amount" min="0" step="1" value="0" />
+            <span class="field-hint">Для ручной активации обычно 0</span>
+          </label>
+          <p id="create-subscription-error" class="message error" hidden></p>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="create-subscription-cancel">Отмена</button>
+            <button type="submit" class="btn btn-primary" id="create-subscription-submit">Активировать</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="edit-subscription-modal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="edit-subscription-title">
+        <div class="modal-header">
+          <h3 id="edit-subscription-title">Изменить окончание</h3>
+          <button type="button" class="modal-close" id="edit-subscription-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <form id="edit-subscription-form" class="modal-body">
+          <input type="hidden" id="edit-subscription-id" />
+          <p class="field-hint" id="edit-subscription-meta"></p>
+          <label class="field">
+            <span>Дата окончания</span>
+            <input type="date" name="ends_at" id="edit-ends-at" required />
+          </label>
+          <p id="edit-subscription-error" class="message error" hidden></p>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="edit-subscription-cancel">Отмена</button>
+            <button type="submit" class="btn btn-primary" id="edit-subscription-submit">Сохранить</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <script src="/bot-admin/admin-common.js"></script>
     <script src="/bot-admin/admin-technical-support.js"></script>

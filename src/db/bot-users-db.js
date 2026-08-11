@@ -13,6 +13,7 @@ const DEFAULT_RIGHTS = {
   see_own_report: 1,
   see_all_report: 0,
   delete_unpaid_order: 0,
+  delete_cash_order: 0,
   manage_vip: 0,
   see_all_unpaid_orders: 0,
   mark_paid_cash: 0,
@@ -29,6 +30,7 @@ const DEFAULT_RIGHTS = {
   tickets_read: 0,
   tickets_create: 0,
   tickets_edit: 0,
+  tickets_edit_closed: 0,
   clients_edit: 0,
   clients_link_firm: 0,
   technical_support_read: 0,
@@ -56,6 +58,7 @@ const ADMIN_RIGHTS_COLUMNS = [
   'tickets_read',
   'tickets_create',
   'tickets_edit',
+  'tickets_edit_closed',
   'clients_edit',
   'clients_link_firm',
   'technical_support_read',
@@ -111,6 +114,7 @@ function ensureUserRightsTable(db) {
       see_own_report INTEGER NOT NULL DEFAULT 1,
       see_all_report INTEGER NOT NULL DEFAULT 0,
       delete_unpaid_order INTEGER NOT NULL DEFAULT 0,
+      delete_cash_order INTEGER NOT NULL DEFAULT 0,
       manage_vip INTEGER NOT NULL DEFAULT 0,
       see_all_unpaid_orders INTEGER NOT NULL DEFAULT 0,
       mark_paid_cash INTEGER NOT NULL DEFAULT 0,
@@ -126,6 +130,7 @@ function ensureUserRightsTable(db) {
     'open_admin_dashboard',
     'create_technical_support',
     'renotify_order',
+    'delete_cash_order',
     'view_tickets',
   ];
   for (const column of legacyColumns) {
@@ -828,6 +833,30 @@ function deletePendingOrder(db, orderId, actorTelegramId = null) {
   return true;
 }
 
+function deletePaidCashOrder(db, orderId, actorTelegramId = null) {
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+  if (!order || order.status !== 'paid_cash') {
+    return false;
+  }
+
+  const result = db
+    .prepare("UPDATE orders SET status = 'deleted' WHERE id = ? AND status = 'paid_cash'")
+    .run(orderId);
+  if (result.changes <= 0) {
+    return false;
+  }
+
+  logOrderEvent(db, {
+    orderId,
+    action: 'deleted',
+    actorTelegramId,
+    orderAmount: order.amount,
+    clientPhone: order.client_phone,
+    additionalPhone: order.additional_phone,
+  });
+  return true;
+}
+
 function markPendingOrderPaidCash(db, orderId, actorTelegramId = null) {
   const { activateTechnicalSupportFromOrder } = require('./technical-support');
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
@@ -957,6 +986,7 @@ module.exports = {
   isLinkedEmployee,
   getAllUnpaidOrders,
   deletePendingOrder,
+  deletePaidCashOrder,
   markPendingOrderPaidCash,
   getEarningsRows,
 };

@@ -23,10 +23,16 @@ const {
   activateTechnicalSupportFromOrder,
   getActiveTechnicalSupportSubscription,
   listTechnicalSupportSubscriptions,
+  createManualTechnicalSupportSubscription,
+  deactivateTechnicalSupportSubscription,
+  updateTechnicalSupportSubscriptionEndsAt,
+  deleteTechnicalSupportSubscription,
+  mapSubscriptionRow,
   addCalendarMonths,
   formatSupportUntilLabel,
 } = require('../src/db/technical-support');
 const { createBotAdminRouter } = require('../src/admin/bot-admin');
+const { createDashboardLoginToken } = require('../src/admin/dashboard-login-tokens');
 const { makeServiceButtonForResult } = require('../src/bot/service-bot');
 const { EXPIRED_MESSAGE } = require('../src/bot/search-user');
 const {
@@ -51,10 +57,16 @@ function removeDbFiles(dbPath) {
   }
 }
 
+function cookieFromSetCookie(setCookie) {
+  const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+  if (!raw) return null;
+  return String(raw).split(';')[0];
+}
+
 function request(server, method, urlPath, { headers = {}, body = null } = {}) {
   return new Promise((resolve, reject) => {
     const { port } = server.address();
-    const payload = body == null ? null : Buffer.from(body);
+    const payload = body == null ? null : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
     const req = http.request(
       {
         hostname: '127.0.0.1',
@@ -62,7 +74,10 @@ function request(server, method, urlPath, { headers = {}, body = null } = {}) {
         path: urlPath,
         method,
         headers: {
-          ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}),
+          Accept: 'application/json',
+          ...(payload
+            ? { 'Content-Type': 'application/json', 'Content-Length': payload.length }
+            : {}),
           ...headers,
         },
       },
@@ -270,7 +285,13 @@ describe('Technical support subscriptions', () => {
     markOrderPaid(db, order.id, { provider: 'click', clickTransId: 'x' });
     const active = getActiveSub(db, phone);
     const label = formatLabel(active.ends_at);
-    assert.equal(label, 'Есть платные подписки ТП');
+    assert.match(label, /^Есть платные подписки ТП\n📅 До: \d{2}\.\d{2}\.\d{4}$/);
+    const expectedDate = new Date(active.ends_at).toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+    assert.equal(label, `Есть платные подписки ТП\n📅 До: ${expectedDate}`);
 
     const message = `${EXPIRED_MESSAGE}\n\nRegos\nID: 1`;
     const without = message.startsWith(`${EXPIRED_MESSAGE}\n\n`)
@@ -278,7 +299,8 @@ describe('Technical support subscriptions', () => {
       : message;
     const finalMessage = `${without}\n\n${label}`;
     assert.ok(!finalMessage.startsWith(EXPIRED_MESSAGE));
-    assert.ok(finalMessage.includes(label));
+    assert.ok(finalMessage.includes('Есть платные подписки ТП'));
+    assert.ok(finalMessage.includes(`📅 До: ${expectedDate}`));
   });
 
   it('exposes authenticated admin price and subscription APIs', async () => {
@@ -329,6 +351,206 @@ describe('Technical support subscriptions', () => {
       const subsBody = JSON.parse(subs.body);
       assert.ok(subsBody.total >= 1);
       assert.equal(subsBody.subscriptions[0].status, 'active');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('manually creates, stacks, deactivates, edits ends_at, and deletes subscriptions', () => {
+    const phone = '+998901234000';
+    const first = createManualTechnicalSupportSubscription(db, {
+      phone,
+      months: 1,
+      amount: 0,
+    });
+    assert.equal(first.created, true);
+    assert.match(first.subscription.order_id, /^manual:/);
+    assert.equal(Number(first.subscription.months), 1);
+
+    const active = getActiveTechnicalSupportSubscription(db, phone);
+    assert.ok(active);
+    assert.equal(active.id, first.subscription.id);
+
+    const second = createManualTechnicalSupportSubscription(db, {
+      phone,
+      months: 3,
+      amount: 5000,
+    });
+    assert.equal(second.created, true);
+    assert.equal(second.subscription.starts_at, first.subscription.ends_at);
+    const expectedEnd = addCalendarMonths(new Date(first.subscription.ends_at), 3).toISOString();
+    assert.equal(second.subscription.ends_at, expectedEnd);
+
+    const stacked = getActiveTechnicalSupportSubscription(db, phone);
+    assert.equal(stacked.id, second.subscription.id);
+
+    const deactivated = deactivateTechnicalSupportSubscription(db, second.subscription.id);
+    assert.equal(deactivated.changed, true);
+    assert.equal(mapSubscriptionRow(deactivated.subscription).status, 'expired');
+    assert.equal(getActiveTechnicalSupportSubscription(db, phone)?.id, first.subscription.id);
+
+    const again = deactivateTechnicalSupportSubscription(db, second.subscription.id);
+    assert.equal(again.changed, false);
+    assert.equal(again.reason, 'already_expired');
+
+    const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    const extended = updateTechnicalSupportSubscriptionEndsAt(db, first.subscription.id, future);
+    assert.equal(Number(extended.subscription.months), 0);
+    assert.equal(mapSubscriptionRow(extended.subscription).status, 'active');
+    assert.equal(extended.subscription.ends_at, new Date(future).toISOString());
+
+    const past = new Date(Date.now() - 60 * 1000).toISOString();
+    const shortened = updateTechnicalSupportSubscriptionEndsAt(db, first.subscription.id, past);
+    assert.equal(Number(shortened.subscription.months), 0);
+    assert.equal(mapSubscriptionRow(shortened.subscription).status, 'expired');
+    assert.equal(getActiveTechnicalSupportSubscription(db, phone), null);
+
+    assert.throws(
+      () => createManualTechnicalSupportSubscription(db, { phone: '', months: 1 }),
+      /INVALID_PHONE/
+    );
+    assert.throws(
+      () => createManualTechnicalSupportSubscription(db, { phone, months: 2 }),
+      /INVALID_MONTHS/
+    );
+    assert.throws(
+      () =>
+        createManualTechnicalSupportSubscription(db, {
+          phone: '+998901234001',
+          months: 1,
+          ends_at: new Date(Date.now() - 60 * 1000).toISOString(),
+        }),
+      /INVALID_ENDS_AT/
+    );
+
+    const customEnd = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString();
+    const custom = createManualTechnicalSupportSubscription(db, {
+      phone: '+998901234002',
+      months: 0,
+      ends_at: customEnd,
+    });
+    assert.equal(custom.created, true);
+    assert.equal(Number(custom.subscription.months), 0);
+    assert.equal(custom.subscription.ends_at, new Date(customEnd).toISOString());
+    assert.equal(mapSubscriptionRow(custom.subscription).status, 'active');
+
+    assert.throws(
+      () => updateTechnicalSupportSubscriptionEndsAt(db, first.subscription.id, 'not-a-date'),
+      /INVALID_ENDS_AT/
+    );
+    assert.throws(() => deleteTechnicalSupportSubscription(db, 999999), /NOT_FOUND/);
+
+    const deleted = deleteTechnicalSupportSubscription(db, first.subscription.id);
+    assert.equal(deleted.deleted, true);
+    const remaining = listTechnicalSupportSubscriptions(db, {});
+    assert.equal(remaining.total, 2);
+    assert.ok(remaining.items.every((row) => row.id !== first.subscription.id));
+  });
+
+  it('requires matching technical_support rights for subscription management APIs', async () => {
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    async function loginEmployee(rights) {
+      const telegramId = 800000 + Math.floor(Math.random() * 100000);
+      const employee = createEmployeeUser(db, {
+        phone: `+99890${String(telegramId).slice(-7)}`,
+        displayName: 'TS Tester',
+        rights: { open_admin_dashboard: 1, ...rights },
+      });
+      linkEmployeeTelegram(db, employee.id, telegramId, {});
+      const token = createDashboardLoginToken(db, telegramId).rawToken;
+      const auth = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(token)}`
+      );
+      assert.equal(auth.statusCode, 302);
+      const cookie = cookieFromSetCookie(auth.headers['set-cookie']);
+      assert.ok(cookie);
+      return cookie;
+    }
+
+    try {
+      const readOnly = await loginEmployee({ technical_support_read: 1 });
+      const listOk = await request(server, 'GET', '/bot-admin/api/technical-support/subscriptions', {
+        headers: { Cookie: readOnly },
+      });
+      assert.equal(listOk.statusCode, 200);
+
+      const createDenied = await request(server, 'POST', '/bot-admin/api/technical-support/subscriptions', {
+        headers: { Cookie: readOnly },
+        body: { phone: '+998909990001', months: 1, amount: 0 },
+      });
+      assert.equal(createDenied.statusCode, 403);
+
+      const creator = await loginEmployee({
+        technical_support_read: 1,
+        technical_support_create: 1,
+      });
+      const created = await request(server, 'POST', '/bot-admin/api/technical-support/subscriptions', {
+        headers: { Cookie: creator },
+        body: { phone: '+998909990002', months: 1, amount: 0 },
+      });
+      assert.equal(created.statusCode, 201);
+      const subscription = JSON.parse(created.body).subscription;
+      assert.equal(subscription.status, 'active');
+      assert.match(subscription.order_id, /^manual:/);
+
+      const deactivateDenied = await request(
+        server,
+        'POST',
+        `/bot-admin/api/technical-support/subscriptions/${subscription.id}/deactivate`,
+        { headers: { Cookie: creator } }
+      );
+      assert.equal(deactivateDenied.statusCode, 403);
+
+      const editor = await loginEmployee({
+        technical_support_read: 1,
+        technical_support_edit: 1,
+      });
+      const deactivated = await request(
+        server,
+        'POST',
+        `/bot-admin/api/technical-support/subscriptions/${subscription.id}/deactivate`,
+        { headers: { Cookie: editor } }
+      );
+      assert.equal(deactivated.statusCode, 200);
+      assert.equal(JSON.parse(deactivated.body).subscription.status, 'expired');
+
+      const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+      const edited = await request(
+        server,
+        'PUT',
+        `/bot-admin/api/technical-support/subscriptions/${subscription.id}`,
+        { headers: { Cookie: editor }, body: { ends_at: future } }
+      );
+      assert.equal(edited.statusCode, 200);
+      assert.equal(JSON.parse(edited.body).subscription.status, 'active');
+
+      const deleteDenied = await request(
+        server,
+        'DELETE',
+        `/bot-admin/api/technical-support/subscriptions/${subscription.id}`,
+        { headers: { Cookie: editor } }
+      );
+      assert.equal(deleteDenied.statusCode, 403);
+
+      const deleter = await loginEmployee({
+        technical_support_read: 1,
+        technical_support_delete: 1,
+      });
+      const deleted = await request(
+        server,
+        'DELETE',
+        `/bot-admin/api/technical-support/subscriptions/${subscription.id}`,
+        { headers: { Cookie: deleter } }
+      );
+      assert.equal(deleted.statusCode, 200);
+      assert.equal(JSON.parse(deleted.body).deleted, true);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

@@ -34,6 +34,8 @@ let chatPollTimer = null;
 let chatRequestId = 0;
 let currentTicketId = null;
 let editTicketBusy = false;
+let canEditTickets = false;
+let canEditClosedTickets = false;
 
 const CHAT_PAGE_LIMIT = 50;
 const CHAT_POLL_MS = 18000;
@@ -257,11 +259,21 @@ function parseTicketIdFromPath() {
   return match ? Number(match[1]) : null;
 }
 
+function updateEditTicketToggleVisibility() {
+  if (!canEditTickets) {
+    editTicketToggle.hidden = true;
+    return;
+  }
+  const isClosed = ticket && String(ticket.status || '') === 'Closed';
+  editTicketToggle.hidden = Boolean(isClosed && !canEditClosedTickets);
+}
+
 function renderTicket(detail) {
   ticket = detail;
   ticketTitleEl.textContent = `Тикет #${detail.id}`;
   ticketSubtitleEl.textContent = detail.subject || '';
   ticketDefaultPhone = detail.client?.phone || '';
+  updateEditTicketToggleVisibility();
 
   const participantIds = Array.isArray(detail.participant_user_ids)
     ? detail.participant_user_ids
@@ -1102,7 +1114,9 @@ createOrderForm.addEventListener('submit', async (event) => {
 
 async function init() {
   const session = await ensureSession({ requiredPermission: 'tickets_read' });
-  editTicketToggle.hidden = !hasPermission(session, 'tickets_edit');
+  canEditTickets = hasPermission(session, 'tickets_edit');
+  canEditClosedTickets = hasPermission(session, 'tickets_edit_closed');
+  updateEditTicketToggleVisibility();
   const ticketId = parseTicketIdFromPath();
   if (!ticketId) {
     showError('Некорректный идентификатор тикета.');

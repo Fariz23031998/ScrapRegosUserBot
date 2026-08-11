@@ -24,6 +24,7 @@ const {
   isLinkedEmployee,
   getAllUnpaidOrders,
   deletePendingOrder,
+  deletePaidCashOrder,
   markPendingOrderPaidCash,
   getEarningsRows,
 } = require('./bot-users-db');
@@ -526,6 +527,7 @@ module.exports = {
   isLinkedEmployee,
   getAllUnpaidOrders,
   deletePendingOrder,
+  deletePaidCashOrder,
   markPendingOrderPaidCash,
   getEarningsRows,
   createOrder,

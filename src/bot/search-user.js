@@ -341,7 +341,8 @@ function applyTechnicalSupportToMessage(message, phone, db) {
   const label = formatSupportUntilLabel(subscription.ends_at);
   const withoutExpired = stripExpiredSupportBanner(message);
   if (!label) return withoutExpired;
-  const badge = `🛠 ${bold(label)}`;
+  const [title, ...rest] = label.split('\n');
+  const badge = [`🛠 ${bold(title)}`, ...rest].join('\n');
   return withoutExpired ? `${withoutExpired}\n\n${badge}` : badge;
 }
 

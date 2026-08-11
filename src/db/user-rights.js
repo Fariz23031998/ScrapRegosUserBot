@@ -17,6 +17,10 @@ const RIGHTS = {
     column: 'delete_unpaid_order',
     label: 'Удалять неоплаченные заказы',
   },
+  delete_cash_order: {
+    column: 'delete_cash_order',
+    label: 'Удалять заказы „Наличные“',
+  },
   manage_vip: {
     column: 'manage_vip',
     label: 'Управление VIP-клиентами',
@@ -77,6 +81,10 @@ const RIGHTS = {
     column: 'tickets_edit',
     label: 'Админ: тикеты — изменение',
   },
+  tickets_edit_closed: {
+    column: 'tickets_edit_closed',
+    label: 'Админ: тикеты — изменение закрытых',
+  },
   clients_edit: {
     column: 'clients_edit',
     label: 'Админ: клиенты — изменение',
@@ -136,11 +144,13 @@ const ADMIN_PERMISSION_KEYS = [
   'order_logs_read',
   'orders_read',
   'delete_unpaid_order',
+  'delete_cash_order',
   'mark_paid_cash',
   'renotify_order',
   'tickets_read',
   'tickets_create',
   'tickets_edit',
+  'tickets_edit_closed',
   'clients_edit',
   'clients_link_firm',
   'technical_support_read',

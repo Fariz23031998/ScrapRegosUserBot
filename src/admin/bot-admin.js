@@ -37,6 +37,11 @@ const {
   listTechnicalSupportPrices,
   updateTechnicalSupportPrices,
   listTechnicalSupportSubscriptions,
+  createManualTechnicalSupportSubscription,
+  deactivateTechnicalSupportSubscription,
+  updateTechnicalSupportSubscriptionEndsAt,
+  deleteTechnicalSupportSubscription,
+  mapSubscriptionRow,
 } = require('../db/technical-support');
 const {
   enrichTicketsWithLocalData,
@@ -89,7 +94,7 @@ const {
 } = require('../integrations/regos-crm');
 const { botAdminPublicDir } = require('../paths');
 const { sendVersionedHtmlFile } = require('../http/asset-cache');
-const { createOrder, listOrders, getOrderById, deletePendingOrder, markPendingOrderPaidCash } = require('../db/partners-db');
+const { createOrder, listOrders, getOrderById, deletePendingOrder, deletePaidCashOrder, markPendingOrderPaidCash } = require('../db/partners-db');
 const {
   listLinksByClient,
   addLink: addClientFirmLink,
@@ -1013,6 +1018,15 @@ function createBotAdminRouter(db) {
           return res.status(404).json({ message: 'Тикет не найден.' });
         }
 
+        if (
+          String(current.status || '') === 'Closed' &&
+          !actorHasPermission(db, getSessionActor(req), 'tickets_edit_closed')
+        ) {
+          return res.status(403).json({
+            message: 'Недостаточно прав для изменения закрытого тикета.',
+          });
+        }
+
         const body = req.body && typeof req.body === 'object' ? req.body : {};
         const scalarChanges = {};
         for (const key of ['subject', 'description', 'direction']) {
@@ -1448,6 +1462,20 @@ function createBotAdminRouter(db) {
     return res.json({ ok: true, message: 'Неоплаченный заказ удалён.' });
   });
 
+  router.post('/api/orders/:id/delete-cash', requireRight(db, 'delete_cash_order'), (req, res) => {
+    const orderId = String(req.params.id || '').trim();
+    if (!orderId) {
+      return res.status(400).json({ message: 'Не указан ID заказа.' });
+    }
+    const deleted = deletePaidCashOrder(db, orderId, resolveActorTelegramId(db, req));
+    if (!deleted) {
+      return res.status(409).json({
+        message: 'Не удалось удалить заказ. Возможно, он не оплачен наличными или уже удалён.',
+      });
+    }
+    return res.json({ ok: true, message: 'Заказ „Наличные“ удалён.' });
+  });
+
   router.post('/api/orders/:id/paid-cash', requireRight(db, 'mark_paid_cash'), (req, res) => {
     const orderId = String(req.params.id || '').trim();
     if (!orderId) {
@@ -1808,6 +1836,103 @@ function createBotAdminRouter(db) {
       limit,
     });
   });
+
+  router.post(
+    '/api/technical-support/subscriptions',
+    requireRight(db, 'technical_support_create'),
+    express.json(),
+    (req, res) => {
+      try {
+        const result = createManualTechnicalSupportSubscription(db, {
+          phone: req.body?.phone,
+          months: req.body?.months,
+          amount: req.body?.amount,
+          ends_at: req.body?.ends_at,
+        });
+        return res.status(201).json({
+          subscription: mapSubscriptionRow(result.subscription),
+        });
+      } catch (error) {
+        if (error.message === 'INVALID_PHONE') {
+          return res.status(400).json({ message: 'Укажите корректный телефон.' });
+        }
+        if (error.message === 'INVALID_MONTHS') {
+          return res.status(400).json({ message: 'Срок должен быть 1, 3, 6 или 12 месяцев.' });
+        }
+        if (error.message === 'INVALID_AMOUNT') {
+          return res.status(400).json({ message: 'Сумма должна быть целым числом ≥ 0.' });
+        }
+        if (error.message === 'INVALID_ENDS_AT') {
+          return res
+            .status(400)
+            .json({ message: 'Укажите корректную дату окончания в будущем.' });
+        }
+        console.error('Create technical support subscription error:', error);
+        return res.status(500).json({ message: 'Не удалось создать подписку.' });
+      }
+    }
+  );
+
+  router.post(
+    '/api/technical-support/subscriptions/:id/deactivate',
+    requireRight(db, 'technical_support_edit'),
+    (req, res) => {
+      try {
+        const result = deactivateTechnicalSupportSubscription(db, req.params.id);
+        return res.json({
+          changed: result.changed,
+          reason: result.reason || null,
+          subscription: mapSubscriptionRow(result.subscription),
+        });
+      } catch (error) {
+        if (error.message === 'NOT_FOUND') {
+          return res.status(404).json({ message: 'Подписка не найдена.' });
+        }
+        console.error('Deactivate technical support subscription error:', error);
+        return res.status(500).json({ message: 'Не удалось деактивировать подписку.' });
+      }
+    }
+  );
+
+  router.put(
+    '/api/technical-support/subscriptions/:id',
+    requireRight(db, 'technical_support_edit'),
+    express.json(),
+    (req, res) => {
+      try {
+        const result = updateTechnicalSupportSubscriptionEndsAt(db, req.params.id, req.body?.ends_at);
+        return res.json({
+          subscription: mapSubscriptionRow(result.subscription),
+        });
+      } catch (error) {
+        if (error.message === 'NOT_FOUND') {
+          return res.status(404).json({ message: 'Подписка не найдена.' });
+        }
+        if (error.message === 'INVALID_ENDS_AT') {
+          return res.status(400).json({ message: 'Укажите корректную дату окончания.' });
+        }
+        console.error('Update technical support subscription error:', error);
+        return res.status(500).json({ message: 'Не удалось обновить подписку.' });
+      }
+    }
+  );
+
+  router.delete(
+    '/api/technical-support/subscriptions/:id',
+    requireRight(db, 'technical_support_delete'),
+    (req, res) => {
+      try {
+        const result = deleteTechnicalSupportSubscription(db, req.params.id);
+        return res.json({ deleted: result.deleted, id: result.id });
+      } catch (error) {
+        if (error.message === 'NOT_FOUND') {
+          return res.status(404).json({ message: 'Подписка не найдена.' });
+        }
+        console.error('Delete technical support subscription error:', error);
+        return res.status(500).json({ message: 'Не удалось удалить подписку.' });
+      }
+    }
+  );
 
   router.get('/api/prices', requireRight(db, 'prices_read'), (_req, res) => {
     try {

@@ -271,6 +271,8 @@ describe('Bot admin static assets and API auth', () => {
     assert.match(detailHtml, /id="edit-ticket-form"/);
     assert.match(detailHtml, /id="create-order-toggle"/);
     assert.match(detailScript, /hasPermission\(session, 'tickets_edit'\)/);
+    assert.match(detailScript, /hasPermission\(session, 'tickets_edit_closed'\)/);
+    assert.match(detailScript, /updateEditTicketToggleVisibility/);
     assert.match(detailScript, /method:\s*'PATCH'/);
     assert.match(detailScript, /applyDefaultLinkedFirm/);
     assert.match(detailScript, /loadLinkedClientFirms/);

@@ -8,6 +8,7 @@ let currentPage = 1;
 let pageLimit = 25;
 let totalOrders = 0;
 let canDeleteOrders = false;
+let canDeleteCashOrders = false;
 let canMarkOrdersPaidCash = false;
 let canRenotifyOrders = false;
 
@@ -71,24 +72,31 @@ function hasActiveFilters() {
 }
 
 function renderActions(order) {
-  if (order.status !== 'pending') return '—';
   const id = escapeHtml(order.id);
   const actions = [];
-  if (canRenotifyOrders) {
+
+  if (order.status === 'pending') {
+    if (canRenotifyOrders) {
+      actions.push(
+        `<button type="button" class="btn btn-secondary btn-sm" data-action="renotify" data-order-id="${id}">Уведомить</button>`
+      );
+    }
+    if (canMarkOrdersPaidCash) {
+      actions.push(
+        `<button type="button" class="btn btn-secondary btn-sm" data-action="paid-cash" data-order-id="${id}">Наличные</button>`
+      );
+    }
+    if (canDeleteOrders) {
+      actions.push(
+        `<button type="button" class="btn btn-danger btn-sm" data-action="delete" data-order-id="${id}">Удалить</button>`
+      );
+    }
+  } else if (order.status === 'paid_cash' && canDeleteCashOrders) {
     actions.push(
-      `<button type="button" class="btn btn-secondary btn-sm" data-action="renotify" data-order-id="${id}">Уведомить</button>`
+      `<button type="button" class="btn btn-danger btn-sm" data-action="delete-cash" data-order-id="${id}">Удалить</button>`
     );
   }
-  if (canMarkOrdersPaidCash) {
-    actions.push(
-      `<button type="button" class="btn btn-secondary btn-sm" data-action="paid-cash" data-order-id="${id}">Наличные</button>`
-    );
-  }
-  if (canDeleteOrders) {
-    actions.push(
-      `<button type="button" class="btn btn-danger btn-sm" data-action="delete" data-order-id="${id}">Удалить</button>`
-    );
-  }
+
   if (!actions.length) return '—';
   return `
     <div class="row-actions">
@@ -202,6 +210,8 @@ async function handleOrderAction(action, orderId, button) {
 
   if (action === 'delete' && canDeleteOrders) {
     if (!window.confirm('Удалить неоплаченный заказ?')) return;
+  } else if (action === 'delete-cash' && canDeleteCashOrders) {
+    if (!window.confirm('Удалить заказ „Наличные“?')) return;
   } else if (action === 'paid-cash' && canMarkOrdersPaidCash) {
     if (!window.confirm('Отметить заказ как оплаченный наличными?')) return;
   } else if (action === 'renotify' && canRenotifyOrders) {
@@ -217,6 +227,11 @@ async function handleOrderAction(action, orderId, button) {
         method: 'POST',
       });
       window.alert(data.message || 'Заказ удалён.');
+    } else if (action === 'delete-cash') {
+      const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/delete-cash`, {
+        method: 'POST',
+      });
+      window.alert(data.message || 'Заказ „Наличные“ удалён.');
     } else if (action === 'paid-cash') {
       const data = await api(`/bot-admin/api/orders/${encodeURIComponent(orderId)}/paid-cash`, {
         method: 'POST',
@@ -278,6 +293,7 @@ function applyFiltersFromUrl() {
 async function init() {
   const session = await ensureSession({ requiredPermission: 'orders_read' });
   canDeleteOrders = hasPermission(session, 'delete_unpaid_order');
+  canDeleteCashOrders = hasPermission(session, 'delete_cash_order');
   canMarkOrdersPaidCash = hasPermission(session, 'mark_paid_cash');
   canRenotifyOrders = hasPermission(session, 'renotify_order');
 
