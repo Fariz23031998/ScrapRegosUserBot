@@ -40,7 +40,8 @@ function removeDbFiles(dbPath) {
   }
 }
 
-function installMocks({ checkReceipt, createReceipt }) {
+function installMocks({ checkReceipt, createReceipt, notifyResult = { sent: true } }) {
+  const notifyCalls = [];
   require.cache[paymeApiPath].exports = {
     ...realPaymeApi,
     checkReceipt,
@@ -48,7 +49,10 @@ function installMocks({ checkReceipt, createReceipt }) {
   };
   require.cache[paymentNotificationPath].exports = {
     ...realPaymentNotification,
-    notifyCreatorOrderPaid: async () => ({ sent: false, reason: 'test_stub' }),
+    notifyCreatorOrderPaid: async (...args) => {
+      notifyCalls.push(args);
+      return typeof notifyResult === 'function' ? notifyResult(...args) : { ...notifyResult };
+    },
   };
 
   delete require.cache[paymeReceiptsPath];
@@ -59,6 +63,7 @@ function installMocks({ checkReceipt, createReceipt }) {
     receipts: require('../src/payments/payme-receipts'),
     reconcile: require('../src/payments/payme-reconcile'),
     paymentsApi: require('../src/payments/payments-api'),
+    notifyCalls,
   };
 }
 
@@ -263,5 +268,60 @@ describe('Payme receipt reuse and sync', () => {
     assert.equal(first.claimed, true);
     const second = markOrderPaid(db, order.id, { transactionId: 't1', provider: 'payme' });
     assert.equal(second.claimed, false);
+  });
+
+  it('retries employee notify for paid-but-unnotified orders', async () => {
+    const order = makeOrder();
+    const receiptId = 'receipt-notify-retry';
+    setOrderPaymeReceiptId(db, order.id, receiptId, Date.now());
+    markOrderPaid(db, order.id, { transactionId: receiptId, provider: 'payme' });
+    assert.equal(getOrderById(db, order.id).paid_notified_at, null);
+
+    let attempt = 0;
+    const { receipts, notifyCalls } = installMocks({
+      checkReceipt: async () => ({ state: realPaymeApi.RECEIPT_STATE_PAID }),
+      createReceipt: async () => {
+        throw new Error('unused');
+      },
+      notifyResult: () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return { sent: false, reason: 'send_failed' };
+        }
+        return { sent: true };
+      },
+    });
+
+    const first = await receipts.syncPaymeReceiptStatus(db, order.id);
+    assert.equal(first.status, 'paid');
+    assert.equal(getOrderById(db, order.id).paid_notified_at, null);
+    assert.equal(notifyCalls.length, 1);
+
+    const second = await receipts.syncPaymeReceiptStatus(db, order.id);
+    assert.equal(second.status, 'paid');
+    assert.ok(getOrderById(db, order.id).paid_notified_at);
+    assert.equal(notifyCalls.length, 2);
+
+    const third = await receipts.syncPaymeReceiptStatus(db, order.id);
+    assert.equal(third.status, 'paid');
+    assert.equal(notifyCalls.length, 2, 'already notified orders must not resend');
+  });
+
+  it('still notifies when createPayment would have blocked the old path', async () => {
+    const order = makeOrder();
+    const receiptId = 'receipt-notify-after-payment-row';
+    setOrderPaymeReceiptId(db, order.id, receiptId, Date.now());
+
+    const { receipts, notifyCalls } = installMocks({
+      checkReceipt: async () => ({ state: realPaymeApi.RECEIPT_STATE_PAID }),
+      createReceipt: async () => {
+        throw new Error('unused');
+      },
+    });
+
+    await receipts.syncPaymeReceiptStatus(db, order.id);
+    assert.equal(getOrderById(db, order.id).status, 'paid');
+    assert.ok(getOrderById(db, order.id).paid_notified_at);
+    assert.equal(notifyCalls.length, 1);
   });
 });

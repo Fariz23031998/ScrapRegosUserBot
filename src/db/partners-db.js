@@ -139,6 +139,9 @@ function migrateSchema(db) {
   if (!columnExists(db, 'orders', 'ticket_id')) {
     db.exec('ALTER TABLE orders ADD COLUMN ticket_id INTEGER');
   }
+  if (!columnExists(db, 'orders', 'paid_notified_at')) {
+    db.exec('ALTER TABLE orders ADD COLUMN paid_notified_at TEXT');
+  }
   migrateBotUsersSchema(db);
   const { ensureOrderLogsTable } = require('./order-logs');
   ensureOrderLogsTable(db);
@@ -318,6 +321,26 @@ function setOrderPaymeReceiptId(db, orderId, receiptId, receiptCreatedAt = Date.
   db.prepare(
     'UPDATE orders SET payme_receipt_id = ?, payme_receipt_created_at = ? WHERE id = ?'
   ).run(receiptId, receiptCreatedAt, orderId);
+  return getOrderById(db, orderId);
+}
+
+function claimOrderPaidNotification(db, orderId) {
+  const result = db
+    .prepare(
+      `UPDATE orders
+       SET paid_notified_at = datetime('now')
+       WHERE id = ? AND status = 'paid' AND paid_notified_at IS NULL`
+    )
+    .run(orderId);
+  return result.changes > 0;
+}
+
+function clearOrderPaidNotificationClaim(db, orderId) {
+  db.prepare(
+    `UPDATE orders
+     SET paid_notified_at = NULL
+     WHERE id = ? AND paid_notified_at IS NOT NULL`
+  ).run(orderId);
   return getOrderById(db, orderId);
 }
 
@@ -509,6 +532,27 @@ function listPendingOrdersWithPaymeReceipt(db) {
     .all();
 }
 
+function listPaymeOrdersForReconcile(db) {
+  return db
+    .prepare(
+      `SELECT * FROM orders
+       WHERE (
+         (
+           status = 'pending'
+           AND payme_receipt_id IS NOT NULL
+           AND TRIM(payme_receipt_id) != ''
+         )
+         OR (
+           status = 'paid'
+           AND payment_provider = 'payme'
+           AND paid_notified_at IS NULL
+         )
+       )
+       ORDER BY datetime(created_at) ASC`
+    )
+    .all();
+}
+
 module.exports = {
   DEFAULT_DB_PATH,
   openDb,
@@ -559,4 +603,7 @@ module.exports = {
   getUnpaidOrdersByCreatorTelegramId,
   getLatestUnpaidOrderByClientPhone,
   listPendingOrdersWithPaymeReceipt,
+  listPaymeOrdersForReconcile,
+  claimOrderPaidNotification,
+  clearOrderPaidNotificationClaim,
 };

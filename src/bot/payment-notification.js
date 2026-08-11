@@ -1,4 +1,9 @@
 const TelegramBot = require('node-telegram-bot-api');
+const {
+  getOrderById,
+  claimOrderPaidNotification,
+  clearOrderPaidNotificationClaim,
+} = require('../db/partners-db');
 const { enrichOrderParties, formatOrderPartyLines } = require('./order-parties');
 const { formatOrderDateTimeLine } = require('./order-datetime');
 const { formatOrderTicketLine } = require('./order-ticket');
@@ -16,6 +21,13 @@ function getOutboundBot() {
     outboundBot = new TelegramBot(token, { polling: false });
   }
   return outboundBot;
+}
+
+function formatChatId(telegramId) {
+  if (typeof telegramId === 'bigint') {
+    return telegramId.toString();
+  }
+  return telegramId;
 }
 
 function formatOrderPaidMessage(order, { provider } = {}) {
@@ -46,10 +58,10 @@ async function notifyCreatorOrderPaid(order, { provider, db } = {}) {
     return { sent: false, reason: 'no_token' };
   }
 
-  const detailedOrder = db ? enrichOrderParties(db, order) : order;
-  const text = formatOrderPaidMessage(detailedOrder, { provider });
   try {
-    await bot.sendMessage(telegramId, text, TELEGRAM_HTML);
+    const detailedOrder = db ? enrichOrderParties(db, order) : order;
+    const text = formatOrderPaidMessage(detailedOrder, { provider });
+    await bot.sendMessage(formatChatId(telegramId), text, TELEGRAM_HTML);
     return { sent: true };
   } catch (err) {
     console.error(
@@ -60,8 +72,43 @@ async function notifyCreatorOrderPaid(order, { provider, db } = {}) {
   }
 }
 
+/**
+ * Send the employee "order paid" Telegram message at most once.
+ * Uses paid_notified_at as a claim so concurrent Payme syncs can retry safely
+ * if the first attempt fails after the order was already marked paid.
+ */
+async function ensureCreatorPaidNotification(db, order, { provider } = {}) {
+  if (!db || !order?.id) {
+    return { sent: false, reason: 'missing_args' };
+  }
+
+  const current = getOrderById(db, order.id) || order;
+  if (current.status !== 'paid') {
+    return { sent: false, reason: 'not_paid' };
+  }
+  if (current.paid_notified_at) {
+    return { sent: false, reason: 'already_notified' };
+  }
+
+  if (!claimOrderPaidNotification(db, current.id)) {
+    return { sent: false, reason: 'already_notified' };
+  }
+
+  const result = await module.exports.notifyCreatorOrderPaid(current, {
+    provider: provider || current.payment_provider || null,
+    db,
+  });
+
+  if (!result.sent) {
+    clearOrderPaidNotificationClaim(db, current.id);
+  }
+
+  return result;
+}
+
 module.exports = {
   getOutboundBot,
   formatOrderPaidMessage,
   notifyCreatorOrderPaid,
+  ensureCreatorPaidNotification,
 };

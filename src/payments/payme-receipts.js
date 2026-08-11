@@ -12,7 +12,7 @@ const {
   RECEIPT_STATE_PAID,
   RECEIPT_STATE_CANCELLED,
 } = require('./payme-api');
-const { notifyCreatorOrderPaid } = require('../bot/payment-notification');
+const { ensureCreatorPaidNotification } = require('../bot/payment-notification');
 
 const DEFAULT_RECEIPT_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -55,24 +55,48 @@ function formatReceiptCheckoutUrl(receiptId) {
   return `${getPaymeCheckoutBase()}/${receiptId}`;
 }
 
-async function markOrderPaidFromReceipt(db, order, receiptId) {
-  const { claimed, order: paidOrder } = markOrderPaid(db, order.id, {
-    transactionId: receiptId,
-    provider: 'payme',
-  });
-  if (!claimed) {
-    return { claimed: false, order: paidOrder || order };
+function ensurePaymentRow(db, order, receiptId) {
+  const existing = db
+    .prepare(
+      `SELECT id FROM payments
+       WHERE order_id = ? AND provider = 'payme' AND external_transaction_id = ?
+       LIMIT 1`
+    )
+    .get(order.id, receiptId);
+  if (existing) {
+    return existing;
   }
 
-  createPayment(db, {
+  return createPayment(db, {
     orderId: order.id,
     telegramId: order.telegram_id,
     amount: order.amount,
     provider: 'payme',
     externalTransactionId: receiptId,
   });
-  await notifyCreatorOrderPaid(paidOrder || order, { provider: 'payme', db });
-  return { claimed: true, order: paidOrder || order };
+}
+
+async function markOrderPaidFromReceipt(db, order, receiptId) {
+  const { claimed, order: paidOrder } = markOrderPaid(db, order.id, {
+    transactionId: receiptId,
+    provider: 'payme',
+  });
+  const finalOrder = paidOrder || order;
+
+  if (claimed) {
+    try {
+      ensurePaymentRow(db, finalOrder, receiptId);
+    } catch (error) {
+      console.error(
+        `createPayment after Payme claim failed for order ${order.id}:`,
+        error.message || error
+      );
+    }
+  }
+
+  // Always attempt notify (including claimed=false retries for paid-but-unnotified).
+  await ensureCreatorPaidNotification(db, finalOrder, { provider: 'payme' });
+  return { claimed, order: getOrderById(db, order.id) || finalOrder };
 }
 
 async function syncPaymeReceiptStatus(db, orderId) {
@@ -81,6 +105,9 @@ async function syncPaymeReceiptStatus(db, orderId) {
     return { status: 'not_found' };
   }
   if (order.status === 'paid') {
+    await ensureCreatorPaidNotification(db, order, {
+      provider: order.payment_provider || 'payme',
+    });
     return { status: 'paid', receiptId: order.payme_receipt_id ?? null };
   }
   if (!order.payme_receipt_id) {
@@ -140,6 +167,9 @@ async function getOrCreatePaymeCheckoutUrl(db, order) {
     throw new Error('Order not found');
   }
   if (freshOrder.status === 'paid') {
+    await ensureCreatorPaidNotification(db, freshOrder, {
+      provider: freshOrder.payment_provider || 'payme',
+    });
     return null;
   }
 

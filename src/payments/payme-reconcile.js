@@ -1,4 +1,4 @@
-const { listPendingOrdersWithPaymeReceipt } = require('../db/partners-db');
+const { listPaymeOrdersForReconcile, getOrderById } = require('../db/partners-db');
 const { syncPaymeReceiptStatus } = require('./payme-receipts');
 
 const DEFAULT_INTERVAL_MS = 45_000;
@@ -38,20 +38,28 @@ async function mapWithConcurrency(items, concurrency, worker) {
 }
 
 async function reconcilePendingPaymeReceipts(db, { concurrency = getReconcileConcurrency() } = {}) {
-  const orders = listPendingOrdersWithPaymeReceipt(db);
+  const orders = listPaymeOrdersForReconcile(db);
   if (!orders.length) {
-    return { checked: 0, paid: 0, errors: 0 };
+    return { checked: 0, paid: 0, notified: 0, errors: 0 };
   }
 
   let paid = 0;
+  let notified = 0;
   let errors = 0;
 
   await mapWithConcurrency(orders, concurrency, async (order) => {
     try {
+      const before = order;
       const result = await syncPaymeReceiptStatus(db, order.id);
       if (result.status === 'paid') {
-        paid += 1;
-        console.log(`Payme reconcile: order ${order.id} marked paid (receipt ${result.receiptId})`);
+        if (before.status !== 'paid') {
+          paid += 1;
+          console.log(`Payme reconcile: order ${order.id} marked paid (receipt ${result.receiptId})`);
+        }
+        const after = getOrderById(db, order.id);
+        if (after?.paid_notified_at && !before.paid_notified_at) {
+          notified += 1;
+        }
       }
     } catch (error) {
       errors += 1;
@@ -62,7 +70,7 @@ async function reconcilePendingPaymeReceipts(db, { concurrency = getReconcileCon
     }
   });
 
-  return { checked: orders.length, paid, errors };
+  return { checked: orders.length, paid, notified, errors };
 }
 
 function startPaymeReceiptReconciler(db, { intervalMs = getReconcileIntervalMs() } = {}) {

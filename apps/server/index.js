@@ -11,7 +11,7 @@ const { startPaymeReceiptReconciler } = require('../../src/payments/payme-reconc
 const { getPaymentOptionsForOrder, getPublicDir, isOrderId } = require('../../src/payments/payments-api');
 const { createBotAdminRouter } = require('../../src/admin/bot-admin');
 const { attachSmsGateway } = require('../../src/sms/sms-gateway-ws');
-const { notifyCreatorOrderPaid } = require('../../src/bot/payment-notification');
+const { ensureCreatorPaidNotification } = require('../../src/bot/payment-notification');
 const { getServicePricesCatalog } = require('../../src/db/service-prices');
 const { sendVersionedHtmlFile } = require('../../src/http/asset-cache');
 const {
@@ -171,15 +171,23 @@ app.post('/click/complete', async (req, res) => {
   });
 
   if (claimed) {
-    createPayment(db, {
-      orderId: order.id,
-      telegramId: order.telegram_id,
-      amount: order.amount,
-      provider: 'click',
-      clickTransId: payload.click_trans_id,
-    });
-    await notifyCreatorOrderPaid(paidOrder || order, { provider: 'click', db });
+    try {
+      createPayment(db, {
+        orderId: order.id,
+        telegramId: order.telegram_id,
+        amount: order.amount,
+        provider: 'click',
+        clickTransId: payload.click_trans_id,
+      });
+    } catch (error) {
+      console.error(
+        `createPayment after Click claim failed for order ${order.id}:`,
+        error.message || error
+      );
+    }
   }
+
+  await ensureCreatorPaidNotification(db, paidOrder || order, { provider: 'click' });
 
   return res.json({
     click_trans_id: payload.click_trans_id,
