@@ -4,6 +4,7 @@ Sends the order payment-link message via a **Telegram user account** (MTProto / 
 
 - the Bot API (`TELEGRAM_BOT_TOKEN`)
 - GETSMS HTTP ([`getsms.md`](getsms.md))
+- Eskiz HTTP ([`eskiz.md`](eskiz.md))
 - the Android SMS gateway ([`sms-gateway.md`](sms-gateway.md))
 
 If several transports are enabled, each may send the same payment text after order creation. Failures are isolated.

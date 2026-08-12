@@ -1,11 +1,12 @@
-# SMS transports (Android Redis gateway + GETSMS)
+# SMS transports (Android Redis gateway + GETSMS + Eskiz)
 
-After an order is created in the Telegram employee flow, the bot can send through two independent transports:
+After an order is created in the Telegram employee flow, the bot can send through independent transports:
 
 - Android: queues one multiline payment message in Redis. A dedicated Android app receives it over WebSocket and sends it natively.
 - GETSMS.UZ: sends a payment message directly over HTTP.
+- Eskiz.uz: sends a payment message over HTTP with a Bearer token.
 
-`SMS_GATEWAY_ENABLED` controls Android and `ENABLE_GETSMS` controls GETSMS. Enabling both intentionally sends through both providers, so the customer may receive messages from each. Each transport can use its own message template (see below).
+`SMS_GATEWAY_ENABLED` controls Android, `ENABLE_GETSMS` controls GETSMS, and `ENABLE_ESKIZ` controls Eskiz. Enabling several intentionally sends through each provider, so the customer may receive messages from each. Each transport can use its own message template (see below).
 
 ## Flow
 
@@ -35,10 +36,11 @@ Set in `.env` on the host running **both** `npm run bot` and `npm run server`:
 | `SMS_GATEWAY_TOKEN` | yes (with Redis) | Shared secret for WebSocket auth |
 | `PUBLIC_BASE_URL` | yes | Payment link in SMS, e.g. `https://aserver.tech` |
 | `GETSMS_MESSAGE_TEMPLATE` | no | GETSMS body; also the shared fallback when channel-specific templates are unset |
+| `ESKIZ_MESSAGE_TEMPLATE` | no | Eskiz body (falls back to `GETSMS_MESSAGE_TEMPLATE`) |
 | `SMS_GATEWAY_MESSAGE_TEMPLATE` | no | Android WebSocket body (falls back to `GETSMS_MESSAGE_TEMPLATE`) |
 | `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE` | no | MTProto Telegram body (HTML supported; falls back to `GETSMS_MESSAGE_TEMPLATE`) |
 
-When `SMS_GATEWAY_ENABLED=0` or `REDIS_URL` is not set, Android enqueue and the WebSocket gateway are skipped automatically (safe for local development). This does not disable GETSMS; see [`getsms.md`](getsms.md).
+When `SMS_GATEWAY_ENABLED=0` or `REDIS_URL` is not set, Android enqueue and the WebSocket gateway are skipped automatically (safe for local development). This does not disable GETSMS or Eskiz; see [`getsms.md`](getsms.md) and [`eskiz.md`](eskiz.md).
 
 ## SMS text
 

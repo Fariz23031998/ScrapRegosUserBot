@@ -11,6 +11,11 @@ const {
   resolvePaymentMessageTemplate,
 } = require('../src/sms/sms-message');
 const { isGetSmsEnabled, sendGetSms } = require('../src/sms/getsms-client');
+const {
+  clearEskizTokenCache,
+  isEskizEnabled,
+  sendEskiz,
+} = require('../src/sms/eskiz-client');
 const { enqueueOrderPaymentSms } = require('../src/sms/sms-queue');
 
 const SMS_ENV = [
@@ -20,6 +25,12 @@ const SMS_ENV = [
   'GETSMS_NICKNAME',
   'GETSMS_URL',
   'GETSMS_MESSAGE_TEMPLATE',
+  'ENABLE_ESKIZ',
+  'ESKIZ_EMAIL',
+  'ESKIZ_PASSWORD',
+  'ESKIZ_FROM',
+  'ESKIZ_BASE_URL',
+  'ESKIZ_MESSAGE_TEMPLATE',
   'SMS_GATEWAY_MESSAGE_TEMPLATE',
   'TELEGRAM_MTPROTO_MESSAGE_TEMPLATE',
   'SMS_GATEWAY_ENABLED',
@@ -92,12 +103,17 @@ describe('SMS templates', () => {
 
   it('uses a separate template per notification channel', () => {
     process.env.GETSMS_MESSAGE_TEMPLATE = 'GETSMS:{amount}';
+    process.env.ESKIZ_MESSAGE_TEMPLATE = 'ESKIZ:{amount}';
     process.env.SMS_GATEWAY_MESSAGE_TEMPLATE = 'GATEWAY:{amount}';
     process.env.TELEGRAM_MTPROTO_MESSAGE_TEMPLATE = 'MTPROTO:{amount}';
 
     assert.equal(
       formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.GETSMS),
       'GETSMS:50 000'
+    );
+    assert.equal(
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.ESKIZ),
+      'ESKIZ:50 000'
     );
     assert.equal(
       formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY),
@@ -128,11 +144,15 @@ describe('SMS templates', () => {
     );
   });
 
-  it('falls back SMS gateway and MTProto to GETSMS_MESSAGE_TEMPLATE when unset', () => {
+  it('falls back SMS gateway, Eskiz, and MTProto to GETSMS_MESSAGE_TEMPLATE when unset', () => {
     process.env.GETSMS_MESSAGE_TEMPLATE = 'SHARED:{amount}';
 
     assert.equal(
       resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY),
+      'SHARED:{amount}'
+    );
+    assert.equal(
+      resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.ESKIZ),
       'SHARED:{amount}'
     );
     assert.equal(
@@ -148,6 +168,10 @@ describe('SMS templates', () => {
   it('uses the built-in default when no channel or shared template is set', () => {
     assert.equal(
       resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.GETSMS),
+      DEFAULT_PAYMENT_MESSAGE_TEMPLATE
+    );
+    assert.equal(
+      resolvePaymentMessageTemplate(PAYMENT_MESSAGE_CHANNELS.ESKIZ),
       DEFAULT_PAYMENT_MESSAGE_TEMPLATE
     );
     assert.equal(
@@ -229,9 +253,147 @@ describe('GETSMS client', () => {
   });
 });
 
+describe('Eskiz client', () => {
+  let previousEnv;
+
+  before(() => {
+    previousEnv = Object.fromEntries(SMS_ENV.map((key) => [key, process.env[key]]));
+  });
+
+  after(() => {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    clearEskizTokenCache();
+  });
+
+  beforeEach(() => {
+    for (const key of SMS_ENV) delete process.env[key];
+    clearEskizTokenCache();
+  });
+
+  it('requires the enable flag and nonblank credentials', () => {
+    process.env.ENABLE_ESKIZ = '0';
+    process.env.ESKIZ_EMAIL = 'user@example.uz';
+    process.env.ESKIZ_PASSWORD = 'password';
+    assert.equal(isEskizEnabled(), false);
+
+    process.env.ENABLE_ESKIZ = '1';
+    process.env.ESKIZ_PASSWORD = ' ';
+    assert.equal(isEskizEnabled(), false);
+
+    process.env.ESKIZ_PASSWORD = 'password';
+    assert.equal(isEskizEnabled(), true);
+  });
+
+  it('logs in then posts multipart send and returns id', async () => {
+    process.env.ESKIZ_EMAIL = 'user@example.uz';
+    process.env.ESKIZ_PASSWORD = 'password';
+    process.env.ESKIZ_FROM = 'ROFEEV';
+    process.env.ESKIZ_BASE_URL = 'https://eskiz.test';
+    const calls = [];
+
+    const result = await sendEskiz(
+      { phone: '+998 90 111 22 33', text: 'Test' },
+      {
+        fetchImpl: async (url, options) => {
+          calls.push({ url, options });
+          if (String(url).endsWith('/api/auth/login')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () =>
+                JSON.stringify({
+                  message: 'token_generated',
+                  data: { token: 'tok-1' },
+                  token_type: 'bearer',
+                }),
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                id: '59bf10a2-aba8-4694-8fd5-0be20102a580',
+                message: 'Waiting for SMS provider',
+                status: 'waiting',
+              }),
+          };
+        },
+      }
+    );
+
+    assert.deepEqual(result, {
+      requestId: '59bf10a2-aba8-4694-8fd5-0be20102a580',
+      recipient: '998901112233',
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].url, 'https://eskiz.test/api/auth/login');
+    assert.equal(calls[1].url, 'https://eskiz.test/api/message/sms/send');
+    assert.equal(calls[1].options.headers.Authorization, 'Bearer tok-1');
+    assert.ok(calls[1].options.body instanceof FormData);
+    assert.equal(calls[1].options.body.get('mobile_phone'), '998901112233');
+    assert.equal(calls[1].options.body.get('message'), 'Test');
+    assert.equal(calls[1].options.body.get('from'), 'ROFEEV');
+  });
+
+  it('refreshes the token and retries once on 401', async () => {
+    process.env.ESKIZ_EMAIL = 'user@example.uz';
+    process.env.ESKIZ_PASSWORD = 'password';
+    process.env.ESKIZ_BASE_URL = 'https://eskiz.test';
+    const calls = [];
+
+    const result = await sendEskiz(
+      { phone: '998901112233', text: 'Retry' },
+      {
+        fetchImpl: async (url, options) => {
+          calls.push({ url, method: options.method, auth: options.headers?.Authorization });
+          if (String(url).endsWith('/api/auth/login')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () =>
+                JSON.stringify({ data: { token: calls.length === 1 ? 'tok-old' : 'tok-login' } }),
+            };
+          }
+          if (String(url).endsWith('/api/auth/refresh')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({ data: { token: 'tok-new' } }),
+            };
+          }
+          if (options.headers?.Authorization === 'Bearer tok-old') {
+            return {
+              ok: false,
+              status: 401,
+              text: async () => JSON.stringify({ message: 'Unauthenticated' }),
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ id: 'req-2', status: 'waiting' }),
+          };
+        },
+      }
+    );
+
+    assert.equal(result.requestId, 'req-2');
+    assert.deepEqual(
+      calls.map((c) => c.url.replace('https://eskiz.test', '')),
+      ['/api/auth/login', '/api/message/sms/send', '/api/auth/refresh', '/api/message/sms/send']
+    );
+    assert.equal(calls[3].auth, 'Bearer tok-new');
+  });
+});
+
 describe('order SMS dispatch', () => {
   let previousEnv;
   let sent;
+  let eskizSent;
   let queued;
   let mtprotoSent;
   let logs;
@@ -250,17 +412,23 @@ describe('order SMS dispatch', () => {
   beforeEach(() => {
     for (const key of SMS_ENV) delete process.env[key];
     sent = [];
+    eskizSent = [];
     queued = [];
     mtprotoSent = [];
     logs = [];
   });
 
-  function dependencies({ getsmsError, gatewayError, mtprotoError } = {}) {
+  function dependencies({ getsmsError, eskizError, gatewayError, mtprotoError } = {}) {
     return {
       sendGetSmsFn: async (payload) => {
         sent.push(payload);
         if (getsmsError) throw new Error(getsmsError);
         return { requestId: 'request-1', messageId: 'message-1' };
+      },
+      sendEskizFn: async (payload) => {
+        eskizSent.push(payload);
+        if (eskizError) throw new Error(eskizError);
+        return { requestId: 'eskiz-request-1' };
       },
       enqueueSmsJobFn: async (job) => {
         queued.push(job);
@@ -287,6 +455,12 @@ describe('order SMS dispatch', () => {
     process.env.GETSMS_PASSWORD = 'password';
   }
 
+  function enableEskiz() {
+    process.env.ENABLE_ESKIZ = '1';
+    process.env.ESKIZ_EMAIL = 'user@example.uz';
+    process.env.ESKIZ_PASSWORD = 'password';
+  }
+
   function enableGateway() {
     process.env.SMS_GATEWAY_ENABLED = '1';
     process.env.REDIS_URL = 'redis://example.test:6379';
@@ -311,11 +485,37 @@ describe('order SMS dispatch', () => {
     );
 
     assert.equal(sent.length, 1);
+    assert.equal(eskizSent.length, 0);
     assert.equal(queued.length, 0);
     assert.equal(mtprotoSent.length, 0);
     assert.equal(result.getsms.sent, true);
+    assert.deepEqual(result.eskiz, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.gateway, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.mtproto, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(logs, ['sms_sent']);
+  });
+
+  it('dispatches through Eskiz only', async () => {
+    enableEskiz();
+    process.env.SMS_GATEWAY_ENABLED = '0';
+
+    const result = await enqueueOrderPaymentSms(
+      null,
+      order,
+      paymentPageUrl,
+      dependencies()
+    );
+
+    assert.equal(eskizSent.length, 1);
+    assert.equal(sent.length, 0);
+    assert.equal(result.eskiz.sent, true);
+    assert.equal(result.eskiz.requestId, 'eskiz-request-1');
+    assert.equal(
+      eskizSent[0].text,
+      formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.ESKIZ)
+    );
+    assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(result.gateway, { skipped: true, reason: 'disabled' });
     assert.deepEqual(logs, ['sms_sent']);
   });
 
@@ -339,6 +539,7 @@ describe('order SMS dispatch', () => {
       formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.SMS_GATEWAY)
     );
     assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(result.eskiz, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.mtproto, { skipped: true, reason: 'disabled' });
   });
 
@@ -362,9 +563,11 @@ describe('order SMS dispatch', () => {
 
   it('sends a distinct body per channel when templates differ', async () => {
     enableGetSms();
+    enableEskiz();
     enableGateway();
     enableMtproto();
     process.env.GETSMS_MESSAGE_TEMPLATE = 'GETSMS:{payment_page_url}';
+    process.env.ESKIZ_MESSAGE_TEMPLATE = 'ESKIZ:{payment_page_url}';
     process.env.SMS_GATEWAY_MESSAGE_TEMPLATE = 'GATEWAY:{payment_page_url}';
     process.env.TELEGRAM_MTPROTO_MESSAGE_TEMPLATE = 'MTPROTO:{payment_page_url}';
 
@@ -376,9 +579,11 @@ describe('order SMS dispatch', () => {
     );
 
     assert.equal(result.getsms.sent, true);
+    assert.equal(result.eskiz.sent, true);
     assert.equal(result.gateway.queued, true);
     assert.equal(result.mtproto.sent, true);
     assert.equal(sent[0].text, `GETSMS:${paymentPageUrl}`);
+    assert.equal(eskizSent[0].text, `ESKIZ:${paymentPageUrl}`);
     assert.equal(queued[0].message, `GATEWAY:${paymentPageUrl}`);
     assert.equal(mtprotoSent[0].text, `MTPROTO:${paymentPageUrl}`);
   });
@@ -404,6 +609,7 @@ describe('order SMS dispatch', () => {
     );
     assert.equal(mtprotoSent[0].withGreeting, true);
     assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(result.eskiz, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.gateway, { skipped: true, reason: 'disabled' });
     assert.deepEqual(logs, ['telegram_mtproto_sent']);
   });
@@ -440,6 +646,7 @@ describe('order SMS dispatch', () => {
     assert.equal(result.skipped, true);
     assert.equal(result.reason, 'no_providers');
     assert.deepEqual(result.getsms, { skipped: true, reason: 'disabled' });
+    assert.deepEqual(result.eskiz, { skipped: true, reason: 'disabled' });
     assert.deepEqual(result.gateway, { skipped: true, reason: 'not_configured' });
     assert.deepEqual(result.mtproto, { skipped: true, reason: 'disabled' });
   });
@@ -459,6 +666,23 @@ describe('order SMS dispatch', () => {
     assert.equal(result.gateway.queued, true);
     assert.equal(queued.length, 1);
     assert.deepEqual(logs, ['sms_failed']);
+  });
+
+  it('continues when Eskiz fails independently of GETSMS', async () => {
+    enableGetSms();
+    enableEskiz();
+    process.env.SMS_GATEWAY_ENABLED = '0';
+
+    const result = await enqueueOrderPaymentSms(
+      null,
+      order,
+      paymentPageUrl,
+      dependencies({ eskizError: 'Eskiz unavailable' })
+    );
+
+    assert.equal(result.getsms.sent, true);
+    assert.equal(result.eskiz.sent, false);
+    assert.deepEqual(logs, ['sms_sent', 'sms_failed']);
   });
 
   it('keeps a successful GETSMS send when Android enqueue fails', async () => {

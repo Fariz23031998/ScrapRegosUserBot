@@ -38,6 +38,7 @@ function formatRenotifyResultMessage(result) {
 
   const parts = [];
   if (result.getsms?.sent) parts.push('GETSMS');
+  if (result.eskiz?.sent) parts.push('Eskiz');
   if (result.gateway?.queued) parts.push('SMS gateway');
   if (result.mtproto?.sent) parts.push('Telegram');
   if (!parts.length) return RENOTIFY_NO_PROVIDERS;

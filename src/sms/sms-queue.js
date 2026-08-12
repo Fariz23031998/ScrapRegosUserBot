@@ -12,6 +12,11 @@ const {
   sendGetSms,
 } = require('./getsms-client');
 const {
+  isEskizConfigured,
+  isEskizEnabled,
+  sendEskiz,
+} = require('./eskiz-client');
+const {
   SMS_PENDING_KEY,
   SMS_NEW_CHANNEL,
   SMS_JOB_TTL_SEC,
@@ -89,6 +94,7 @@ async function enqueueOrderPaymentSms(
   paymentPageUrl,
   {
     sendGetSmsFn = sendGetSms,
+    sendEskizFn = sendEskiz,
     enqueueSmsJobFn = enqueueSmsJob,
     sendTelegramByPhoneFn = sendTelegramByPhone,
     logOrderEventFn = logOrderEvent,
@@ -99,6 +105,7 @@ async function enqueueOrderPaymentSms(
       skipped: true,
       reason: 'no_url',
       getsms: { skipped: true, reason: 'no_url' },
+      eskiz: { skipped: true, reason: 'no_url' },
       gateway: { skipped: true, reason: 'no_url' },
       mtproto: { skipped: true, reason: 'no_url' },
     };
@@ -110,6 +117,7 @@ async function enqueueOrderPaymentSms(
       skipped: true,
       reason: 'no_phone',
       getsms: { skipped: true, reason: 'no_phone' },
+      eskiz: { skipped: true, reason: 'no_phone' },
       gateway: { skipped: true, reason: 'no_phone' },
       mtproto: { skipped: true, reason: 'no_phone' },
     };
@@ -121,6 +129,7 @@ async function enqueueOrderPaymentSms(
       skipped: true,
       reason: 'invalid_phone',
       getsms: { skipped: true, reason: 'invalid_phone' },
+      eskiz: { skipped: true, reason: 'invalid_phone' },
       gateway: { skipped: true, reason: 'invalid_phone' },
       mtproto: { skipped: true, reason: 'invalid_phone' },
     };
@@ -186,6 +195,34 @@ async function enqueueOrderPaymentSms(
     };
   }
 
+  let eskiz;
+  if (isEskizEnabled()) {
+    try {
+      const sent = await sendEskizFn({
+        phone: formattedPhone,
+        text: formatPaymentMessage(order, paymentPageUrl, PAYMENT_MESSAGE_CHANNELS.ESKIZ),
+      });
+      logSmsResult('sms_sent');
+      eskiz = {
+        sent: true,
+        requestId: sent.requestId,
+        recipient: recipientPhone,
+      };
+    } catch (err) {
+      console.error('[Eskiz] Failed to send payment link SMS:', err.message);
+      logSmsResult('sms_failed');
+      eskiz = { sent: false, error: err.message, recipient: recipientPhone };
+    }
+  } else {
+    eskiz = {
+      skipped: true,
+      reason:
+        process.env.ENABLE_ESKIZ?.trim() === '1' && !isEskizConfigured()
+          ? 'not_configured'
+          : 'disabled',
+    };
+  }
+
   let gateway;
   if (!isSmsGatewayEnabled()) {
     gateway = { skipped: true, reason: 'disabled' };
@@ -240,8 +277,8 @@ async function enqueueOrderPaymentSms(
     };
   }
 
-  const result = { getsms, gateway, mtproto };
-  if (getsms.skipped && gateway.skipped && mtproto.skipped) {
+  const result = { getsms, eskiz, gateway, mtproto };
+  if (getsms.skipped && eskiz.skipped && gateway.skipped && mtproto.skipped) {
     result.skipped = true;
     result.reason = 'no_providers';
   }

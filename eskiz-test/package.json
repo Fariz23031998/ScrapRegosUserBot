@@ -1,0 +1,19 @@
+{
+  "name": "eskiz-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Eskiz.uz client — send SMS and manage templates",
+  "type": "commonjs",
+  "scripts": {
+    "send": "node send.js",
+    "templates": "node templates-list.js",
+    "templates:list": "node templates-list.js",
+    "templates:create": "node templates-create.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

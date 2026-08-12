@@ -71,7 +71,7 @@ TELEGRAM_BOT_USERNAME=@YourBot
 - **CLICK payments (optional)**: `ENABLE_CLICK_PAYMENT=1` plus `CLICK_MERCHANT_ID`, `CLICK_SERVICE_ID`, `CLICK_MERCHANT_USER_ID`, `CLICK_SECRET_KEY` — see [docs/payme-integration.md](docs/payme-integration.md) and [docs/click-deploy-linux.md](docs/click-deploy-linux.md). With `ENABLE_CLICK_PAYMENT=0` (or blank keys) the bot and server run on Payme only: no CLICK button on the payment page, new orders use the `payme` provider, and `/click/prepare` / `/click/complete` reply with `error: -9`.
 - **Payment links**: `PUBLIC_BASE_URL`, `CLICK_SERVER_PORT` — `PUBLIC_BASE_URL` is required for payment pages, tech-support orders, Telegram dashboard login links, and the public `/prices` page opened by the bot `/prices` command.
 - **Payme receipts**: `PAYME_*`
-- **SMS transports**: Android uses `SMS_GATEWAY_ENABLED`, `REDIS_URL`, and `SMS_GATEWAY_TOKEN`; GETSMS.UZ uses `ENABLE_GETSMS`, `GETSMS_LOGIN`, and `GETSMS_PASSWORD`. The switches are independent and both providers may send. Each transport can use its own template (`GETSMS_MESSAGE_TEMPLATE`, `SMS_GATEWAY_MESSAGE_TEMPLATE`, `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE`) — see [docs/sms-gateway.md](docs/sms-gateway.md) and [docs/getsms.md](docs/getsms.md)
+- **SMS transports**: Android uses `SMS_GATEWAY_ENABLED`, `REDIS_URL`, and `SMS_GATEWAY_TOKEN`; GETSMS.UZ uses `ENABLE_GETSMS`, `GETSMS_LOGIN`, and `GETSMS_PASSWORD`; Eskiz.uz uses `ENABLE_ESKIZ`, `ESKIZ_EMAIL`, and `ESKIZ_PASSWORD`. The switches are independent and enabled providers may all send. Each transport can use its own template (`GETSMS_MESSAGE_TEMPLATE`, `ESKIZ_MESSAGE_TEMPLATE`, `SMS_GATEWAY_MESSAGE_TEMPLATE`, `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE`) — see [docs/sms-gateway.md](docs/sms-gateway.md), [docs/getsms.md](docs/getsms.md), and [docs/eskiz.md](docs/eskiz.md)
 - **RPOS (optional)**: `{ACCOUNT}_RPOS_USERNAME`, `{ACCOUNT}_RPOS_PASSWORD`
 
 See `.env.example` for the full annotated list.
@@ -180,6 +180,8 @@ scripts/       Windows service + scheduled-task installers
 - [docs/click-deploy-linux.md](docs/click-deploy-linux.md) — CLICK deployment
 - [docs/sms-gateway.md](docs/sms-gateway.md) — Android SMS gateway
 - [docs/getsms.md](docs/getsms.md) — GETSMS.UZ HTTP SMS
+- [docs/eskiz.md](docs/eskiz.md) — Eskiz.uz HTTP SMS
+- [docs/eskiz-templates.md](docs/eskiz-templates.md) — Eskiz SMS template moderation
 - [docs/portal-apis-regos-sb.md](docs/portal-apis-regos-sb.md) — sb.regos.uz APIs
 - [docs/portal-apis-easytrade.md](docs/portal-apis-easytrade.md) — EasyTrade APIs
 - [docs/portal-apis-vcr1.md](docs/portal-apis-vcr1.md) — vcr1 APIs
