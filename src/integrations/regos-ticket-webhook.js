@@ -13,6 +13,32 @@ const TICKET_WEBHOOK_ACTIONS = new Set([
   'TicketClosed',
 ]);
 
+const CHAT_WRITING_ACTION = 'ChatWriting';
+const CHAT_WEBHOOK_ACTIONS = new Set([
+  'ChatAdded',
+  'ChatEdited',
+  'ChatParticipantsSet',
+  'ChatParticipantsRemoved',
+  'ChatMessageAdded',
+  'ChatMessageEdited',
+  'ChatMessageDeleted',
+  'ChatMessageRead',
+  CHAT_WRITING_ACTION,
+]);
+
+const CHAT_ID_FROM_ID_ACTIONS = new Set([
+  'ChatAdded',
+  'ChatEdited',
+  'ChatParticipantsSet',
+  'ChatParticipantsRemoved',
+]);
+
+const CHAT_MESSAGE_ID_ACTIONS = new Set([
+  'ChatMessageAdded',
+  'ChatMessageEdited',
+  'ChatMessageDeleted',
+]);
+
 const processedWebhookEvents = new Map();
 
 function cleanupProcessedEvents(nowMs) {
@@ -28,6 +54,34 @@ function parsePositiveId(value) {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
+function parseChatId(value) {
+  const chatId = String(value ?? '').trim();
+  return chatId || null;
+}
+
+function parseOptionalMessageId(value) {
+  if (value == null || value === '') return null;
+  return String(value);
+}
+
+function resolveOccurredAt(webhookData, nowMs) {
+  return typeof webhookData.occurred_at === 'string' && webhookData.occurred_at.trim()
+    ? webhookData.occurred_at.trim()
+    : new Date(nowMs).toISOString();
+}
+
+function beginEventProcessing(webhookData, nowMs) {
+  cleanupProcessedEvents(nowMs);
+  const eventId = String(webhookData.event_id || '').trim();
+  if (eventId && processedWebhookEvents.has(eventId)) {
+    return { duplicate: true, eventId };
+  }
+  if (eventId) {
+    processedWebhookEvents.set(eventId, nowMs);
+  }
+  return { duplicate: false, eventId };
+}
+
 function createRegosTicketWebhookHandler({
   connectedIntegrationId = process.env.REGOS_INTEGRATION_TOKEN,
   findTicket = findTicketById,
@@ -41,47 +95,21 @@ function createRegosTicketWebhookHandler({
 } = {}) {
   const expectedIntegrationId = String(connectedIntegrationId || '').trim();
 
-  return async function handleRegosTicketWebhook(webhookData) {
-    if (!webhookData || typeof webhookData !== 'object') {
-      return { ok: false, error: 'Invalid webhook payload' };
-    }
-    if (!expectedIntegrationId) {
-      console.error('[regos-webhook] REGOS_INTEGRATION_TOKEN is not configured');
-      return { ok: false, error: 'Webhook integration is not configured' };
-    }
-
-    const receivedIntegrationId = String(webhookData.connected_integration_id || '').trim();
-    if (!receivedIntegrationId || receivedIntegrationId !== expectedIntegrationId) {
-      console.warn('[regos-webhook] Rejected webhook with unknown connected_integration_id');
-      return { ok: false, error: 'Unknown connected_integration_id' };
-    }
-
-    const eventAction = String(webhookData.data?.action || '').trim();
-    if (!TICKET_WEBHOOK_ACTIONS.has(eventAction)) {
-      return { ok: true, message: 'Event ignored' };
-    }
-
+  async function handleTicketWebhook(webhookData, eventAction) {
     const ticketId = parsePositiveId(webhookData.data?.data?.id);
     if (ticketId == null) {
       return { ok: false, error: 'Missing ticket id' };
     }
 
     const nowMs = now();
-    cleanupProcessedEvents(nowMs);
-    const eventId = String(webhookData.event_id || '').trim();
-    if (eventId && processedWebhookEvents.has(eventId)) {
+    const { duplicate, eventId } = beginEventProcessing(webhookData, nowMs);
+    if (duplicate) {
       return { ok: true, message: 'Event already processed', duplicate: true };
-    }
-    if (eventId) {
-      processedWebhookEvents.set(eventId, nowMs);
     }
 
     try {
       const ticket = await findTicket(ticketId);
-      const occurredAt =
-        typeof webhookData.occurred_at === 'string' && webhookData.occurred_at.trim()
-          ? webhookData.occurred_at.trim()
-          : new Date(nowMs).toISOString();
+      const occurredAt = resolveOccurredAt(webhookData, nowMs);
 
       let recording = null;
       if (db) {
@@ -132,6 +160,75 @@ function createRegosTicketWebhookHandler({
       console.error(`[regos-webhook] Failed to process ${eventAction} for ticket ${ticketId}:`, error);
       return { ok: false, error: 'Failed to process webhook' };
     }
+  }
+
+  function handleChatWebhook(webhookData, eventAction) {
+    const payload = webhookData.data?.data;
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, error: 'Missing chat event data' };
+    }
+
+    const chatId = CHAT_ID_FROM_ID_ACTIONS.has(eventAction)
+      ? parseChatId(payload.id)
+      : parseChatId(payload.chat_id);
+    if (!chatId) {
+      return { ok: false, error: 'Missing chat id' };
+    }
+
+    const nowMs = now();
+    const { duplicate } = beginEventProcessing(webhookData, nowMs);
+    if (duplicate) {
+      return { ok: true, message: 'Event already processed', duplicate: true };
+    }
+
+    const occurredAt = resolveOccurredAt(webhookData, nowMs);
+    if (eventAction === CHAT_WRITING_ACTION) {
+      publish({
+        type: 'chat_writing',
+        chat_id: chatId,
+        author_entity_id: payload.author_entity_id ?? null,
+        author_entity_type: payload.author_entity_type ?? null,
+        source_action: eventAction,
+        occurred_at: occurredAt,
+      });
+    } else {
+      publish({
+        type: 'chat_changed',
+        chat_id: chatId,
+        message_id: CHAT_MESSAGE_ID_ACTIONS.has(eventAction)
+          ? parseOptionalMessageId(payload.id)
+          : null,
+        source_action: eventAction,
+        occurred_at: occurredAt,
+      });
+    }
+
+    return { ok: true, message: 'Webhook processed' };
+  }
+
+  return async function handleRegosTicketWebhook(webhookData) {
+    if (!webhookData || typeof webhookData !== 'object') {
+      return { ok: false, error: 'Invalid webhook payload' };
+    }
+    if (!expectedIntegrationId) {
+      console.error('[regos-webhook] REGOS_INTEGRATION_TOKEN is not configured');
+      return { ok: false, error: 'Webhook integration is not configured' };
+    }
+
+    const receivedIntegrationId = String(webhookData.connected_integration_id || '').trim();
+    if (!receivedIntegrationId || receivedIntegrationId !== expectedIntegrationId) {
+      console.warn('[regos-webhook] Rejected webhook with unknown connected_integration_id');
+      return { ok: false, error: 'Unknown connected_integration_id' };
+    }
+
+    const eventAction = String(webhookData.data?.action || '').trim();
+    if (TICKET_WEBHOOK_ACTIONS.has(eventAction)) {
+      return handleTicketWebhook(webhookData, eventAction);
+    }
+    if (CHAT_WEBHOOK_ACTIONS.has(eventAction)) {
+      return handleChatWebhook(webhookData, eventAction);
+    }
+    return { ok: true, message: 'Event ignored' };
   };
 }
 
@@ -149,6 +246,7 @@ function createRegosTicketWebhookRouter({
 module.exports = {
   WEBHOOK_EVENT_TTL_MS,
   TICKET_WEBHOOK_ACTIONS,
+  CHAT_WEBHOOK_ACTIONS,
   createRegosTicketWebhookHandler,
   createRegosTicketWebhookRouter,
 };

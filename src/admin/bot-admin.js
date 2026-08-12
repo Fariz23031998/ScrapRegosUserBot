@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { Readable } = require('stream');
@@ -56,6 +57,7 @@ const {
   resolveMissingTicketRecordings,
   scheduleTicketRecordingDurationBackfill,
 } = require('./ticket-local-enrichment');
+const { enrichChatMessages } = require('./chat-system-message');
 const {
   getTicketRecording,
   getTicketRecordingsByIds,
@@ -96,11 +98,14 @@ const {
   mapActiveTicket,
   getTicketMessages,
   addTicketMessage,
+  addChatFile,
+  getFilesByIds,
+  getChatFilesByIds,
   ensureTicketParticipant,
   isTicketStaffParticipant,
   DEFAULT_CHAT_MESSAGE_LIMIT,
 } = require('../integrations/regos-crm');
-const { botAdminPublicDir } = require('../paths');
+const { botAdminPublicDir, botAdminUiDistDir } = require('../paths');
 const { sendVersionedHtmlFile } = require('../http/asset-cache');
 const { createOrder, listOrders, getOrderById, deletePendingOrder, deletePaidCashOrder, markPendingOrderPaidCash } = require('../db/partners-db');
 const {
@@ -339,6 +344,17 @@ async function resolveRegosUserById(regosUserId) {
   return found;
 }
 
+async function buildRegosUserNameMap() {
+  const users = await fetchAllUsers({ activeOnly: false });
+  const userNames = {};
+  for (const user of users) {
+    const id = Number(user.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    userNames[id] = user.full_name || user.login || `Пользователь #${id}`;
+  }
+  return userNames;
+}
+
 async function applyRegosLinkToUser(db, userId, { regosUserId, autoLink = false } = {}) {
   if (regosUserId === null || regosUserId === '') {
     return clearBotUserRegosLink(db, userId);
@@ -405,6 +421,18 @@ function sendPublicFile(res, publicDir, filename) {
     return sendVersionedHtmlFile(res, absolutePath);
   }
   return res.sendFile(absolutePath);
+}
+
+function useBotAdminReactUi() {
+  return String(process.env.BOT_ADMIN_USE_REACT_UI || '').trim() === '1';
+}
+
+function botAdminReactUiIndexPath() {
+  return path.join(botAdminUiDistDir(), 'index.html');
+}
+
+function sendBotAdminReactUiIndex(res) {
+  return res.sendFile(botAdminReactUiIndexPath());
 }
 
 function parsePaginationQuery(req) {
@@ -474,9 +502,9 @@ function mapEnrichedActiveTicket(db, ticket) {
 }
 
 async function loadActiveTicketForRequest(db, req) {
-  const responsibleUserId = String(req.query.responsible_user_id || '').trim();
-  const activeForUserId =
-    responsibleUserId || resolveSessionRegosUserId(db, req) || null;
+  // Always scope "current active ticket" to the signed-in user's linked REGOS account,
+  // never to the list's Ответственный filter.
+  const activeForUserId = resolveSessionRegosUserId(db, req) || null;
   const activeTicket = activeForUserId
     ? mapEnrichedActiveTicket(
         db,
@@ -539,6 +567,128 @@ function buildDurationSummary(tickets, channelSettings, db = null) {
   };
 }
 
+const MAX_CHAT_FILES = 5;
+const MAX_CHAT_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_CHAT_FILE_NAME = 200;
+const MAX_CHAT_FILE_EXTENSION = 10;
+const CHAT_FILE_CACHE_TTL_MS = 10 * 60 * 1000;
+const CHAT_MESSAGE_JSON_LIMIT = '12mb';
+
+function stripChatFileBase64(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const comma = raw.indexOf(',');
+  if (/^data:/i.test(raw) && comma >= 0) {
+    return raw.slice(comma + 1).replace(/\s+/g, '');
+  }
+  return raw.replace(/\s+/g, '');
+}
+
+function collectMessageFileIds(messages) {
+  const ids = [];
+  const seen = new Set();
+  for (const message of messages || []) {
+    const fileIds = Array.isArray(message?.file_ids) ? message.file_ids : [];
+    for (const raw of fileIds) {
+      const id = Number(raw);
+      if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function toPublicChatFile(file) {
+  if (!file || file.id == null) return null;
+  return {
+    id: file.id,
+    name: file.name || null,
+    extension: file.extension || null,
+    mime_type: file.mime_type || null,
+    media_type: file.media_type || null,
+  };
+}
+
+function parseChatUploadFiles(rawFiles) {
+  if (rawFiles == null || rawFiles === '') return [];
+  if (!Array.isArray(rawFiles)) {
+    const error = new Error('Некорректный список файлов.');
+    error.status = 400;
+    throw error;
+  }
+  if (rawFiles.length > MAX_CHAT_FILES) {
+    const error = new Error(`Можно прикрепить не больше ${MAX_CHAT_FILES} файлов.`);
+    error.status = 400;
+    throw error;
+  }
+
+  return rawFiles.map((item, index) => {
+    const name = String(item?.name || '').trim() || `file-${index + 1}`;
+    if (name.length > MAX_CHAT_FILE_NAME) {
+      const error = new Error('Имя файла слишком длинное.');
+      error.status = 400;
+      throw error;
+    }
+
+    let extension = String(item?.extension || '')
+      .trim()
+      .replace(/^\./, '');
+    if (!extension) {
+      const dot = name.lastIndexOf('.');
+      if (dot > 0 && dot < name.length - 1) {
+        extension = name.slice(dot + 1);
+      }
+    }
+    extension = extension.toLowerCase();
+    if (!extension || extension.length > MAX_CHAT_FILE_EXTENSION || /[^a-z0-9]/i.test(extension)) {
+      const error = new Error('Укажите корректное расширение файла.');
+      error.status = 400;
+      throw error;
+    }
+
+    const data = stripChatFileBase64(item?.data);
+    let buffer;
+    try {
+      buffer = data ? Buffer.from(data, 'base64') : null;
+    } catch {
+      buffer = null;
+    }
+    if (!buffer || !buffer.length) {
+      const error = new Error('Файл пустой или повреждён.');
+      error.status = 400;
+      throw error;
+    }
+    if (buffer.length > MAX_CHAT_FILE_BYTES) {
+      const error = new Error('Файл слишком большой (максимум 10 МБ).');
+      error.status = 400;
+      throw error;
+    }
+
+    const parsed = {
+      name,
+      extension,
+      data: buffer.toString('base64'),
+    };
+    const width = Number(item?.width);
+    const height = Number(item?.height);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      parsed.width = Math.round(width);
+      parsed.height = Math.round(height);
+    }
+    return parsed;
+  });
+}
+
+function isSafeFileUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function writeSseEvent(res, event) {
   const frame = `data: ${JSON.stringify(event)}\n\n`;
   if (res.write(frame)) {
@@ -571,7 +721,64 @@ function writeSseEvent(res, event) {
 function createBotAdminRouter(db) {
   const router = express.Router();
   const publicDir = botAdminPublicDir();
+  const reactUiEnabled = useBotAdminReactUi();
+  const reactUiDistDir = botAdminUiDistDir();
+  const reactUiIndexPath = botAdminReactUiIndexPath();
+  const reactUiReady = reactUiEnabled && fs.existsSync(reactUiIndexPath);
   const recordingUrlCache = new Map();
+  const chatFileCache = new Map();
+
+  function getCachedChatFile(fileId) {
+    const key = Number(fileId);
+    const entry = chatFileCache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+      chatFileCache.delete(key);
+      return null;
+    }
+    return entry.file;
+  }
+
+  function setCachedChatFile(file) {
+    if (!file || file.id == null) return;
+    chatFileCache.set(Number(file.id), {
+      file,
+      expiresAt: Date.now() + CHAT_FILE_CACHE_TTL_MS,
+    });
+  }
+
+  async function resolveChatFiles(chatId, fileIds) {
+    const unique = [...new Set((fileIds || []).map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+    const byId = new Map();
+    const missing = [];
+    for (const id of unique) {
+      const cached = getCachedChatFile(id);
+      if (cached) byId.set(id, cached);
+      else missing.push(id);
+    }
+    if (missing.length) {
+      const fetched = await getChatFilesByIds(chatId, missing, { includeStaffPrivate: true });
+      for (const file of fetched) {
+        setCachedChatFile(file);
+        byId.set(Number(file.id), file);
+      }
+    }
+    return byId;
+  }
+
+  function attachPublicFiles(messages, filesById) {
+    return (messages || []).map((message) => {
+      const fileIds = Array.isArray(message?.file_ids) ? message.file_ids : [];
+      const files = fileIds
+        .map((raw) => {
+          const id = Number(raw);
+          if (!Number.isFinite(id) || id <= 0) return null;
+          return toPublicChatFile(filesById.get(id)) || { id };
+        })
+        .filter(Boolean);
+      return { ...message, files };
+    });
+  }
 
   function cacheTicketRecordingUrl(ticket) {
     const url = getTicketRecordingUrl(ticket);
@@ -599,9 +806,18 @@ function createBotAdminRouter(db) {
     return seedRecordingUrlCache(recordingUrlCache, ticketId, row.recording_url);
   }
 
-  router.get('/login', (_req, res) => sendPublicFile(res, publicDir, 'login.html'));
-  router.get('/login.css', (_req, res) => sendPublicFile(res, publicDir, 'login.css'));
-  router.get('/login.js', (_req, res) => sendPublicFile(res, publicDir, 'login.js'));
+  router.get('/login', (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
+    return sendPublicFile(res, publicDir, 'login.html');
+  });
+  router.get('/login.css', (_req, res) => {
+    if (reactUiReady) return res.status(404).end();
+    return sendPublicFile(res, publicDir, 'login.css');
+  });
+  router.get('/login.js', (_req, res) => {
+    if (reactUiReady) return res.status(404).end();
+    return sendPublicFile(res, publicDir, 'login.js');
+  });
 
   router.get('/auth/telegram', (req, res) => {
     const creds = getAdminCredentials();
@@ -663,26 +879,41 @@ function createBotAdminRouter(db) {
   router.patch('/api/account', requireAdminAuth, express.json(), (req, res) => {
     try {
       const botUser = resolveSessionBotUser(db, req);
-      if (!botUser || botUser.role !== 'employee' || !botUser.admin_login || !botUser.password_hash) {
+      if (!botUser || botUser.role !== 'employee') {
+        return res.status(403).json({
+          message: 'Изменение профиля недоступно для этой учётной записи.',
+        });
+      }
+
+      const displayNameProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'display_name');
+      const loginProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'login');
+      const newPasswordRaw = req.body?.new_password;
+      const passwordProvided = newPasswordRaw !== undefined && String(newPasswordRaw) !== '';
+      const canChangeCredentials = Boolean(botUser.admin_login && botUser.password_hash);
+
+      if (!displayNameProvided && !loginProvided && !passwordProvided) {
+        return res.status(400).json({
+          message: 'Укажите отображаемое имя, новый логин и/или новый пароль.',
+        });
+      }
+
+      if ((loginProvided || passwordProvided) && !canChangeCredentials) {
         return res.status(403).json({
           message: 'Смена логина и пароля недоступна для этой учётной записи.',
         });
       }
 
-      const currentPassword = String(req.body?.current_password || '');
-      if (!verifyAdminPassword(currentPassword, botUser.password_hash)) {
-        return res.status(400).json({ message: 'Неверный текущий пароль.' });
-      }
-
-      const loginProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'login');
-      const newPasswordRaw = req.body?.new_password;
-      const passwordProvided = newPasswordRaw !== undefined && String(newPasswordRaw) !== '';
-
-      if (!loginProvided && !passwordProvided) {
-        return res.status(400).json({ message: 'Укажите новый логин и/или новый пароль.' });
+      if (loginProvided || passwordProvided) {
+        const currentPassword = String(req.body?.current_password || '');
+        if (!verifyAdminPassword(currentPassword, botUser.password_hash)) {
+          return res.status(400).json({ message: 'Неверный текущий пароль.' });
+        }
       }
 
       const updates = {};
+      if (displayNameProvided) {
+        updates.displayName = String(req.body.display_name || '').trim() || null;
+      }
       if (loginProvided) {
         const nextLogin = String(req.body.login || '').trim();
         if (!nextLogin) {
@@ -711,10 +942,12 @@ function createBotAdminRouter(db) {
 
       const updated = getBotUserById(db, botUser.id);
       const before = {
+        display_name: botUser.display_name || null,
         login: botUser.admin_login || null,
         password: botUser.password_hash ? '[задано]' : null,
       };
       const after = {
+        display_name: updated?.display_name || null,
         login: updated?.admin_login || null,
         password: passwordProvided ? '[изменено]' : before.password,
       };
@@ -722,7 +955,8 @@ function createBotAdminRouter(db) {
         entityType: 'account',
         entityId: botUser.id,
         action: 'update',
-        summary: `Обновлены учётные данные: ${[
+        summary: `Обновлён профиль: ${[
+          displayNameProvided ? 'display_name' : null,
           loginProvided ? 'login' : null,
           passwordProvided ? 'password' : null,
         ]
@@ -731,7 +965,7 @@ function createBotAdminRouter(db) {
         details: buildAuditDetails({
           before,
           after,
-          changes: buildFieldChanges(before, after, ['login', 'password']),
+          changes: buildFieldChanges(before, after, ['display_name', 'login', 'password']),
         }),
       });
       return res.json({
@@ -744,7 +978,7 @@ function createBotAdminRouter(db) {
       });
     } catch (error) {
       console.error('Update account error:', error);
-      return res.status(500).json({ message: 'Не удалось обновить учётные данные.' });
+      return res.status(500).json({ message: 'Не удалось обновить профиль.' });
     }
   });
 
@@ -1513,9 +1747,28 @@ function createBotAdminRouter(db) {
         includeStaffPrivate: true,
       });
 
+      let filesById = new Map();
+      try {
+        filesById = await resolveChatFiles(chatId, collectMessageFileIds(page.result));
+      } catch (fileError) {
+        console.error('Get ticket chat files error:', fileError);
+      }
+
+      let userNames = {};
+      try {
+        userNames = await buildRegosUserNameMap();
+      } catch (userError) {
+        console.error('Get ticket chat user names error:', userError);
+      }
+
+      const messages = enrichChatMessages(attachPublicFiles(page.result, filesById), {
+        ticketId: ticket.id,
+        userNames,
+      });
+
       return res.json({
         chat_id: chatId,
-        messages: page.result,
+        messages,
         next_offset: page.next_offset,
         total: page.total,
         offset: page.offset,
@@ -1533,7 +1786,7 @@ function createBotAdminRouter(db) {
   router.post(
     '/api/tickets/:id/messages',
     requireRight(db, 'tickets_read'),
-    express.json(),
+    express.json({ limit: CHAT_MESSAGE_JSON_LIMIT }),
     async (req, res) => {
       try {
         const ticket = await findTicketById(req.params.id);
@@ -1546,9 +1799,18 @@ function createBotAdminRouter(db) {
           return res.status(400).json({ message: 'Чат не привязан к этому тикету.' });
         }
 
+        let files;
+        try {
+          files = parseChatUploadFiles(req.body?.files);
+        } catch (parseError) {
+          return res.status(parseError.status || 400).json({
+            message: parseError.message || 'Некорректный файл.',
+          });
+        }
+
         const text = String(req.body?.text || '').trim();
-        if (!text) {
-          return res.status(400).json({ message: 'Введите текст сообщения.' });
+        if (!text && files.length === 0) {
+          return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
         }
 
         const regosUserId = resolveSessionRegosUserId(db, req);
@@ -1581,9 +1843,25 @@ function createBotAdminRouter(db) {
           await setTicketResponsible(ticket.id, regosUserId);
         }
 
+        const fileIds = [];
+        for (const file of files) {
+          const uploaded = await addChatFile({
+            chatId,
+            name: file.name,
+            extension: file.extension,
+            data: file.data,
+            width: file.width,
+            height: file.height,
+          });
+          if (uploaded.file_id) {
+            fileIds.push(uploaded.file_id);
+          }
+        }
+
         const created = await addTicketMessage({
           chatId,
           text,
+          fileIds,
           authorEntityId: regosUserId,
           authorEntityType: 'User',
         });
@@ -1598,14 +1876,19 @@ function createBotAdminRouter(db) {
               chat_id: chatId,
               message_id: created.id,
               text_preview: text.slice(0, 120),
+              file_ids: fileIds,
             },
           }),
         });
-        return res.status(201).json({
+        const payload = {
           id: created.id,
           chat_id: chatId,
           author_entity_id: regosUserId,
-        });
+        };
+        if (fileIds.length) {
+          payload.file_ids = fileIds;
+        }
+        return res.status(201).json(payload);
       } catch (error) {
         if (error instanceof RegosCrmError) {
           return res.status(error.status).json({ message: error.message });
@@ -1615,6 +1898,84 @@ function createBotAdminRouter(db) {
       }
     }
   );
+
+  router.get('/api/tickets/:id/files/:fileId', requireRight(db, 'tickets_read'), async (req, res) => {
+    const abortController = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abortController.abort();
+    });
+
+    try {
+      const ticket = await findTicketById(req.params.id);
+      if (!ticket) {
+        return res.status(404).json({ message: 'Тикет не найден.' });
+      }
+      const chatId = ticket.chat_id ? String(ticket.chat_id).trim() : '';
+      if (!chatId) {
+        return res.status(404).json({ message: 'Чат не привязан к этому тикету.' });
+      }
+
+      const fileId = Number(req.params.fileId);
+      if (!Number.isFinite(fileId) || fileId <= 0) {
+        return res.status(400).json({ message: 'Некорректный файл.' });
+      }
+
+      let file = getCachedChatFile(fileId);
+      if (!file) {
+        const filesById = await resolveChatFiles(chatId, [fileId]);
+        file = filesById.get(fileId) || null;
+      }
+      if (!file) {
+        return res.status(404).json({ message: 'Файл не найден.' });
+      }
+      if (!isSafeFileUrl(file.url)) {
+        return res.status(502).json({ message: 'Не удалось загрузить файл.' });
+      }
+
+      const range = String(req.headers.range || '').trim();
+      const upstream = await fetch(file.url, {
+        headers: /^bytes=\d*-\d*$/i.test(range) ? { Range: range } : {},
+        redirect: 'manual',
+        signal: abortController.signal,
+      });
+      if (![200, 206].includes(upstream.status) || !upstream.body) {
+        console.error(
+          `[bot-admin] Chat file server returned ${upstream.status} for ticket ${req.params.id} file ${fileId}`
+        );
+        return res.status(502).json({ message: 'Не удалось загрузить файл.' });
+      }
+
+      res.status(upstream.status);
+      const contentType =
+        file.mime_type ||
+        upstream.headers.get('content-type') ||
+        'application/octet-stream';
+      res.setHeader('Content-Type', contentType);
+      for (const header of ['accept-ranges', 'content-length', 'content-range', 'etag', 'last-modified']) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+      }
+      const filename = file.name || `file-${fileId}${file.extension ? `.${file.extension}` : ''}`;
+      res.setHeader(
+        'Content-Disposition',
+        `inline; filename*=UTF-8''${encodeURIComponent(filename)}`
+      );
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      await pipeline(Readable.fromWeb(upstream.body), res);
+      return undefined;
+    } catch (error) {
+      if (abortController.signal.aborted) return undefined;
+      console.error('Get ticket chat file error:', error);
+      if (res.headersSent) {
+        res.destroy(error);
+        return undefined;
+      }
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      return res.status(502).json({ message: 'Не удалось загрузить файл.' });
+    }
+  });
 
   router.get(
     '/api/firm-search',
@@ -1674,6 +2035,8 @@ function createBotAdminRouter(db) {
     const status = String(req.query.status || '').trim();
     const fromDate = String(req.query.from_date || '').trim();
     const toDate = String(req.query.to_date || '').trim();
+    const telegramIdRaw = String(req.query.telegram_id || req.query.employee || '').trim();
+    const telegramId = telegramIdRaw ? Number(telegramIdRaw) : undefined;
     let { page, limit, offset } = parsePaginationQuery(req);
     const options = {
       query: query || undefined,
@@ -1681,6 +2044,7 @@ function createBotAdminRouter(db) {
       status: status || undefined,
       from: fromDate || undefined,
       to: toDate || undefined,
+      telegramId: Number.isFinite(telegramId) && telegramId !== 0 ? telegramId : undefined,
       offset,
       limit,
     };
@@ -1697,6 +2061,30 @@ function createBotAdminRouter(db) {
       page,
       limit,
     });
+  });
+
+  router.get('/api/orders/employees', requireRight(db, 'orders_read'), (_req, res) => {
+    const employees = listEmployeeUsers(db)
+      .filter((user) => user.telegram_id != null)
+      .map((user) => {
+        const displayName =
+          String(user.display_name || '').trim() ||
+          [user.first_name, user.last_name].filter(Boolean).join(' ').trim() ||
+          (user.username ? `@${String(user.username).replace(/^@/, '')}` : '') ||
+          null;
+        return {
+          telegram_id: user.telegram_id,
+          display_name: displayName,
+          phone: user.phone || null,
+        };
+      })
+      .sort((a, b) =>
+        String(a.display_name || a.phone || a.telegram_id).localeCompare(
+          String(b.display_name || b.phone || b.telegram_id),
+          'ru'
+        )
+      );
+    res.json({ employees });
   });
 
   router.post('/api/orders/:id/delete', requireRight(db, 'delete_unpaid_order'), (req, res) => {
@@ -2015,8 +2403,8 @@ function createBotAdminRouter(db) {
         channelId: channelId || undefined,
       });
 
-      const activeForUserId =
-        responsibleUserId || resolveSessionRegosUserId(db, req) || null;
+      // Active ticket is always for the session REGOS user, not the list filter.
+      const activeForUserId = resolveSessionRegosUserId(db, req) || null;
 
       const ticketsPromise = fetchAllTickets({
         search: q || undefined,
@@ -2766,34 +3154,42 @@ function createBotAdminRouter(db) {
   });
 
   router.get('/order-logs', requireRight(db, 'order_logs_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'order-logs.html');
   });
 
   router.get('/logs', requireRight(db, 'logs_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'logs.html');
   });
 
   router.get('/orders', requireRight(db, 'orders_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'orders.html');
   });
 
   router.get('/tickets/:id', requireRight(db, 'tickets_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'ticket-detail.html');
   });
 
   router.get('/tickets', requireRight(db, 'tickets_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'tickets.html');
   });
 
   router.get('/technical-support', requireRight(db, 'technical_support_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'technical-support.html');
   });
 
   router.get('/prices', requireRight(db, 'prices_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'prices.html');
   });
 
   router.get('/settings', requireRight(db, 'settings_read'), (_req, res) => {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'settings.html');
   });
 
@@ -2819,8 +3215,13 @@ function createBotAdminRouter(db) {
       if (permissions.prices_read) return res.redirect('/bot-admin/prices');
       if (permissions.settings_read) return res.redirect('/bot-admin/settings');
     }
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
     return sendPublicFile(res, publicDir, 'index.html');
   });
+
+  if (reactUiReady && fs.existsSync(reactUiDistDir)) {
+    router.use(express.static(reactUiDistDir, { index: false }));
+  }
 
   router.use(requireAdminAuth, express.static(publicDir, { index: false }));
 

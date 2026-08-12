@@ -39,6 +39,14 @@ let canEditClosedTickets = false;
 
 const CHAT_PAGE_LIMIT = 50;
 const CHAT_POLL_MS = 18000;
+const MAX_CHAT_FILES = 5;
+const MAX_CHAT_FILE_BYTES = 10 * 1024 * 1024;
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+const AUDIO_EXTENSIONS = new Set(['mp3', 'ogg', 'wav', 'm4a', 'aac', 'opus', 'oga', 'weba']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+
+let pendingChatFiles = [];
+let pendingChatFileSeq = 0;
 
 const ticketTitleEl = document.getElementById('ticket-title');
 const ticketSubtitleEl = document.getElementById('ticket-subtitle');
@@ -55,7 +63,10 @@ const ticketChatRefreshBtn = document.getElementById('ticket-chat-refresh');
 const ticketChatLoadOlderWrap = document.getElementById('ticket-chat-load-older-wrap');
 const ticketChatLoadOlderBtn = document.getElementById('ticket-chat-load-older');
 const ticketChatCompose = document.getElementById('ticket-chat-compose');
+const ticketChatPendingEl = document.getElementById('ticket-chat-pending');
 const ticketChatInput = document.getElementById('ticket-chat-input');
+const ticketChatFileInput = document.getElementById('ticket-chat-file');
+const ticketChatAttachBtn = document.getElementById('ticket-chat-attach');
 const ticketChatSendBtn = document.getElementById('ticket-chat-send');
 const createOrderModal = document.getElementById('create-order-modal');
 const createOrderForm = document.getElementById('create-order-form');
@@ -674,9 +685,267 @@ function setChatComposerEnabled(enabled) {
   ticketChatCompose.hidden = !canSend;
   ticketChatInput.disabled = !canSend;
   ticketChatSendBtn.disabled = !canSend;
+  if (ticketChatFileInput) ticketChatFileInput.disabled = !canSend;
+  if (ticketChatAttachBtn) ticketChatAttachBtn.disabled = !canSend;
   if (!canSend) {
     ticketChatInput.value = '';
+    clearPendingChatFiles();
+    setChatDropActive(false);
   }
+}
+
+function fileExtension(name) {
+  const base = String(name || '').split(/[\\/]/).pop() || '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0 || dot === base.length - 1) return '';
+  return base.slice(dot + 1).toLowerCase().slice(0, 10);
+}
+
+function chatFileExtension(file) {
+  return String(file?.extension || fileExtension(file?.name || '')).replace(/^\./, '').toLowerCase();
+}
+
+function chatFileMime(file) {
+  return String(file?.mime_type || file?.type || '').toLowerCase();
+}
+
+function chatFileMediaType(file) {
+  return String(file?.media_type || '').toLowerCase();
+}
+
+function isChatImage(file) {
+  const mediaType = chatFileMediaType(file);
+  if (mediaType === 'image' || mediaType === 'photo' || mediaType === 'picture') return true;
+  const mime = chatFileMime(file);
+  if (mime.startsWith('image/')) return true;
+  return IMAGE_EXTENSIONS.has(chatFileExtension(file));
+}
+
+function isChatAudio(file) {
+  const mediaType = chatFileMediaType(file);
+  if (mediaType === 'audio' || mediaType === 'voice') return true;
+  const mime = chatFileMime(file);
+  if (mime.startsWith('audio/')) return true;
+  return AUDIO_EXTENSIONS.has(chatFileExtension(file));
+}
+
+function isChatVideo(file) {
+  const mediaType = chatFileMediaType(file);
+  if (mediaType === 'video') return true;
+  const mime = chatFileMime(file);
+  if (mime.startsWith('video/')) return true;
+  return VIDEO_EXTENSIONS.has(chatFileExtension(file));
+}
+
+function chatFileMimeType(file) {
+  const mime = chatFileMime(file);
+  if (mime) return mime;
+  const ext = chatFileExtension(file);
+  if (isChatAudio(file)) {
+    if (ext === 'mp3') return 'audio/mpeg';
+    if (ext === 'ogg' || ext === 'oga') return 'audio/ogg';
+    if (ext === 'wav') return 'audio/wav';
+    if (ext === 'm4a') return 'audio/mp4';
+    if (ext === 'aac') return 'audio/aac';
+    if (ext === 'opus') return 'audio/opus';
+    return 'audio/*';
+  }
+  if (isChatVideo(file)) {
+    if (ext === 'mp4' || ext === 'm4v') return 'video/mp4';
+    if (ext === 'webm') return 'video/webm';
+    if (ext === 'mov') return 'video/quicktime';
+    if (ext === 'ogv') return 'video/ogg';
+    return 'video/*';
+  }
+  return '';
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} Б`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} КБ`;
+  return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать файл.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function filesFromDataTransfer(dataTransfer) {
+  const files = [];
+  const items = dataTransfer?.items;
+  if (items && items.length) {
+    for (const item of items) {
+      if (item.kind !== 'file') continue;
+      const entry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null;
+      if (entry && entry.isDirectory) continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+    return files;
+  }
+  return [...(dataTransfer?.files || [])];
+}
+
+function clearPendingChatFiles() {
+  for (const item of pendingChatFiles) {
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+  }
+  pendingChatFiles = [];
+  renderPendingChatFiles();
+}
+
+function renderPendingChatFiles() {
+  if (!ticketChatPendingEl) return;
+  if (!pendingChatFiles.length) {
+    ticketChatPendingEl.hidden = true;
+    ticketChatPendingEl.innerHTML = '';
+    return;
+  }
+  ticketChatPendingEl.hidden = false;
+  ticketChatPendingEl.innerHTML = pendingChatFiles
+    .map((item) => {
+      const name = escapeHtml(item.file.name || 'файл');
+      const thumb = item.previewUrl
+        ? `<img class="ticket-chat__pending-thumb" src="${escapeHtml(item.previewUrl)}" alt="">`
+        : '';
+      const size = `<span class="ticket-chat__pending-size">${escapeHtml(formatFileSize(item.file.size))}</span>`;
+      return `<div class="ticket-chat__pending-item">
+        ${thumb}
+        <span class="ticket-chat__pending-name" title="${name}">${name}</span>
+        ${size}
+        <button type="button" class="ticket-chat__pending-remove" data-pending-id="${item.id}" aria-label="Удалить файл">×</button>
+      </div>`;
+    })
+    .join('');
+}
+
+function addPendingChatFiles(fileList) {
+  const incoming = [...(fileList || [])].filter((file) => file && file.size > 0);
+  if (!incoming.length) return;
+
+  const remaining = MAX_CHAT_FILES - pendingChatFiles.length;
+  if (remaining <= 0) {
+    setChatStatus(`Можно прикрепить не больше ${MAX_CHAT_FILES} файлов.`, { isError: true });
+    return;
+  }
+
+  const accepted = [];
+  for (const file of incoming.slice(0, remaining)) {
+    if (file.size > MAX_CHAT_FILE_BYTES) {
+      setChatStatus('Файл слишком большой (максимум 10 МБ).', { isError: true });
+      continue;
+    }
+    if (!fileExtension(file.name)) {
+      setChatStatus('У файла должно быть расширение.', { isError: true });
+      continue;
+    }
+    accepted.push({
+      id: `pending-${++pendingChatFileSeq}`,
+      file,
+      previewUrl: isChatImage(file) ? URL.createObjectURL(file) : '',
+    });
+  }
+
+  if (!accepted.length) return;
+  pendingChatFiles = [...pendingChatFiles, ...accepted];
+  renderPendingChatFiles();
+  if (incoming.length > remaining) {
+    setChatStatus(`Можно прикрепить не больше ${MAX_CHAT_FILES} файлов.`, { isError: true });
+  }
+}
+
+function removePendingChatFile(pendingId) {
+  const next = [];
+  for (const item of pendingChatFiles) {
+    if (String(item.id) === String(pendingId)) {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      continue;
+    }
+    next.push(item);
+  }
+  pendingChatFiles = next;
+  renderPendingChatFiles();
+}
+
+function setChatDropActive(active) {
+  ticketChatCompose?.classList.toggle('ticket-chat__compose--drop', Boolean(active));
+  ticketChatMessagesEl?.classList.toggle('ticket-chat__messages--drop', Boolean(active));
+}
+
+function chatFileProxyUrl(fileId) {
+  return `/bot-admin/api/tickets/${encodeURIComponent(currentTicketId)}/files/${encodeURIComponent(fileId)}`;
+}
+
+function renderChatFiles(message) {
+  const files =
+    Array.isArray(message.files) && message.files.length
+      ? message.files
+      : (Array.isArray(message.file_ids) ? message.file_ids : []).map((id) => ({ id }));
+  if (!files.length) return { html: '', count: 0 };
+
+  const items = files
+    .map((file) => {
+      const id = file?.id;
+      if (id == null || id === '') return '';
+      const name =
+        file.name ||
+        (file.extension ? `файл.${String(file.extension).replace(/^\./, '')}` : `Файл ${id}`);
+      const url = chatFileProxyUrl(id);
+      if (isChatImage(file)) {
+        return `<a class="ticket-chat__image-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">
+          <img class="ticket-chat__image" src="${escapeHtml(url)}" alt="${escapeHtml(name)}" loading="lazy">
+        </a>`;
+      }
+      if (isChatAudio(file)) {
+        const mimeType = chatFileMimeType(file);
+        const typeAttr = mimeType ? ` type="${escapeHtml(mimeType)}"` : '';
+        return `<div class="ticket-chat__media ticket-chat__media--audio">
+          <audio class="ticket-chat__audio" controls preload="metadata">
+            <source src="${escapeHtml(url)}"${typeAttr}>
+          </audio>
+          <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+            name
+          )}</a>
+        </div>`;
+      }
+      if (isChatVideo(file)) {
+        const mimeType = chatFileMimeType(file);
+        const typeAttr = mimeType ? ` type="${escapeHtml(mimeType)}"` : '';
+        return `<div class="ticket-chat__media ticket-chat__media--video">
+          <video class="ticket-chat__video" controls preload="metadata" playsinline>
+            <source src="${escapeHtml(url)}"${typeAttr}>
+          </video>
+          <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+            name
+          )}</a>
+        </div>`;
+      }
+      const hasMetadata = Boolean(file.name || file.extension || file.mime_type || file.media_type);
+      if (!hasMetadata) {
+        return `<div class="ticket-chat__media ticket-chat__media--probe" data-url="${escapeHtml(url)}" data-name="${escapeHtml(name)}">
+          <img class="ticket-chat__image ticket-chat__media-probe" src="${escapeHtml(url)}" alt="${escapeHtml(name)}" loading="lazy">
+        </div>`;
+      }
+      return `<a class="ticket-chat__file-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+        name
+      )}</a>`;
+    })
+    .filter(Boolean);
+
+  return {
+    html: items.length ? `<div class="ticket-chat__files">${items.join('')}</div>` : '',
+    count: items.length,
+  };
 }
 
 function chatAuthorBadge(message) {
@@ -720,29 +989,35 @@ function chatMessageClass(message) {
 }
 
 function renderChatMessage(message) {
+  const messageType = String(message.message_type || '');
+  const isSystem = messageType === 'System';
   const badge = chatAuthorBadge(message);
   const author =
     message.author_entity_name ||
     (message.author_entity_id != null ? `ID ${message.author_entity_id}` : 'Неизвестный');
+  const authorHtml = isSystem
+    ? ''
+    : `<span class="ticket-chat__author">${escapeHtml(author)}</span>`;
   const replyHtml =
     message.replay_text || message.reply_id
       ? `<div class="ticket-chat__reply">${escapeHtml(
           message.replay_text || `Ответ на ${message.reply_id}`
         )}</div>`
       : '';
-  const text = message.text
-    ? `<p class="ticket-chat__text">${escapeHtml(message.text)}</p>`
-    : `<p class="ticket-chat__text ticket-chat__text--empty">—</p>`;
-  const fileIds = Array.isArray(message.file_ids) ? message.file_ids.filter((id) => id != null) : [];
-  const filesHtml =
-    fileIds.length > 0
-      ? `<p class="ticket-chat__files">Файлы: ${escapeHtml(fileIds.join(', '))}</p>`
-      : '';
+  const files = renderChatFiles(message);
+  const bodyText = String(message.display_text || message.text || '').trim();
+  const text = bodyText
+    ? `<p class="ticket-chat__text">${escapeHtml(bodyText)}</p>`
+    : files.count
+      ? ''
+      : isSystem
+        ? ''
+        : `<p class="ticket-chat__text ticket-chat__text--empty">—</p>`;
 
   return `
     <article class="${chatMessageClass(message)}" data-message-id="${escapeHtml(String(message.id || ''))}">
-      <div class="ticket-chat__meta">
-        <span class="ticket-chat__author">${escapeHtml(author)}</span>
+      <div class="ticket-chat__meta${isSystem ? ' ticket-chat__meta--system' : ''}">
+        ${authorHtml}
         <span class="${badge.className}">${escapeHtml(badge.label)}</span>
         <time datetime="${escapeHtml(String(message.created_date || ''))}">${escapeHtml(
           formatUnix(message.created_date)
@@ -750,13 +1025,55 @@ function renderChatMessage(message) {
       </div>
       ${replyHtml}
       ${text}
-      ${filesHtml}
+      ${files.html}
     </article>
   `;
 }
 
 function updateLoadOlderVisibility() {
   ticketChatLoadOlderWrap.hidden = !chatHasOlder;
+}
+
+function upgradeChatMediaProbes() {
+  if (!ticketChatMessagesEl) return;
+  ticketChatMessagesEl.querySelectorAll('.ticket-chat__media--probe').forEach((container) => {
+    if (container.dataset.probeReady === '1') return;
+    container.dataset.probeReady = '1';
+    const url = container.dataset.url || '';
+    const name = container.dataset.name || 'файл';
+    const img = container.querySelector('.ticket-chat__media-probe');
+    if (!img || !url) return;
+
+    img.addEventListener(
+      'error',
+      () => {
+        container.classList.remove('ticket-chat__media--probe');
+        container.classList.add('ticket-chat__media--video');
+        container.innerHTML = `<video class="ticket-chat__video" controls preload="metadata" playsinline src="${escapeHtml(url)}"></video>
+          <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>`;
+        const video = container.querySelector('video');
+        video?.addEventListener(
+          'error',
+          () => {
+            container.classList.remove('ticket-chat__media--video');
+            container.classList.add('ticket-chat__media--audio');
+            container.innerHTML = `<audio class="ticket-chat__audio" controls preload="metadata" src="${escapeHtml(url)}"></audio>
+              <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>`;
+            const audio = container.querySelector('audio');
+            audio?.addEventListener(
+              'error',
+              () => {
+                container.innerHTML = `<a class="ticket-chat__file-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>`;
+              },
+              { once: true }
+            );
+          },
+          { once: true }
+        );
+      },
+      { once: true }
+    );
+  });
 }
 
 function renderChatMessages({ stickToBottom = false } = {}) {
@@ -773,6 +1090,7 @@ function renderChatMessages({ stickToBottom = false } = {}) {
   }
 
   updateLoadOlderVisibility();
+  upgradeChatMediaProbes();
 
   if (stickToBottom || wasNearBottom) {
     ticketChatMessagesEl.scrollTop = ticketChatMessagesEl.scrollHeight;
@@ -934,8 +1252,8 @@ async function refreshChatTail(ticketId) {
 
 async function sendChatMessage(ticketId) {
   const text = ticketChatInput.value.trim();
-  if (!text) {
-    setChatStatus('Введите текст сообщения.', { isError: true });
+  if (!text && !pendingChatFiles.length) {
+    setChatStatus('Введите текст сообщения или прикрепите файл.', { isError: true });
     ticketChatInput.focus();
     return;
   }
@@ -947,15 +1265,25 @@ async function sendChatMessage(ticketId) {
 
   ticketChatSendBtn.disabled = true;
   ticketChatInput.disabled = true;
+  if (ticketChatAttachBtn) ticketChatAttachBtn.disabled = true;
+  if (ticketChatFileInput) ticketChatFileInput.disabled = true;
   setButtonLoading(ticketChatSendBtn, true);
   setChatStatus('Отправка…', { loading: true });
 
   try {
+    const files = await Promise.all(
+      pendingChatFiles.map(async (item) => ({
+        name: item.file.name,
+        extension: fileExtension(item.file.name),
+        data: await fileToBase64(item.file),
+      }))
+    );
     await api(`/bot-admin/api/tickets/${ticketId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, files }),
     });
     ticketChatInput.value = '';
+    clearPendingChatFiles();
     await refreshChatTail(ticketId);
     setChatStatus(chatTotal > 0 ? `Сообщений: ${chatMessages.length} из ${chatTotal}` : '');
   } catch (error) {
@@ -963,6 +1291,8 @@ async function sendChatMessage(ticketId) {
   } finally {
     const canSend = Boolean(ticket?.chat_id);
     ticketChatInput.disabled = !canSend;
+    if (ticketChatFileInput) ticketChatFileInput.disabled = !canSend;
+    if (ticketChatAttachBtn) ticketChatAttachBtn.disabled = !canSend;
     setButtonLoading(ticketChatSendBtn, false);
     ticketChatSendBtn.disabled = !canSend;
     if (canSend) {
@@ -1021,6 +1351,64 @@ ticketChatInput.addEventListener('keydown', (event) => {
   if (currentTicketId == null || ticketChatSendBtn.disabled) return;
   ticketChatCompose.requestSubmit();
 });
+ticketChatInput.addEventListener('paste', (event) => {
+  const files = [...(event.clipboardData?.files || [])].filter((file) => isChatImage(file));
+  if (!files.length) return;
+  event.preventDefault();
+  addPendingChatFiles(files);
+});
+ticketChatAttachBtn?.addEventListener('click', () => {
+  if (ticketChatFileInput?.disabled) return;
+  ticketChatFileInput.click();
+});
+ticketChatFileInput?.addEventListener('change', () => {
+  addPendingChatFiles(ticketChatFileInput.files);
+  ticketChatFileInput.value = '';
+});
+ticketChatPendingEl?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-pending-id]');
+  if (!button) return;
+  removePendingChatFile(button.dataset.pendingId);
+});
+
+function isFileDrag(event) {
+  const types = event.dataTransfer?.types;
+  if (!types) return false;
+  return [...types].includes('Files');
+}
+
+function handleChatDragEnter(event) {
+  if (!isFileDrag(event) || ticketChatCompose.hidden) return;
+  event.preventDefault();
+  setChatDropActive(true);
+}
+
+function handleChatDragOver(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  if (ticketChatCompose.hidden) return;
+  event.dataTransfer.dropEffect = 'copy';
+}
+
+function handleChatDragLeave(event) {
+  if (!isFileDrag(event)) return;
+  const next = event.relatedTarget;
+  if (next && ticketChatCard.contains(next)) return;
+  setChatDropActive(false);
+}
+
+function handleChatDrop(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  setChatDropActive(false);
+  if (ticketChatCompose.hidden) return;
+  addPendingChatFiles(filesFromDataTransfer(event.dataTransfer));
+}
+
+ticketChatCard.addEventListener('dragenter', handleChatDragEnter);
+ticketChatCard.addEventListener('dragover', handleChatDragOver);
+ticketChatCard.addEventListener('dragleave', handleChatDragLeave);
+ticketChatCard.addEventListener('drop', handleChatDrop);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && currentTicketId != null && ticket?.chat_id) {
     refreshChatTail(currentTicketId).catch(() => {});

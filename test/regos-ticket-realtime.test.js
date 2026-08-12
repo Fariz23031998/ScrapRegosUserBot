@@ -184,6 +184,118 @@ describe('REGOS ticket webhook handler', () => {
     );
   });
 
+  it('publishes chat_changed for ChatMessageAdded without fetching tickets', async () => {
+    const published = [];
+    const handler = createRegosTicketWebhookHandler({
+      connectedIntegrationId: 'integration-1',
+      now: () => 1_720_000_000_000,
+      findTicket: async () => {
+        throw new Error('must not fetch');
+      },
+      publish: (event) => published.push(event),
+    });
+
+    assert.deepEqual(
+      await handler({
+        event_id: `chat-test-${process.pid}-added`,
+        occurred_at: '2026-08-12T12:00:00Z',
+        connected_integration_id: 'integration-1',
+        data: {
+          action: 'ChatMessageAdded',
+          data: {
+            id: 'msg-1',
+            chat_id: 'chat-uuid-1',
+          },
+        },
+      }),
+      { ok: true, message: 'Webhook processed' }
+    );
+
+    assert.deepEqual(published, [
+      {
+        type: 'chat_changed',
+        chat_id: 'chat-uuid-1',
+        message_id: 'msg-1',
+        source_action: 'ChatMessageAdded',
+        occurred_at: '2026-08-12T12:00:00Z',
+      },
+    ]);
+  });
+
+  it('publishes chat_writing for ChatWriting and deduplicates event_id', async () => {
+    const published = [];
+    const handler = createRegosTicketWebhookHandler({
+      connectedIntegrationId: 'integration-1',
+      now: () => 1_720_000_000_000,
+      findTicket: async () => {
+        throw new Error('must not fetch');
+      },
+      publish: (event) => published.push(event),
+    });
+    const payload = {
+      event_id: `chat-test-${process.pid}-writing`,
+      occurred_at: '2026-08-12T12:05:00Z',
+      connected_integration_id: 'integration-1',
+      data: {
+        action: 'ChatWriting',
+        data: {
+          chat_id: 'chat-uuid-9',
+          author_entity_id: 44,
+          author_entity_type: 'User',
+        },
+      },
+    };
+
+    assert.deepEqual(await handler(payload), { ok: true, message: 'Webhook processed' });
+    assert.deepEqual(await handler(payload), {
+      ok: true,
+      message: 'Event already processed',
+      duplicate: true,
+    });
+    assert.deepEqual(published, [
+      {
+        type: 'chat_writing',
+        chat_id: 'chat-uuid-9',
+        author_entity_id: 44,
+        author_entity_type: 'User',
+        source_action: 'ChatWriting',
+        occurred_at: '2026-08-12T12:05:00Z',
+      },
+    ]);
+  });
+
+  it('publishes chat_changed for ChatAdded using chat id from payload.id', async () => {
+    const published = [];
+    const handler = createRegosTicketWebhookHandler({
+      connectedIntegrationId: 'integration-1',
+      now: () => 1_720_000_000_000,
+      publish: (event) => published.push(event),
+    });
+
+    assert.deepEqual(
+      await handler({
+        event_id: `chat-test-${process.pid}-chat-added`,
+        occurred_at: '2026-08-12T12:10:00Z',
+        connected_integration_id: 'integration-1',
+        data: {
+          action: 'ChatAdded',
+          data: { id: 'chat-uuid-new' },
+        },
+      }),
+      { ok: true, message: 'Webhook processed' }
+    );
+
+    assert.deepEqual(published, [
+      {
+        type: 'chat_changed',
+        chat_id: 'chat-uuid-new',
+        message_id: null,
+        source_action: 'ChatAdded',
+        occurred_at: '2026-08-12T12:10:00Z',
+      },
+    ]);
+  });
+
   it('exposes the webhook at POST /api/regos/webhook', async () => {
     let received = null;
     const app = express();
@@ -272,17 +384,28 @@ describe('active ticket HTTP endpoint', () => {
     }
   });
 
-  it('requires ticket read access and returns the scoped active ticket', async () => {
-    const unauthorized = await request(
-      server,
-      'GET',
-      '/bot-admin/api/tickets/active?responsible_user_id=7'
-    );
+  it('requires ticket read access and returns the session REGOS active ticket', async () => {
+    const { createEmployeeUser, setBotUserRegosLink } = require('../src/db/bot-users-db');
+
+    const unauthorized = await request(server, 'GET', '/bot-admin/api/tickets/active');
     assert.equal(unauthorized.statusCode, 401);
+
+    const employee = createEmployeeUser(db, {
+      phone: '+998901112233',
+      displayName: 'Ticket Agent',
+      adminLogin: 'ticket-agent',
+      password: 'agent-pass',
+      rights: { tickets_read: 1 },
+    });
+    setBotUserRegosLink(db, employee.id, {
+      regosUserId: 7,
+      regosLogin: 'agent7',
+      regosFullName: 'Ticket Agent',
+    });
 
     const login = await request(server, 'POST', '/bot-admin/api/login', {
       headers: { 'Content-Type': 'application/json' },
-      body: { login: 'admin', password: 'test-password' },
+      body: { login: 'ticket-agent', password: 'agent-pass' },
     });
     const cookie = cookieFromResponse(login);
     assert.ok(cookie);
@@ -296,22 +419,25 @@ describe('active ticket HTTP endpoint', () => {
         async json() {
           return {
             ok: true,
-            result: [{
-              id: 91,
-              status: 'Open',
-              subject: 'Live ticket',
-              responsible_user_id: 7,
-              created_date: 1_720_000_000,
-            }],
+            result: [
+              {
+                id: 91,
+                status: 'Open',
+                subject: 'Live ticket',
+                responsible_user_id: 7,
+                created_date: 1_720_000_000,
+              },
+            ],
           };
         },
       };
     };
 
+    // Query filter must not override the session-linked REGOS user.
     const response = await request(
       server,
       'GET',
-      '/bot-admin/api/tickets/active?responsible_user_id=7',
+      '/bot-admin/api/tickets/active?responsible_user_id=99',
       { headers: { Cookie: cookie, Accept: 'application/json' } }
     );
     assert.equal(response.statusCode, 200);
@@ -330,6 +456,22 @@ describe('active ticket HTTP endpoint', () => {
         },
       },
       active_ticket_user_id: 7,
+    });
+
+    const passwordLogin = await request(server, 'POST', '/bot-admin/api/login', {
+      headers: { 'Content-Type': 'application/json' },
+      body: { login: 'admin', password: 'test-password' },
+    });
+    const passwordCookie = cookieFromResponse(passwordLogin);
+    assert.ok(passwordCookie);
+
+    const noRegos = await request(server, 'GET', '/bot-admin/api/tickets/active?responsible_user_id=7', {
+      headers: { Cookie: passwordCookie, Accept: 'application/json' },
+    });
+    assert.equal(noRegos.statusCode, 200);
+    assert.deepEqual(JSON.parse(noRegos.body), {
+      active_ticket: null,
+      active_ticket_user_id: null,
     });
   });
 });

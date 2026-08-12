@@ -47,6 +47,7 @@ module.exports = {
   outputDir: () => fromRoot('output'),
   publicDir: () => fromRoot('public'),
   botAdminPublicDir: () => fromRoot('public', 'bot-admin'),
+  botAdminUiDistDir: () => fromRoot('bot-admin-ui', 'dist'),
   brandLogoPath: () => fromRoot('public', 'images', 'brand-logo.png'),
   usersPhonesPath: () => fromRoot('config', 'access', 'users_phones.txt'),
   vipClientsPath: () => fromRoot('config', 'access', 'vip_clients.txt'),

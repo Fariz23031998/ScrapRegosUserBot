@@ -277,13 +277,22 @@ function orderMatchesClientPhone(order, clientPhone) {
   );
 }
 
-function listOrders(db, { query, clientPhone, status, from, to, offset = 0, limit = 25 } = {}) {
+function listOrders(
+  db,
+  { query, clientPhone, status, from, to, telegramId, offset = 0, limit = 25 } = {}
+) {
   let sql = 'SELECT * FROM orders WHERE 1=1';
   const params = [];
 
   if (status && ORDER_LIST_STATUSES.has(status)) {
     sql += ' AND status = ?';
     params.push(status);
+  }
+
+  const employeeTelegramId = Number(telegramId);
+  if (Number.isFinite(employeeTelegramId) && employeeTelegramId !== 0) {
+    sql += ' AND telegram_id = ?';
+    params.push(employeeTelegramId);
   }
 
   const fromDate = String(from || '').trim();

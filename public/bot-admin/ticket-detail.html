@@ -93,19 +93,32 @@
           </div>
           <div id="ticket-chat-messages" class="ticket-chat__messages" aria-live="polite"></div>
           <form class="ticket-chat__compose" id="ticket-chat-compose" hidden>
-            <label class="ticket-chat__compose-field" for="ticket-chat-input">
-              <span class="visually-hidden">Сообщение</span>
-              <textarea
-                id="ticket-chat-input"
-                rows="2"
-                placeholder="Введите сообщение…"
-                maxlength="4000"
+            <div class="ticket-chat__pending" id="ticket-chat-pending" hidden></div>
+            <div class="ticket-chat__compose-row">
+              <label class="ticket-chat__compose-field" for="ticket-chat-input">
+                <span class="visually-hidden">Сообщение</span>
+                <textarea
+                  id="ticket-chat-input"
+                  rows="2"
+                  placeholder="Введите сообщение или перетащите файл…"
+                  maxlength="4000"
+                  disabled
+                ></textarea>
+              </label>
+              <input
+                type="file"
+                id="ticket-chat-file"
+                class="visually-hidden"
+                multiple
                 disabled
-              ></textarea>
-            </label>
-            <button type="submit" class="btn btn-primary btn-sm" id="ticket-chat-send" disabled>
-              Отправить
-            </button>
+              />
+              <button type="button" class="btn btn-secondary btn-sm" id="ticket-chat-attach" disabled>
+                Файл
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm" id="ticket-chat-send" disabled>
+                Отправить
+              </button>
+            </div>
           </form>
         </section>
 

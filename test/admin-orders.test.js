@@ -132,6 +132,18 @@ describe('listOrders helper', () => {
     assert.equal(byStatus.total, 2);
     assert.ok(byStatus.orders.every((row) => row.status === 'pending'));
 
+    createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 2002,
+      botUserPhone: '998906666666',
+      clientPhone: '998907777777',
+      amount: 40000,
+      status: 'pending',
+    });
+    const byEmployee = listOrders(db, { telegramId: 2002, limit: 50 });
+    assert.equal(byEmployee.total, 1);
+    assert.equal(byEmployee.orders[0].telegram_id, 2002);
+
     const byPhone = listOrders(db, { query: '555555', limit: 50 });
     assert.equal(byPhone.total, 1);
     assert.equal(byPhone.orders[0].additional_phone, '998905555555');

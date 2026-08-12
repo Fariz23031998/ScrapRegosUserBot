@@ -2051,9 +2051,15 @@ body:has(.page--ticket-detail) {
 
 .ticket-chat__compose {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 10px;
   margin-top: 12px;
+}
+
+.ticket-chat__compose-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
 }
 
 .ticket-chat__compose-field {
@@ -2090,6 +2096,67 @@ body:has(.page--ticket-detail) {
 .ticket-chat__compose .btn {
   flex-shrink: 0;
   align-self: flex-end;
+}
+
+.ticket-chat__compose--drop,
+.ticket-chat__messages--drop {
+  outline: 2px dashed #60a5fa;
+  outline-offset: -2px;
+  background: #eff6ff;
+}
+
+.ticket-chat__pending {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ticket-chat__pending-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.ticket-chat__pending-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #f1f5f9;
+}
+
+.ticket-chat__pending-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #334155;
+}
+
+.ticket-chat__pending-size {
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.ticket-chat__pending-remove {
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.ticket-chat__pending-remove:hover {
+  color: #b91c1c;
 }
 
 .ticket-chat__empty {
@@ -2143,6 +2210,11 @@ body:has(.page--ticket-detail) {
   margin-bottom: 6px;
   font-size: 12px;
   color: #64748b;
+}
+
+.ticket-chat__meta--system {
+  justify-content: center;
+  margin-bottom: 4px;
 }
 
 .ticket-chat__author {
@@ -2205,9 +2277,75 @@ body:has(.page--ticket-detail) {
 }
 
 .ticket-chat__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 8px 0 0;
   font-size: 12px;
   color: #64748b;
+}
+
+.ticket-chat__image-link {
+  display: block;
+  max-width: 320px;
+}
+
+.ticket-chat__image {
+  display: block;
+  max-width: 100%;
+  max-height: 280px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #f8fafc;
+}
+
+.ticket-chat__media {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(100%, 360px);
+}
+
+.ticket-chat__audio,
+.ticket-chat__video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 8px;
+  background: #0f172a;
+}
+
+.ticket-chat__video {
+  max-height: 280px;
+}
+
+.ticket-chat__media-link {
+  font-size: 12px;
+  color: #64748b;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.ticket-chat__media-link:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.ticket-chat__file-link {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #1d4ed8;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.ticket-chat__file-link:hover {
+  background: #eff6ff;
 }
 
 @media (max-width: 960px) {

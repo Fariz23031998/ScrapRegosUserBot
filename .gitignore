@@ -1,4 +1,7 @@
 node_modules/
+bot-admin-ui/node_modules/
+bot-admin-ui/dist/
+bot-admin-ui/*.tsbuildinfo
 output/
 data/
 auth-state.json
