@@ -7,7 +7,7 @@ export function useTicketEvents(enabled: boolean) {
 
   useEffect(() => {
     if (!enabled) return;
-    const source = new EventSource(ticketEventsUrl());
+    const source = new EventSource(ticketEventsUrl(), { withCredentials: true });
     let debounce: ReturnType<typeof setTimeout> | null = null;
 
     function refresh() {

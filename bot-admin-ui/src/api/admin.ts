@@ -1,5 +1,5 @@
 import { apiFetch } from "./client";
-import type { BotUser, Order, OrderLog, AdminLog, RightMeta, RegosUser } from "../lib/types";
+import type { BotUser, Order, OrderLog, OrderSummary, AdminLog, RightMeta, RegosUser } from "../lib/types";
 
 export function getRightsMeta() {
   return apiFetch<{ rights: RightMeta[] }>("/bot-admin/rights-meta");
@@ -56,9 +56,13 @@ export function regosAutoLink() {
 
 export function listOrders(params: Record<string, string>) {
   const search = new URLSearchParams(params);
-  return apiFetch<{ orders: Order[]; total: number; page: number; limit: number }>(
-    `/bot-admin/api/orders?${search}`,
-  );
+  return apiFetch<{
+    orders: Order[];
+    total: number;
+    page: number;
+    limit: number;
+    summary?: OrderSummary;
+  }>(`/bot-admin/api/orders?${search}`);
 }
 
 export function listOrderEmployees() {

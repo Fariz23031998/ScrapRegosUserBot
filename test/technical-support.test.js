@@ -30,6 +30,7 @@ const {
   mapSubscriptionRow,
   addCalendarMonths,
   formatSupportUntilLabel,
+  ensureTechnicalSupportTables,
 } = require('../src/db/technical-support');
 const { createBotAdminRouter } = require('../src/admin/bot-admin');
 const { createDashboardLoginToken } = require('../src/admin/dashboard-login-tokens');
@@ -253,6 +254,10 @@ describe('Technical support subscriptions', () => {
     assert.ok(Date.parse(stacked.ends_at) > Date.parse(active.ends_at));
     const expected = addCalendarMonths(new Date(active.ends_at), 3).toISOString();
     assert.equal(stacked.ends_at, expected);
+
+    const afterStack = listTechnicalSupportSubscriptions(db, {});
+    assert.equal(afterStack.total, 2);
+    assert.equal(afterStack.items.filter((row) => row.phone_key === '998909998877').length, 2);
   });
 
   it('activates subscription on cash payment and is idempotent by order_id', () => {
@@ -387,6 +392,7 @@ describe('Technical support subscriptions', () => {
     const deactivated = deactivateTechnicalSupportSubscription(db, second.subscription.id);
     assert.equal(deactivated.changed, true);
     assert.equal(mapSubscriptionRow(deactivated.subscription).status, 'expired');
+    assert.ok(deactivated.subscription.cancelled_at);
     assert.equal(getActiveTechnicalSupportSubscription(db, phone)?.id, first.subscription.id);
 
     const again = deactivateTechnicalSupportSubscription(db, second.subscription.id);
@@ -396,8 +402,14 @@ describe('Technical support subscriptions', () => {
     const future = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
     const extended = updateTechnicalSupportSubscriptionEndsAt(db, first.subscription.id, future);
     assert.equal(Number(extended.subscription.months), 0);
+    assert.ok(extended.subscription.duration_days > 0);
     assert.equal(mapSubscriptionRow(extended.subscription).status, 'active');
     assert.equal(extended.subscription.ends_at, new Date(future).toISOString());
+    const storedExtended = db
+      .prepare('SELECT * FROM technical_support_subscription_orders WHERE id = ?')
+      .get(first.subscription.id);
+    assert.equal(storedExtended.ends_at, undefined);
+    assert.equal(Number(storedExtended.months), 0);
 
     const past = new Date(Date.now() - 60 * 1000).toISOString();
     const shortened = updateTechnicalSupportSubscriptionEndsAt(db, first.subscription.id, past);
@@ -431,8 +443,13 @@ describe('Technical support subscriptions', () => {
     });
     assert.equal(custom.created, true);
     assert.equal(Number(custom.subscription.months), 0);
+    assert.ok(custom.subscription.duration_days > 0);
     assert.equal(custom.subscription.ends_at, new Date(customEnd).toISOString());
     assert.equal(mapSubscriptionRow(custom.subscription).status, 'active');
+    const storedCustom = db
+      .prepare('SELECT * FROM technical_support_subscription_orders WHERE id = ?')
+      .get(custom.subscription.id);
+    assert.equal(storedCustom.ends_at, undefined);
 
     assert.throws(
       () => updateTechnicalSupportSubscriptionEndsAt(db, first.subscription.id, 'not-a-date'),
@@ -554,5 +571,97 @@ describe('Technical support subscriptions', () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+
+  it('computes ends_at and never stores it on subscriptions or orders', () => {
+    const created = createManualTechnicalSupportSubscription(db, {
+      phone: '+998901112233',
+      months: 1,
+      amount: 0,
+    });
+    const orderCols = db.prepare('PRAGMA table_info(technical_support_subscription_orders)').all();
+    const subCols = db.prepare('PRAGMA table_info(technical_support_subscriptions)').all();
+    assert.ok(!orderCols.some((col) => col.name === 'ends_at'));
+    assert.ok(!subCols.some((col) => col.name === 'ends_at'));
+    const stored = db
+      .prepare('SELECT * FROM technical_support_subscription_orders WHERE id = ?')
+      .get(created.subscription.id);
+    assert.equal(stored.ends_at, undefined);
+    assert.equal(
+      created.subscription.ends_at,
+      addCalendarMonths(new Date(created.subscription.starts_at), 1).toISOString()
+    );
+  });
+
+  it('normalizes phone variants onto one subscription with stacked orders', () => {
+    const first = createManualTechnicalSupportSubscription(db, {
+      phone: '90 111-22-33',
+      months: 1,
+      amount: 0,
+    });
+    const second = createManualTechnicalSupportSubscription(db, {
+      phone: '+998 (90) 111-22-33',
+      months: 3,
+      amount: 1000,
+    });
+    assert.equal(first.subscription.phone, '+998901112233');
+    assert.equal(first.subscription.phone_key, '998901112233');
+    assert.equal(second.subscription.phone, '+998901112233');
+    assert.equal(second.subscription.phone_key, '998901112233');
+    assert.equal(second.subscription.starts_at, first.subscription.ends_at);
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM technical_support_subscriptions').get().count,
+      1
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM technical_support_subscription_orders').get().count,
+      2
+    );
+  });
+
+  it('migrates legacy rows off stored ends_at', () => {
+    db.exec('DROP TABLE IF EXISTS technical_support_subscription_orders');
+    db.exec('DROP TABLE IF EXISTS technical_support_subscriptions');
+    db.exec(`
+      CREATE TABLE technical_support_subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone TEXT NOT NULL,
+        phone_key TEXT NOT NULL,
+        order_id TEXT NOT NULL UNIQUE,
+        months INTEGER NOT NULL,
+        amount INTEGER NOT NULL,
+        starts_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    db.prepare(
+      `INSERT INTO technical_support_subscriptions
+       (phone, phone_key, order_id, months, amount, starts_at, ends_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      '+998 90 111 22 33',
+      '998901112233',
+      'manual:legacy',
+      1,
+      0,
+      '2026-01-01T00:00:00.000Z',
+      '2026-02-01T00:00:00.000Z'
+    );
+
+    ensureTechnicalSupportTables(db);
+
+    const subCols = db.prepare('PRAGMA table_info(technical_support_subscriptions)').all();
+    const orderCols = db.prepare('PRAGMA table_info(technical_support_subscription_orders)').all();
+    assert.ok(!subCols.some((col) => col.name === 'ends_at'));
+    assert.ok(!orderCols.some((col) => col.name === 'ends_at'));
+    const listed = listTechnicalSupportSubscriptions(db, {});
+    assert.equal(listed.total, 1);
+    assert.equal(listed.items[0].phone, '+998901112233');
+    assert.equal(listed.items[0].starts_at, '2026-01-01T00:00:00.000Z');
+    assert.equal(
+      listed.items[0].ends_at,
+      addCalendarMonths(new Date('2026-01-01T00:00:00.000Z'), 1).toISOString()
+    );
   });
 });

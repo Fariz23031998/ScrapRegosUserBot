@@ -66,3 +66,20 @@ export function phonesEqual(left: unknown, right: unknown): boolean {
   const bTail = b.slice(-9);
   return aTail.length >= 9 && aTail === bTail;
 }
+
+export function canonicalizeUzbekPhone(phone: unknown): string | null {
+  let digits = String(phone ?? "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 9 && digits.startsWith("9")) digits = `998${digits}`;
+  if (digits.length === 12 && digits.startsWith("998")) return `+${digits}`;
+  return null;
+}
+
+export function formatUzbekPhone(phone: unknown): string {
+  const canonical = canonicalizeUzbekPhone(phone);
+  const digits = canonical ? canonical.slice(1) : String(phone ?? "").replace(/\D/g, "");
+  const match = /^998(\d{2})(\d{3})(\d{2})(\d{2})$/.exec(digits);
+  if (!match) return String(phone ?? "").trim() || "—";
+  const [, code, first, second, third] = match;
+  return `+998 ${code} ${first}-${second}-${third}`;
+}

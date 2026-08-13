@@ -117,7 +117,13 @@ function FieldValue({
   if (isAudioUrl(text) || (isHttpUrl(text) && isRecordingField(field))) {
     return (
       <div className="ticket-audio">
-        <audio className="ticket-audio__player" controls preload="metadata" src={ticketRecordingUrl(ticketId)}>
+        <audio
+          className="ticket-audio__player"
+          controls
+          preload="metadata"
+          crossOrigin="use-credentials"
+          src={ticketRecordingUrl(ticketId)}
+        >
           Ваш браузер не поддерживает воспроизведение аудио.
         </audio>
         <a className="ticket-audio__link" href={text} target="_blank" rel="noopener noreferrer">
@@ -149,7 +155,14 @@ function ProbeMedia({ url, name }: { url: string; name: string }) {
   if (mode === "audio") {
     return (
       <div className="ticket-chat__media ticket-chat__media--audio">
-        <audio className="ticket-chat__audio" controls preload="metadata" src={url} onError={() => setMode("link")} />
+        <audio
+          className="ticket-chat__audio"
+          controls
+          preload="metadata"
+          crossOrigin="use-credentials"
+          src={url}
+          onError={() => setMode("link")}
+        />
         <a className="ticket-chat__media-link" href={url} target="_blank" rel="noopener noreferrer">
           {name}
         </a>
@@ -164,6 +177,7 @@ function ProbeMedia({ url, name }: { url: string; name: string }) {
           controls
           preload="metadata"
           playsInline
+          crossOrigin="use-credentials"
           src={url}
           onError={() => setMode("audio")}
         />
@@ -180,6 +194,7 @@ function ProbeMedia({ url, name }: { url: string; name: string }) {
         src={url}
         alt={name}
         loading="lazy"
+        crossOrigin="use-credentials"
         onError={() => setMode("video")}
       />
     </div>
@@ -196,14 +211,14 @@ function ChatFileAttachment({ ticketId, file }: { ticketId: number; file: ChatFi
   if (isChatImage(file)) {
     return (
       <a className="ticket-chat__image-link" href={url} target="_blank" rel="noopener noreferrer">
-        <img className="ticket-chat__image" src={url} alt={name} loading="lazy" />
+        <img className="ticket-chat__image" src={url} alt={name} loading="lazy" crossOrigin="use-credentials" />
       </a>
     );
   }
   if (isChatAudio(file)) {
     return (
       <div className="ticket-chat__media ticket-chat__media--audio">
-        <audio className="ticket-chat__audio" controls preload="metadata">
+        <audio className="ticket-chat__audio" controls preload="metadata" crossOrigin="use-credentials">
           <source src={url} type={mimeType || undefined} />
         </audio>
         <a className="ticket-chat__media-link" href={url} target="_blank" rel="noopener noreferrer">
@@ -215,7 +230,7 @@ function ChatFileAttachment({ ticketId, file }: { ticketId: number; file: ChatFi
   if (isChatVideo(file)) {
     return (
       <div className="ticket-chat__media ticket-chat__media--video">
-        <video className="ticket-chat__video" controls preload="metadata" playsInline>
+        <video className="ticket-chat__video" controls preload="metadata" playsInline crossOrigin="use-credentials">
           <source src={url} type={mimeType || undefined} />
         </video>
         <a className="ticket-chat__media-link" href={url} target="_blank" rel="noopener noreferrer">

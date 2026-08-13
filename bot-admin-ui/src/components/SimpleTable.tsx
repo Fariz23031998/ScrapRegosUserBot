@@ -7,6 +7,7 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
+  type PointerSensorOptions,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -28,7 +29,15 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { SlidersHorizontal } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { getTablePrefs, saveTablePrefs } from "../lib/table-prefs-db";
 import { matchesSearch } from "../lib/utils";
 import LoadingState from "./LoadingState";
@@ -49,6 +58,23 @@ type SimpleTableProps<T> = {
   serverSideSearch?: boolean;
 };
 
+class HeaderPointerSensor extends PointerSensor {
+  static activators = [
+    {
+      eventName: "onPointerDown" as const,
+      handler: (
+        { nativeEvent: event }: ReactPointerEvent,
+        { onActivation }: PointerSensorOptions,
+      ) => {
+        if (!event.isPrimary || event.button !== 0) return false;
+        if (event.target instanceof Element && event.target.closest("[data-no-dnd]")) return false;
+        onActivation?.({ event });
+        return true;
+      },
+    },
+  ];
+}
+
 function SortableHeader({
   id,
   children,
@@ -58,7 +84,7 @@ function SortableHeader({
   id: string;
   children: ReactNode;
   width: number;
-  onResizeStart: (event: React.MouseEvent) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const style = {
@@ -70,10 +96,18 @@ function SortableHeader({
   };
 
   return (
-    <th ref={setNodeRef} style={style} {...attributes} {...listeners}>
+    <th ref={setNodeRef} style={style} className={isDragging ? "is-dragging" : undefined}>
       <div className="table-header-cell">
-        {children}
-        <span className="column-resizer" onMouseDown={onResizeStart} onClick={(e) => e.stopPropagation()} />
+        <div className="table-header-cell__drag" {...attributes} {...listeners}>
+          {children}
+        </div>
+        <span
+          className="column-resizer"
+          data-no-dnd
+          aria-hidden="true"
+          onPointerDown={onResizeStart}
+          onClick={(event) => event.stopPropagation()}
+        />
       </div>
     </th>
   );
@@ -102,21 +136,24 @@ export default function SimpleTable<T>({
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const sensors = useSensors(useSensor(HeaderPointerSensor, { activationConstraint: { distance: 6 } }));
 
   useEffect(() => {
     let cancelled = false;
-    void getTablePrefs(tableKey).then((prefs) => {
-      if (cancelled || !prefs) {
+    void getTablePrefs(tableKey)
+      .then((prefs) => {
+        if (cancelled) return;
+        if (prefs) {
+          setSorting(prefs.sorting || []);
+          setColumnVisibility(prefs.columnVisibility || {});
+          setColumnSizing(prefs.columnSizing || {});
+          setColumnOrder(prefs.columnOrder || []);
+        }
         setPrefsLoaded(true);
-        return;
-      }
-      setSorting(prefs.sorting || []);
-      setColumnVisibility(prefs.columnVisibility || {});
-      setColumnSizing(prefs.columnSizing || {});
-      setColumnOrder(prefs.columnOrder || []);
-      setPrefsLoaded(true);
-    });
+      })
+      .catch(() => {
+        if (!cancelled) setPrefsLoaded(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -190,23 +227,30 @@ export default function SimpleTable<T>({
     [headerIds],
   );
 
-  function startResize(columnId: string, event: React.MouseEvent) {
+  function startResize(columnId: string, event: ReactPointerEvent<HTMLElement>) {
     event.preventDefault();
+    event.stopPropagation();
+    const handle = event.currentTarget;
     const startX = event.clientX;
     const startWidth = table.getColumn(columnId)?.getSize() ?? 120;
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("is-column-resizing");
 
-    function onMove(moveEvent: MouseEvent) {
+    function onMove(moveEvent: PointerEvent) {
       const next = Math.max(80, startWidth + moveEvent.clientX - startX);
       setColumnSizing((prev) => ({ ...prev, [columnId]: next }));
     }
 
     function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
+      document.body.classList.remove("is-column-resizing");
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
     }
 
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
   }
 
   const headerGroup = table.getHeaderGroups()[0];

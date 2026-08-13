@@ -19,14 +19,17 @@ import {
   updateClient,
 } from "../api/tickets";
 import filterFunnelIcon from "../assets/filter-funnel.png";
+import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import Modal from "../components/Modal";
-import Pagination from "../components/Pagination";
 import SearchField from "../components/SearchField";
 import SimpleTable from "../components/SimpleTable";
+import SummaryBar from "../components/SummaryBar";
 import TicketCards from "../components/TicketCards";
 import { PeriodFilterButton, TicketPeriodModal } from "../components/TicketPeriodModal";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
+import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
+import { useStickyOffsetVar } from "../hooks/useStickyOffsetVar";
 import { useDurationAwareSummary, useTicketRecordingDurations } from "../hooks/useTicketListDurations";
 import { useTicketEvents } from "../hooks/useTicketEvents";
 import { useUiPreferences } from "../hooks/useUiPreferences";
@@ -308,13 +311,13 @@ export default function TicketsPage() {
   const navigate = useNavigate();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const { toggleNav } = useAdminShell();
+  const stickyHeadRef = useRef<HTMLDivElement>(null);
+  useStickyOffsetVar(stickyHeadRef);
   const { hasPermission, actor } = useAuth();
   const { dateTimeFormat } = useUiPreferences();
   const queryClient = useQueryClient();
   const [filterBootstrap] = useState(loadFilters);
   const [filters, setFilters] = useState(filterBootstrap.filters);
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
   const [appliedFilters, setAppliedFilters] = useState(filterBootstrap.filters);
   // Only auto-default Ответственный when nothing was persisted yet (matches legacy admin UI).
   const [filtersReady, setFiltersReady] = useState(filterBootstrap.fromStorage);
@@ -364,9 +367,11 @@ export default function TicketsPage() {
     enabled: clientQuery.trim().length >= 2,
   });
 
-  const ticketsQuery = useQuery({
-    queryKey: ["tickets", page, limit, appliedFilters],
-    queryFn: () => listTickets(buildListParams(page, limit, appliedFilters)),
+  const ticketsQuery = usePagedInfiniteQuery({
+    queryKey: ["tickets", appliedFilters],
+    queryFn: (page, pageSize) => listTickets(buildListParams(page, pageSize, appliedFilters)),
+    getItems: (data) => data.tickets || [],
+    getItemId: (ticket) => ticket.id,
     enabled: filtersReady,
   });
 
@@ -386,13 +391,14 @@ export default function TicketsPage() {
     return map;
   }, [channelsQuery.data?.channels]);
 
-  const tickets = ticketsQuery.data?.tickets || [];
-  const total = ticketsQuery.data?.total || 0;
-  const activeTicket = ticketsQuery.data?.active_ticket || null;
+  const tickets = ticketsQuery.items;
+  const total = ticketsQuery.total;
+  const firstPage = ticketsQuery.data?.pages[0];
+  const activeTicket = firstPage?.active_ticket || null;
   const recordingDurations = useTicketRecordingDurations(tickets);
 
   const fallbackSummary = useMemo(() => {
-    const raw = ticketsQuery.data?.summary as
+    const raw = firstPage?.summary as
       | { count?: number; slaBreached?: number; rated?: number }
       | undefined;
     return {
@@ -400,10 +406,10 @@ export default function TicketsPage() {
       slaBreached: raw?.slaBreached ?? 0,
       rated: raw?.rated ?? 0,
     };
-  }, [ticketsQuery.data?.summary, total]);
+  }, [firstPage?.summary, total]);
 
   const { summary, calculating: summaryCalculating } = useDurationAwareSummary(
-    ticketsQuery.data?.duration_summary as DurationSummary | null | undefined,
+    firstPage?.duration_summary as DurationSummary | null | undefined,
     appliedFilters.minDuration,
     fallbackSummary,
   );
@@ -606,7 +612,6 @@ export default function TicketsPage() {
   );
 
   function applyFilters() {
-    setPage(1);
     setAppliedFilters(filters);
   }
 
@@ -616,10 +621,6 @@ export default function TicketsPage() {
 
   return (
     <section className="card tickets-page">
-      <div className="card-toolbar tickets-page__title">
-        <h1>Тикеты</h1>
-      </div>
-
       {activeTicket ? (
         <ActiveTicketBanner
           ticket={activeTicket}
@@ -633,24 +634,19 @@ export default function TicketsPage() {
       ) : null}
       {successMessage ? <p className="message success">{successMessage}</p> : null}
 
-      <div className="tickets-sticky-head">
-        <div className="summary-bar">
-          {summaryCalculating ? (
-            <span className="tickets-summary__calculating">Расчёт итогов по длительности звонков…</span>
-          ) : (
-            <>
-              <span>
-                <strong>{summary.count}</strong> тикетов
-              </span>
-              <span>
-                SLA нарушен: <strong>{summary.slaBreached}</strong>
-              </span>
-              <span>
-                С оценкой: <strong>{summary.rated}</strong>
-              </span>
-            </>
-          )}
-        </div>
+      <div className="tickets-sticky-head" ref={stickyHeadRef}>
+        <SummaryBar
+          placeholder={summaryCalculating ? "Расчёт итогов по длительности звонков…" : undefined}
+          items={
+            summaryCalculating
+              ? undefined
+              : [
+                  { label: "тикетов", value: summary.count, tone: "neutral", valueFirst: true },
+                  { label: "SLA нарушен", value: summary.slaBreached, tone: "danger" },
+                  { label: "С оценкой", value: summary.rated, tone: "ok" },
+                ]
+          }
+        />
 
         <form
           className="ticket-filters"
@@ -668,7 +664,7 @@ export default function TicketsPage() {
               onOpenPeriod={() => setPeriodOpen(true)}
               showActions
               onRefresh={() => void ticketsQuery.refetch()}
-              refreshing={ticketsQuery.isFetching}
+              refreshing={ticketsQuery.isFetching && !ticketsQuery.isFetchingNextPage}
             />
           </div>
 
@@ -691,12 +687,10 @@ export default function TicketsPage() {
               {filtersActive ? <span className="ticket-filters__open-dot" aria-hidden="true" /> : null}
             </button>
             <label className="ticket-filters__search">
-              <span>Поиск</span>
               <SearchField
                 value={filters.search}
                 onChange={(value) => {
                   setFilters((current) => ({ ...current, search: value }));
-                  setPage(1);
                   setAppliedFilters((current) => ({ ...current, search: value }));
                 }}
                 placeholder="Тема, клиент, телефон"
@@ -737,7 +731,7 @@ export default function TicketsPage() {
               aria-label="Обновить"
               title="Обновить"
               onClick={() => void ticketsQuery.refetch()}
-              disabled={ticketsQuery.isFetching}
+              disabled={ticketsQuery.isFetching && !ticketsQuery.isFetchingNextPage}
             >
               <RefreshCw size={18} aria-hidden="true" />
             </button>
@@ -770,7 +764,7 @@ export default function TicketsPage() {
         {compact ? (
           <TicketCards
             tickets={tickets}
-            isLoading={ticketsQuery.isLoading}
+            isLoading={ticketsQuery.isPending}
             emptyMessage={
               appliedFilters.search ||
               appliedFilters.status ||
@@ -802,7 +796,7 @@ export default function TicketsPage() {
             tableKey="bot-admin.tickets"
             data={tickets}
             columns={columns}
-            isLoading={ticketsQuery.isLoading}
+            isLoading={ticketsQuery.isPending}
             serverSideSearch
             emptyMessage={
               appliedFilters.search ||
@@ -818,7 +812,13 @@ export default function TicketsPage() {
             onRowClick={(row) => navigate(`/tickets/${row.id}`)}
           />
         )}
-        <Pagination page={page} limit={limit} total={total} onPageChange={setPage} onLimitChange={setLimit} />
+        <InfiniteScrollSentinel
+          loaded={tickets.length}
+          total={total}
+          hasNextPage={Boolean(ticketsQuery.hasNextPage)}
+          isFetchingNextPage={ticketsQuery.isFetchingNextPage}
+          fetchNextPage={ticketsQuery.fetchNextPage}
+        />
       </div>
 
       <CreateTicketModal
@@ -991,6 +991,7 @@ function RecordingModal({ ticket, onClose }: { ticket: Ticket | null; onClose: (
             className="ticket-recording-modal__player"
             controls
             preload="metadata"
+            crossOrigin="use-credentials"
             src={ticketRecordingUrl(ticket.id)}
           >
             Ваш браузер не поддерживает воспроизведение аудио.

@@ -4,19 +4,25 @@ React/TypeScript rebuild of the Bot Admin panel. The legacy vanilla UI in `publi
 
 ## Development
 
-1. Start the main server (default port 3000):
+1. Copy `.env.example` to `.env` and set the backend origin. For phone/LAN testing use the machine IP, not `localhost`:
+
+```env
+VITE_API_BASE_URL=http://10.148.213.195:3000
+```
+
+2. Start the main server (default port 3000):
 
 ```bash
 npm run server
 ```
 
-2. In another terminal, start the Vite dev server:
+3. In another terminal, start the Vite dev server:
 
 ```bash
 npm run bot-admin-ui:dev
 ```
 
-Open http://localhost:5301/bot-admin/ — API requests are proxied to the backend.
+Open http://localhost:5301/bot-admin/ (trailing slash) with the backend running. On a phone on the same Wi-Fi, open http://10.148.213.195:5301/bot-admin/. The browser calls same-origin `/bot-admin/api/*`; Vite proxies those to `VITE_API_BASE_URL`. Deep links such as `/bot-admin/prices` should be opened under that base path.
 
 ## Production cutover
 
@@ -25,6 +31,8 @@ Open http://localhost:5301/bot-admin/ — API requests are proxied to the backen
 ```bash
 npm run bot-admin-ui:build
 ```
+
+Leave `VITE_API_BASE_URL` empty for a same-origin production build. Dev-only `.env` values are not used by `vite build` unless you also set them in `.env.production`.
 
 2. Enable the React UI on the server:
 

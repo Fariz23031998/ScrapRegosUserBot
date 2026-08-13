@@ -12,6 +12,8 @@ const DIRECTION_LABELS = {
 
 const UNASSIGNED_LABEL = 'Не назначен';
 
+const HIDDEN_SYSTEM_ACTIONS = new Set(['TicketEdited', 'TicketParticipantsSet']);
+
 function parseActionPayload(raw) {
   if (raw == null || raw === '') return null;
   if (typeof raw === 'object') return raw;
@@ -87,8 +89,23 @@ function formatStaffNoticeAdded(payload, message) {
   return text || null;
 }
 
+function isHiddenSystemMessage(message) {
+  if (String(message?.message_type || '') !== 'System') {
+    return false;
+  }
+  const actionCode = String(message?.action_code || '').trim();
+  if (HIDDEN_SYSTEM_ACTIONS.has(actionCode)) {
+    return true;
+  }
+  const text = String(message?.text || '').trim();
+  return HIDDEN_SYSTEM_ACTIONS.has(text);
+}
+
 function formatSystemChatMessage(message, { userNames = {}, ticketId } = {}) {
   if (String(message?.message_type || '') !== 'System') {
+    return null;
+  }
+  if (isHiddenSystemMessage(message)) {
     return null;
   }
 
@@ -123,20 +140,24 @@ function formatSystemChatMessage(message, { userNames = {}, ticketId } = {}) {
 }
 
 function enrichChatMessages(messages, options = {}) {
-  return (messages || []).map((message) => {
-    const displayText = formatSystemChatMessage(message, options);
-    if (!displayText) {
-      return message;
-    }
-    return { ...message, display_text: displayText };
-  });
+  return (messages || [])
+    .filter((message) => !isHiddenSystemMessage(message))
+    .map((message) => {
+      const displayText = formatSystemChatMessage(message, options);
+      if (!displayText) {
+        return message;
+      }
+      return { ...message, display_text: displayText };
+    });
 }
 
 module.exports = {
   STATUS_LABELS,
   DIRECTION_LABELS,
   UNASSIGNED_LABEL,
+  HIDDEN_SYSTEM_ACTIONS,
   parseActionPayload,
+  isHiddenSystemMessage,
   formatSystemChatMessage,
   enrichChatMessages,
 };

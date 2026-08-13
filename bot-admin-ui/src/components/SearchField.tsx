@@ -28,6 +28,7 @@ export default function SearchField({
         className="search-box__input"
         value={local}
         placeholder={placeholder}
+        aria-label="Поиск"
         autoComplete="off"
         onChange={(event) => {
           setLocal(event.target.value);

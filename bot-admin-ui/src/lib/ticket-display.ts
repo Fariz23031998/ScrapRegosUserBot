@@ -1,3 +1,4 @@
+import { apiUrl } from "./api-url";
 import type { Ticket, TicketFirmLink, TicketLocalData } from "./types";
 import { formatDateObject } from "./ui-preferences";
 
@@ -239,6 +240,7 @@ export function loadRecordingDuration(ticketId: number): Promise<number | null> 
 
   const promise = new Promise<number | null>((resolve) => {
     const audio = new Audio();
+    audio.crossOrigin = "use-credentials";
     audio.preload = "metadata";
     const timeout = window.setTimeout(() => finish(null), 15_000);
 
@@ -267,7 +269,7 @@ export function loadRecordingDuration(ticketId: number): Promise<number | null> 
 
     audio.addEventListener("loadedmetadata", onLoaded, { once: true });
     audio.addEventListener("error", onError, { once: true });
-    audio.src = `/bot-admin/api/tickets/${encodeURIComponent(key)}/recording`;
+    audio.src = apiUrl(`/bot-admin/api/tickets/${encodeURIComponent(key)}/recording`);
   }).finally(() => {
     recordingDurationPromises.delete(key);
   });

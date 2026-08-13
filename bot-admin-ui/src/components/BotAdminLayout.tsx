@@ -50,9 +50,7 @@ export default function BotAdminLayout() {
   const location = useLocation();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [navVisible, setNavVisible] = useState(loadNavVisible);
-  const isTicketsList = /^\/tickets\/?$/.test(location.pathname);
-  const isTicketDetail = /^\/tickets\/[^/]+\/?$/.test(location.pathname);
-  const hideCompactNavButton = isTicketsList || isTicketDetail;
+  const hideCompactNavButton = /^\/tickets(\/|$)/.test(location.pathname);
   const toggleNav = useCallback(() => setNavVisible((value) => !value), []);
   const shellContext = useMemo<AdminShellContextValue>(
     () => ({ navVisible, toggleNav, setNavVisible }),
@@ -332,17 +330,22 @@ export default function BotAdminLayout() {
       ) : null}
 
       <div className="admin-main">
-        {compact && !hideCompactNavButton ? (
-          <header className="admin-topbar">
-            <button type="button" className="sidebar-icon-btn" aria-label="Меню" onClick={toggleNav}>
-              <Menu size={18} />
-            </button>
-          </header>
-        ) : null}
-
         <main className="admin-content">
           <Outlet />
         </main>
+        {compact && !hideCompactNavButton ? (
+          <div className="tickets-fab-dock">
+            <button
+              type="button"
+              className="tickets-fab tickets-fab--nav"
+              aria-label="Меню"
+              title="Меню"
+              onClick={toggleNav}
+            >
+              <Menu size={22} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
     </AdminShellProvider>

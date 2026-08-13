@@ -54,6 +54,7 @@ describe('ticket local enrichment', () => {
 
   beforeEach(() => {
     db.exec('DELETE FROM orders');
+    db.exec('DELETE FROM technical_support_subscription_orders');
     db.exec('DELETE FROM technical_support_subscriptions');
     db.exec('DELETE FROM client_firm_links');
   });
@@ -96,8 +97,8 @@ describe('ticket local enrichment', () => {
     const paidOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(supportOrder.id);
     activateTechnicalSupportFromOrder(db, paidOrder, { paidAt });
     db.prepare(
-      `UPDATE technical_support_subscriptions
-       SET starts_at = '2024-01-01T00:00:00.000Z', ends_at = '2024-02-01T00:00:00.000Z'`
+      `UPDATE technical_support_subscription_orders
+       SET starts_at = '2024-01-01T00:00:00.000Z', created_at = '2024-01-01T00:00:00.000Z'`
     ).run();
 
     addLink(db, {
@@ -153,8 +154,8 @@ describe('ticket local enrichment', () => {
     const paidOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(supportOrder.id);
     activateTechnicalSupportFromOrder(db, paidOrder, { paidAt });
     db.prepare(
-      `UPDATE technical_support_subscriptions
-       SET starts_at = '2024-01-01T00:00:00.000Z', ends_at = '2024-02-01T00:00:00.000Z'`
+      `UPDATE technical_support_subscription_orders
+       SET starts_at = '2024-01-01T00:00:00.000Z', created_at = '2024-01-01T00:00:00.000Z'`
     ).run();
 
     addLink(db, {

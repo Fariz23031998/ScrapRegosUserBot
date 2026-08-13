@@ -449,7 +449,7 @@ function parsePaginationQuery(req) {
 const ORDER_STATUS_LABELS = {
   pending: 'Неоплачен',
   paid: 'Оплачен',
-  paid_cash: 'Наличные',
+  paid_cash: 'Оплачен',
   deleted: 'Удалён',
 };
 
@@ -2033,6 +2033,7 @@ function createBotAdminRouter(db) {
     const query = String(req.query.q || '').trim();
     const clientPhone = String(req.query.client || req.query.client_phone || '').trim();
     const status = String(req.query.status || '').trim();
+    const paymentProvider = String(req.query.payment || req.query.payment_provider || '').trim();
     const fromDate = String(req.query.from_date || '').trim();
     const toDate = String(req.query.to_date || '').trim();
     const telegramIdRaw = String(req.query.telegram_id || req.query.employee || '').trim();
@@ -2042,6 +2043,7 @@ function createBotAdminRouter(db) {
       query: query || undefined,
       clientPhone: clientPhone || undefined,
       status: status || undefined,
+      paymentProvider: paymentProvider || undefined,
       from: fromDate || undefined,
       to: toDate || undefined,
       telegramId: Number.isFinite(telegramId) && telegramId !== 0 ? telegramId : undefined,
@@ -2060,6 +2062,7 @@ function createBotAdminRouter(db) {
       total: result.total,
       page,
       limit,
+      summary: result.summary,
     });
   });
 
@@ -2646,10 +2649,13 @@ function createBotAdminRouter(db) {
           summary: `Обновлена дата окончания подписки ТП #${req.params.id}`,
           details: buildAuditDetails({
             before: before
-              ? { ends_at: before.ends_at ?? null, phone: before.phone ?? null }
+              ? {
+                  ends_at: mapSubscriptionRow(before).ends_at ?? null,
+                  phone: before.phone ?? null,
+                }
               : null,
             after: {
-              ends_at: result.subscription?.ends_at ?? req.body?.ends_at ?? null,
+              ends_at: result.subscription?.ends_at ?? null,
               phone: result.subscription?.phone ?? before?.phone ?? null,
             },
           }),

@@ -11,20 +11,23 @@ import {
   renotifyOrder,
 } from "../api/admin";
 import EntityCards from "../components/EntityCards";
+import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
-import Pagination from "../components/Pagination";
 import SimpleTable from "../components/SimpleTable";
+import SummaryBar from "../components/SummaryBar";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
+import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { useUiPreferences } from "../hooks/useUiPreferences";
-import type { Order } from "../lib/types";
+import type { Order, OrderSummary } from "../lib/types";
 import { formatAmount, formatDateTime } from "../lib/utils";
 
 type OrderFilters = {
   search: string;
   client: string;
   status: string;
+  payment: string;
   employee: string;
   fromDate: string;
   toDate: string;
@@ -42,10 +45,14 @@ function employeeOptionLabel(employee: {
 }
 
 function defaultFiltersFromParams(params: URLSearchParams): OrderFilters {
+  const statusRaw = params.get("status") || "";
+  const paymentRaw = params.get("payment") || params.get("payment_provider") || "";
+  const statusIsCash = statusRaw === "paid_cash";
   return {
     search: params.get("q") || "",
     client: params.get("client") || "",
-    status: params.get("status") || "",
+    status: statusIsCash ? "paid" : statusRaw,
+    payment: paymentRaw || (statusIsCash ? "cash" : ""),
     employee: params.get("telegram_id") || params.get("employee") || "",
     fromDate: params.get("from_date") || "",
     toDate: params.get("to_date") || "",
@@ -53,7 +60,55 @@ function defaultFiltersFromParams(params: URLSearchParams): OrderFilters {
 }
 
 function filtersHaveAdvancedValues(filters: OrderFilters) {
-  return Boolean(filters.client || filters.status || filters.employee || filters.fromDate || filters.toDate);
+  return Boolean(
+    filters.client ||
+      filters.status ||
+      filters.payment ||
+      filters.employee ||
+      filters.fromDate ||
+      filters.toDate,
+  );
+}
+
+function emptyOrderSummary(count = 0): OrderSummary {
+  return { count, pending: 0, paid: 0, deleted: 0, amount: 0 };
+}
+
+function addOrderToSummary(summary: OrderSummary, order: Order) {
+  const status = String(order.status || "");
+  if (status === "pending") summary.pending += 1;
+  else if (status === "paid" || status === "paid_cash") summary.paid += 1;
+  else if (status === "deleted") summary.deleted += 1;
+  if (status === "paid" || status === "paid_cash") {
+    const amount = Number(order.amount);
+    if (Number.isFinite(amount)) summary.amount += amount;
+  }
+}
+
+function resolveOrderSummary(
+  pages: Array<{ summary?: OrderSummary }> | undefined,
+  total: number,
+  orders: Order[],
+): OrderSummary {
+  const fromApi = pages?.find((page) => page.summary)?.summary;
+  if (fromApi) {
+    return {
+      count: Number(fromApi.count) || total,
+      pending: Number(fromApi.pending) || 0,
+      paid: Number(fromApi.paid) || 0,
+      deleted: Number(fromApi.deleted) || 0,
+      amount: Number(fromApi.amount) || 0,
+    };
+  }
+  const summary = emptyOrderSummary(total);
+  for (const order of orders) addOrderToSummary(summary, order);
+  return summary;
+}
+
+function orderStatusLabel(order: Order): string {
+  const status = String(order.status || "");
+  if (status === "paid" || status === "paid_cash") return "Оплачен";
+  return order.status_label || status || "—";
 }
 
 function OrderFilterFields({
@@ -87,8 +142,19 @@ function OrderFilterFields({
           <option value="">Все</option>
           <option value="pending">Ожидает оплаты</option>
           <option value="paid">Оплачен</option>
-          <option value="paid_cash">Наличные</option>
           <option value="deleted">Удалён</option>
+        </select>
+      </label>
+      <label className="ticket-filters__field">
+        <span>Тип оплаты</span>
+        <select
+          value={filters.payment}
+          onChange={(e) => setFilters({ ...filters, payment: e.target.value })}
+        >
+          <option value="">Все</option>
+          <option value="payme">Payme</option>
+          <option value="click">CLICK</option>
+          <option value="cash">Наличные</option>
         </select>
       </label>
       <label className="ticket-filters__field">
@@ -168,8 +234,6 @@ export default function OrdersPage() {
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [searchParams, setSearchParams] = useSearchParams();
   const bootstrap = defaultFiltersFromParams(searchParams);
-  const [page, setPage] = useState(Number(searchParams.get("page")) || 1);
-  const [limit, setLimit] = useState(25);
   const [filters, setFilters] = useState(bootstrap);
   const [appliedFilters, setAppliedFilters] = useState(bootstrap);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
@@ -179,19 +243,22 @@ export default function OrdersPage() {
     queryFn: listOrderEmployees,
   });
 
-  const ordersQuery = useQuery({
-    queryKey: ["orders", page, limit, appliedFilters],
-    queryFn: () =>
+  const ordersQuery = usePagedInfiniteQuery({
+    queryKey: ["orders", appliedFilters],
+    queryFn: (page, pageSize) =>
       listOrders({
         page: String(page),
-        limit: String(limit),
+        limit: String(pageSize),
         ...(appliedFilters.search ? { q: appliedFilters.search } : {}),
         ...(appliedFilters.client ? { client: appliedFilters.client } : {}),
         ...(appliedFilters.status ? { status: appliedFilters.status } : {}),
+        ...(appliedFilters.payment ? { payment: appliedFilters.payment } : {}),
         ...(appliedFilters.employee ? { telegram_id: appliedFilters.employee } : {}),
         ...(appliedFilters.fromDate ? { from_date: appliedFilters.fromDate } : {}),
         ...(appliedFilters.toDate ? { to_date: appliedFilters.toDate } : {}),
       }),
+    getItems: (data) => data.orders || [],
+    getItemId: (order) => order.id,
   });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["orders"] });
@@ -218,22 +285,21 @@ export default function OrdersPage() {
     if (ok) actionMutation.mutate({ action, id });
   }
 
-  function syncParams(nextFilters: OrderFilters, nextPage = page) {
+  function syncParams(nextFilters: OrderFilters) {
     const next = new URLSearchParams();
     if (nextFilters.search) next.set("q", nextFilters.search);
     if (nextFilters.client) next.set("client", nextFilters.client);
     if (nextFilters.status) next.set("status", nextFilters.status);
+    if (nextFilters.payment) next.set("payment", nextFilters.payment);
     if (nextFilters.employee) next.set("telegram_id", nextFilters.employee);
     if (nextFilters.fromDate) next.set("from_date", nextFilters.fromDate);
     if (nextFilters.toDate) next.set("to_date", nextFilters.toDate);
-    if (nextPage > 1) next.set("page", String(nextPage));
     setSearchParams(next);
   }
 
   function applyFilters(next = filters) {
-    setPage(1);
     setAppliedFilters(next);
-    syncParams(next, 1);
+    syncParams(next);
   }
 
   const columns = useMemo<ColumnDef<Order>[]>(
@@ -243,7 +309,7 @@ export default function OrdersPage() {
       {
         id: "status",
         header: "Статус",
-        cell: ({ row }) => row.original.status_label || row.original.status || "—",
+        cell: ({ row }) => orderStatusLabel(row.original),
       },
       { id: "amount", header: "Сумма", accessorFn: (row) => formatAmount(row.amount) },
       {
@@ -291,8 +357,9 @@ export default function OrdersPage() {
     [hasPermission, dateTimeFormat],
   );
 
-  const orders = ordersQuery.data?.orders || [];
-  const total = ordersQuery.data?.total || 0;
+  const orders = ordersQuery.items;
+  const total = ordersQuery.total;
+  const orderSummary = resolveOrderSummary(ordersQuery.data?.pages, total, orders);
   const employees = employeesQuery.data?.employees || [];
   const filtersActive = filtersHaveAdvancedValues(appliedFilters);
   const emptyMessage =
@@ -302,18 +369,27 @@ export default function OrdersPage() {
 
   return (
     <section className="card">
-      <div className="card-toolbar">
-        <h1>Заказы</h1>
-      </div>
-
+      <SummaryBar
+        placeholder={ordersQuery.isPending ? "Загрузка…" : undefined}
+        items={
+          ordersQuery.isPending
+            ? undefined
+            : [
+                { label: "заказов", value: orderSummary.count, tone: "neutral", valueFirst: true },
+                { label: "Сумма", value: formatAmount(orderSummary.amount), tone: "info" },
+                { label: "Неоплачен", value: orderSummary.pending, tone: "warn" },
+                { label: "Оплачен", value: orderSummary.paid, tone: "ok" },
+                { label: "Удалён", value: orderSummary.deleted, tone: "muted" },
+              ]
+        }
+      />
       <ListFiltersChrome
         search={filters.search}
         onSearchChange={(value) => {
           const next = { ...filters, search: value };
           setFilters(next);
-          setPage(1);
           setAppliedFilters((current) => ({ ...current, search: value }));
-          syncParams({ ...appliedFilters, search: value }, 1);
+          syncParams({ ...appliedFilters, search: value });
         }}
         searchPlaceholder="ID или телефон"
         filtersActive={filtersActive}
@@ -325,6 +401,7 @@ export default function OrdersPage() {
             ...filters,
             client: "",
             status: "",
+            payment: "",
             employee: "",
             fromDate: "",
             toDate: "",
@@ -349,12 +426,12 @@ export default function OrdersPage() {
         {compact ? (
           <EntityCards
             items={orders}
-            isLoading={ordersQuery.isLoading}
+            isLoading={ordersQuery.isPending}
             emptyMessage={emptyMessage}
             getKey={(order) => order.id}
             getTitle={(order) => `Заказ ${order.id}`}
             getSubtitle={(order) =>
-              [order.status_label || order.status, formatAmount(order.amount)].filter(Boolean).join(" · ")
+              [orderStatusLabel(order), formatAmount(order.amount)].filter(Boolean).join(" · ")
             }
             getFields={(order) => [
               { label: "Дата", value: formatDateTime(order.created_at) },
@@ -381,13 +458,19 @@ export default function OrdersPage() {
             tableKey="bot-admin.orders"
             data={orders}
             columns={columns}
-            isLoading={ordersQuery.isLoading}
+            isLoading={ordersQuery.isPending}
             serverSideSearch
             emptyMessage={emptyMessage}
             getRowId={(row) => row.id}
           />
         )}
-        <Pagination page={page} limit={limit} total={total} onPageChange={setPage} onLimitChange={setLimit} />
+        <InfiniteScrollSentinel
+          loaded={orders.length}
+          total={total}
+          hasNextPage={Boolean(ordersQuery.hasNextPage)}
+          isFetchingNextPage={ordersQuery.isFetchingNextPage}
+          fetchNextPage={ordersQuery.fetchNextPage}
+        />
       </div>
     </section>
   );

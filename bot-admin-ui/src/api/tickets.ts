@@ -1,3 +1,4 @@
+import { apiUrl } from "../lib/api-url";
 import { apiFetch } from "./client";
 import type {
   Ticket,
@@ -129,13 +130,15 @@ export function saveChannelSettings(channels: Array<{ id: number; interaction_mo
 }
 
 export function ticketRecordingUrl(id: number) {
-  return `/bot-admin/api/tickets/${encodeURIComponent(String(id))}/recording`;
+  return apiUrl(`/bot-admin/api/tickets/${encodeURIComponent(String(id))}/recording`);
 }
 
 export function ticketFileUrl(ticketId: number | string, fileId: number | string) {
-  return `/bot-admin/api/tickets/${encodeURIComponent(String(ticketId))}/files/${encodeURIComponent(String(fileId))}`;
+  return apiUrl(
+    `/bot-admin/api/tickets/${encodeURIComponent(String(ticketId))}/files/${encodeURIComponent(String(fileId))}`,
+  );
 }
 
 export function ticketEventsUrl() {
-  return "/bot-admin/api/tickets/events";
+  return apiUrl("/bot-admin/api/tickets/events");
 }

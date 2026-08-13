@@ -1,15 +1,15 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { listAdminLogs } from "../api/admin";
 import EntityCards from "../components/EntityCards";
+import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
-import Pagination from "../components/Pagination";
 import SimpleTable from "../components/SimpleTable";
 import type { AdminLog } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
+import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 
 function formatAuditValue(value: unknown): string {
   if (value == null || value === "") return "—";
@@ -76,12 +76,12 @@ export default function LogsPage() {
   const { dateTimeFormat } = useUiPreferences();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
 
-  const query = useQuery({
-    queryKey: ["admin-logs", page, limit, search],
-    queryFn: () => listAdminLogs({ page, limit, q: search || undefined }),
+  const query = usePagedInfiniteQuery({
+    queryKey: ["admin-logs", search],
+    queryFn: (page, pageSize) => listAdminLogs({ page, limit: pageSize, q: search || undefined }),
+    getItems: (data) => data.logs || [],
+    getItemId: (log) => log.id,
   });
 
   const columns = useMemo<ColumnDef<AdminLog>[]>(
@@ -111,21 +111,14 @@ export default function LogsPage() {
     [dateTimeFormat],
   );
 
-  const logs = query.data?.logs || [];
-  const total = query.data?.total || 0;
+  const logs = query.items;
+  const total = query.total;
 
   return (
     <section className="card">
-      <div className="card-toolbar">
-        <h1>Журнал изменений</h1>
-      </div>
-
       <ListFiltersChrome
         search={search}
-        onSearchChange={(value) => {
-          setSearch(value);
-          setPage(1);
-        }}
+        onSearchChange={setSearch}
         searchPlaceholder="Поиск по журналу…"
       />
 
@@ -133,7 +126,7 @@ export default function LogsPage() {
         {compact ? (
           <EntityCards
             items={logs}
-            isLoading={query.isLoading}
+            isLoading={query.isPending}
             emptyMessage={search ? "Ничего не найдено." : "Записей пока нет."}
             getKey={(log) => String(log.id)}
             getTitle={(log) => log.action_label || log.action || "Событие"}
@@ -160,13 +153,19 @@ export default function LogsPage() {
             tableKey="bot-admin.logs"
             data={logs}
             columns={columns}
-            isLoading={query.isLoading}
+            isLoading={query.isPending}
             serverSideSearch
             emptyMessage={search ? "Ничего не найдено." : "Записей пока нет."}
             getRowId={(row) => String(row.id)}
           />
         )}
-        <Pagination page={page} limit={limit} total={total} onPageChange={setPage} onLimitChange={setLimit} />
+        <InfiniteScrollSentinel
+          loaded={logs.length}
+          total={total}
+          hasNextPage={Boolean(query.hasNextPage)}
+          isFetchingNextPage={query.isFetchingNextPage}
+          fetchNextPage={query.fetchNextPage}
+        />
       </div>
     </section>
   );

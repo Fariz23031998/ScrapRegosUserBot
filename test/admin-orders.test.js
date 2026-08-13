@@ -128,9 +128,48 @@ describe('listOrders helper', () => {
       status: 'pending',
     });
 
+    const all = listOrders(db, { limit: 50 });
+    assert.deepEqual(all.summary, {
+      count: 3,
+      pending: 2,
+      paid: 1,
+      deleted: 0,
+      amount: 20000,
+    });
+
     const byStatus = listOrders(db, { status: 'pending', limit: 50 });
     assert.equal(byStatus.total, 2);
     assert.ok(byStatus.orders.every((row) => row.status === 'pending'));
+    assert.deepEqual(byStatus.summary, {
+      count: 2,
+      pending: 2,
+      paid: 0,
+      deleted: 0,
+      amount: 0,
+    });
+
+    const cash = createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 1001,
+      botUserPhone: '998901111111',
+      clientPhone: '998908888888',
+      amount: 15000,
+      status: 'paid_cash',
+      paymentProvider: 'cash',
+    });
+    const paidIncludingCash = listOrders(db, { status: 'paid', limit: 50 });
+    assert.equal(paidIncludingCash.total, 2);
+    assert.ok(paidIncludingCash.orders.some((row) => row.id === cash.id));
+    assert.deepEqual(paidIncludingCash.summary, {
+      count: 2,
+      pending: 0,
+      paid: 2,
+      deleted: 0,
+      amount: 35000,
+    });
+    const byCash = listOrders(db, { paymentProvider: 'cash', limit: 50 });
+    assert.equal(byCash.total, 1);
+    assert.equal(byCash.orders[0].id, cash.id);
 
     createOrder(db, {
       id: crypto.randomUUID(),
@@ -416,6 +455,13 @@ describe('admin orders API', () => {
     assert.equal(all.statusCode, 200);
     const allBody = JSON.parse(all.body);
     assert.equal(allBody.total, 2);
+    assert.deepEqual(allBody.summary, {
+      count: 2,
+      pending: 1,
+      paid: 1,
+      deleted: 0,
+      amount: 20000,
+    });
 
     const filtered = await request(server, 'GET', '/bot-admin/api/orders?status=pending', {
       headers: { Cookie: cookie },
@@ -437,6 +483,35 @@ describe('admin orders API', () => {
     const byClientBody = JSON.parse(byClient.body);
     assert.equal(byClientBody.total, 1);
     assert.equal(byClientBody.orders[0].id, pending.id);
+
+    const cash = createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 1001,
+      botUserPhone: '998901111111',
+      clientPhone: '998909999999',
+      amount: 15000,
+      status: 'paid_cash',
+      paymentProvider: 'cash',
+    });
+    const paid = await request(server, 'GET', '/bot-admin/api/orders?status=paid&limit=50', {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(paid.statusCode, 200);
+    const paidBody = JSON.parse(paid.body);
+    assert.equal(paidBody.total, 2);
+    const cashRow = paidBody.orders.find((row) => row.id === cash.id);
+    assert.ok(cashRow);
+    assert.equal(cashRow.status, 'paid_cash');
+    assert.equal(cashRow.status_label, 'Оплачен');
+    assert.equal(cashRow.payment_provider, 'cash');
+
+    const byPayment = await request(server, 'GET', '/bot-admin/api/orders?payment=cash&limit=50', {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(byPayment.statusCode, 200);
+    const byPaymentBody = JSON.parse(byPayment.body);
+    assert.equal(byPaymentBody.total, 1);
+    assert.equal(byPaymentBody.orders[0].id, cash.id);
   });
 
   it('allows delete / paid-cash / renotify only for pending orders', async () => {

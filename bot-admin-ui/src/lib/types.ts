@@ -66,6 +66,14 @@ export type RightMeta = {
   group?: string;
 };
 
+export type OrderSummary = {
+  count: number;
+  pending: number;
+  paid: number;
+  deleted: number;
+  amount: number;
+};
+
 export type Order = {
   id: string;
   created_at?: string;
@@ -292,30 +300,29 @@ export type TechnicalSupportSubscription = {
   status_label?: string;
 };
 
+export type PriceKey = "fixed" | "min5" | "min30" | "hour1" | "hour2";
+
+export type PriceValues = Partial<Record<PriceKey, string | null>>;
+
 export type PriceCatalog = {
   title_ru?: string;
   title_uz?: string;
   notice_ru?: string;
   notice_uz?: string;
+  updated_at?: string;
   categories?: PriceCategory[];
 };
 
 export type PriceCategory = {
-  id: string;
+  id?: string | number;
   name_ru?: string;
   name_uz?: string;
   items?: PriceItem[];
 };
 
 export type PriceItem = {
-  id: string;
+  id?: string | number;
   name_ru?: string;
   name_uz?: string;
-  fixed?: number;
-  min5?: number;
-  min30?: number;
-  hour1?: number;
-  hour2?: number;
+  prices?: PriceValues;
 };
-
-export const PAGE_SIZES = [10, 25, 50, 100] as const;

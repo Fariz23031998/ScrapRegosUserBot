@@ -1,37 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getPrices, savePrices } from "../api/catalog";
+import { apiUrl } from "../lib/api-url";
 import { useAuth } from "../hooks/useAuth";
-import type { PriceCatalog, PriceCategory, PriceItem } from "../lib/types";
-
-const PRICE_KEYS = ["fixed", "min5", "min30", "hour1", "hour2"] as const;
-const PRICE_LABELS: Record<(typeof PRICE_KEYS)[number], string> = {
-  fixed: "ФИКСА",
-  min5: "5 мин",
-  min30: "30 мин",
-  hour1: "1 час",
-  hour2: "2 часа",
-};
-
-function emptyItem(): PriceItem {
-  return { id: crypto.randomUUID(), name_ru: "", name_uz: "", fixed: undefined, min5: undefined, min30: undefined, hour1: undefined, hour2: undefined };
-}
-
-function emptyCategory(): PriceCategory {
-  return { id: crypto.randomUUID(), name_ru: "", name_uz: "", items: [emptyItem()] };
-}
-
-function normalizeCatalog(raw: PriceCatalog): PriceCatalog {
-  const categories = (raw.categories || []).map((cat) => ({
-    ...cat,
-    id: cat.id || crypto.randomUUID(),
-    items: (cat.items || [emptyItem()]).map((item) => ({
-      ...item,
-      id: item.id || crypto.randomUUID(),
-    })),
-  }));
-  return { ...raw, categories: categories.length ? categories : [emptyCategory()] };
-}
+import { emptyCategory, emptyItem, normalizeCatalog, PRICE_KEYS, PRICE_LABELS } from "../lib/price-catalog";
+import type { PriceCatalog, PriceCategory, PriceItem, PriceKey } from "../lib/types";
 
 export default function PricesPage() {
   const { hasPermission } = useAuth();
@@ -40,27 +13,40 @@ export default function PricesPage() {
   const [catalog, setCatalog] = useState<PriceCatalog | null>(null);
   const [message, setMessage] = useState<{ text: string; type?: "success" | "error" } | null>(null);
 
-  useQuery({
+  const pricesQuery = useQuery({
     queryKey: ["prices-catalog"],
-    queryFn: async () => {
-      const data = await getPrices();
-      const normalized = normalizeCatalog(data.catalog || {});
-      setCatalog(normalized);
-      return normalized;
-    },
+    queryFn: async () => normalizeCatalog(await getPrices()),
   });
+
+  useEffect(() => {
+    if (pricesQuery.data) setCatalog(pricesQuery.data);
+  }, [pricesQuery.data]);
 
   const saveMutation = useMutation({
     mutationFn: () => savePrices(catalog || {}),
     onSuccess: (data) => {
-      setCatalog(normalizeCatalog(data.catalog));
+      const next = normalizeCatalog(data);
+      setCatalog(next);
+      queryClient.setQueryData(["prices-catalog"], next);
       setMessage({ text: "Прайс сохранён.", type: "success" });
-      void queryClient.invalidateQueries({ queryKey: ["prices-catalog"] });
     },
     onError: (error: Error) => setMessage({ text: error.message, type: "error" }),
   });
 
-  if (!catalog) return <section className="card">Загрузка…</section>;
+  if (pricesQuery.isError && !catalog) {
+    return (
+      <section className="card">
+        <p className="message error">{pricesQuery.error.message || "Не удалось загрузить прайс."}</p>
+        <button type="button" className="btn-secondary" onClick={() => void pricesQuery.refetch()}>
+          Повторить
+        </button>
+      </section>
+    );
+  }
+
+  if (!catalog || pricesQuery.isPending) {
+    return <section className="card">Загрузка…</section>;
+  }
 
   function updateCategory(index: number, patch: Partial<PriceCategory>) {
     setCatalog((prev) => {
@@ -82,16 +68,27 @@ export default function PricesPage() {
     });
   }
 
+  function updateItemPrice(catIndex: number, itemIndex: number, key: PriceKey, value: string) {
+    setCatalog((prev) => {
+      if (!prev) return prev;
+      const categories = [...(prev.categories || [])];
+      const items = [...(categories[catIndex].items || [])];
+      const item = items[itemIndex];
+      items[itemIndex] = { ...item, prices: { ...item.prices, [key]: value } };
+      categories[catIndex] = { ...categories[catIndex], items };
+      return { ...prev, categories };
+    });
+  }
+
   return (
     <section className="card price-editor">
-      <div className="card-toolbar">
-        <h1>Прайс услуг</h1>
-        {canSave ? (
+      {canSave ? (
+        <div className="card-toolbar">
           <button type="button" className="btn-primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
             Сохранить
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
       {message ? <p className={`message ${message.type || ""}`}>{message.text}</p> : null}
 
       <div className="filters-grid">
@@ -130,7 +127,7 @@ export default function PricesPage() {
       </div>
 
       {(catalog.categories || []).map((category, catIndex) => (
-        <div key={category.id} className="price-category">
+        <div key={category.id ?? catIndex} className="price-category">
           <div className="card-toolbar">
             <h3>Категория {catIndex + 1}</h3>
             {canSave ? (
@@ -170,7 +167,7 @@ export default function PricesPage() {
           </div>
 
           {(category.items || []).map((item, itemIndex) => (
-            <div key={item.id} className="price-category" style={{ marginLeft: "1rem" }}>
+            <div key={item.id ?? `${catIndex}-${itemIndex}`} className="price-category" style={{ marginLeft: "1rem" }}>
               <div className="filters-grid">
                 <label>
                   Услуга (RU)
@@ -192,9 +189,9 @@ export default function PricesPage() {
                   <label key={key}>
                     {PRICE_LABELS[key]}
                     <input
-                      value={String(item[key] ?? "")}
+                      value={item.prices?.[key] ?? ""}
                       disabled={!canSave}
-                      onChange={(e) => updateItem(catIndex, itemIndex, { [key]: e.target.value ? Number(e.target.value) : undefined })}
+                      onChange={(e) => updateItemPrice(catIndex, itemIndex, key, e.target.value)}
                     />
                   </label>
                 ))}
@@ -234,7 +231,7 @@ export default function PricesPage() {
       ) : null}
 
       <p style={{ marginTop: "1rem" }}>
-        <a href="/prices" target="_blank" rel="noreferrer">
+        <a href={apiUrl("/prices")} target="_blank" rel="noreferrer">
           Открыть публичную страницу прайса
         </a>
       </p>

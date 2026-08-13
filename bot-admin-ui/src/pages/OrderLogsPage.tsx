@@ -1,26 +1,26 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { listOrderLogs } from "../api/admin";
 import EntityCards from "../components/EntityCards";
+import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
-import Pagination from "../components/Pagination";
 import SimpleTable from "../components/SimpleTable";
 import type { OrderLog } from "../lib/types";
 import { formatAmount, formatDateTime } from "../lib/utils";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
+import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 
 export default function OrderLogsPage() {
   const { dateTimeFormat } = useUiPreferences();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
 
-  const query = useQuery({
-    queryKey: ["order-logs", page, limit, search],
-    queryFn: () => listOrderLogs({ page, limit, q: search || undefined }),
+  const query = usePagedInfiniteQuery({
+    queryKey: ["order-logs", search],
+    queryFn: (page, pageSize) => listOrderLogs({ page, limit: pageSize, q: search || undefined }),
+    getItems: (data) => data.logs || [],
+    getItemId: (log) => log.id,
   });
 
   const columns = useMemo<ColumnDef<OrderLog>[]>(
@@ -58,21 +58,14 @@ export default function OrderLogsPage() {
     [dateTimeFormat],
   );
 
-  const logs = query.data?.logs || [];
-  const total = query.data?.total || 0;
+  const logs = query.items;
+  const total = query.total;
 
   return (
     <section className="card">
-      <div className="card-toolbar">
-        <h1>Журнал заказов</h1>
-      </div>
-
       <ListFiltersChrome
         search={search}
-        onSearchChange={(value) => {
-          setSearch(value);
-          setPage(1);
-        }}
+        onSearchChange={setSearch}
         searchPlaceholder="Поиск по журналу заказов…"
       />
 
@@ -80,7 +73,7 @@ export default function OrderLogsPage() {
         {compact ? (
           <EntityCards
             items={logs}
-            isLoading={query.isLoading}
+            isLoading={query.isPending}
             emptyMessage={search ? "Ничего не найдено." : "Записей пока нет."}
             getKey={(log) => String(log.id)}
             getTitle={(log) => log.action_label || log.action || "Событие"}
@@ -111,13 +104,19 @@ export default function OrderLogsPage() {
             tableKey="bot-admin.order-logs"
             data={logs}
             columns={columns}
-            isLoading={query.isLoading}
+            isLoading={query.isPending}
             serverSideSearch
             emptyMessage={search ? "Ничего не найдено." : "Записей пока нет."}
             getRowId={(row) => String(row.id)}
           />
         )}
-        <Pagination page={page} limit={limit} total={total} onPageChange={setPage} onLimitChange={setLimit} />
+        <InfiniteScrollSentinel
+          loaded={logs.length}
+          total={total}
+          hasNextPage={Boolean(query.hasNextPage)}
+          isFetchingNextPage={query.isFetchingNextPage}
+          fetchNextPage={query.fetchNextPage}
+        />
       </div>
     </section>
   );

@@ -98,8 +98,9 @@ Employees with the `open_admin_dashboard` right see **Open Admin Dashboard** (`/
 1. Configure prices for 1 / 3 / 6 / 12 months in `/bot-admin/technical-support` (amounts are integer UZS; `0` means the duration is hidden in the bot).
 2. Grant the employee the `create_technical_support` right in the Admin UI. When that employee searches a customer whose result has a phone number, the bot shows **Добавить услуги** and **Добавить ТП** on the same row.
 3. **Добавить ТП** opens duration buttons with the current Admin prices. Selecting a duration creates a pending payment order (amount/duration are stored on the order and stay fixed even if prices change later).
-4. Coverage activates only after online payment (Payme, or CLICK when enabled) or cash close. Renewals stack from `max(payment time, current paid end)` using calendar months.
-5. Active coverage replaces the expired-support warning with `Есть платные подписки ТП`. VIP remains independent.
+4. Coverage activates only after online payment (Payme, or CLICK when enabled) or cash close. Each purchase is stored as a separate `subscription_order` under one per-phone `subscription`. Renewals stack from `max(payment time, previous computed end)` using calendar months (or custom duration in days). End dates are never stored; they are computed from `starts_at` + duration when needed.
+5. Customer phones are normalized to `+998XXXXXXXXX` on save. A second purchase for the same number is listed as its own order with dates based on the previous period.
+6. Active coverage replaces the expired-support warning with `Есть платные подписки ТП`. VIP remains independent.
 
 ### HTTP server (payments, bot-admin, SMS gateway)
 

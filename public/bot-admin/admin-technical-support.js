@@ -10,6 +10,7 @@ const state = {
   canEdit: false,
   canDelete: false,
   itemsById: new Map(),
+  pricesByMonths: {},
 };
 
 function durationLabel(months) {
@@ -111,6 +112,30 @@ function setModalOpen(overlay, open) {
   document.body.classList.toggle('modal-open', open);
 }
 
+function isCustomDuration() {
+  return document.getElementById('create-months').value === 'custom';
+}
+
+function catalogAmountForMonths(months) {
+  return Number(state.pricesByMonths[String(months)] || 0);
+}
+
+function syncCreateDurationFields() {
+  const custom = isCustomDuration();
+  const amountInput = document.getElementById('create-amount');
+  const endsInput = document.getElementById('create-ends-at');
+  amountInput.disabled = !custom;
+  endsInput.disabled = !custom;
+  endsInput.required = custom;
+  if (!custom) {
+    const months = Number(document.getElementById('create-months').value);
+    if (DURATIONS.includes(months)) {
+      endsInput.value = suggestedEndsAtFromMonths(months);
+      amountInput.value = String(catalogAmountForMonths(months));
+    }
+  }
+}
+
 function closeCreateModal() {
   setModalOpen(document.getElementById('create-subscription-modal'), false);
   showModalError('create-subscription-error', '');
@@ -125,8 +150,9 @@ function openCreateModal() {
   const form = document.getElementById('create-subscription-form');
   form.reset();
   document.getElementById('create-months').value = '3';
-  document.getElementById('create-amount').value = '0';
+  document.getElementById('create-amount').value = String(catalogAmountForMonths(3));
   document.getElementById('create-ends-at').value = suggestedEndsAtFromMonths(3);
+  syncCreateDurationFields();
   showModalError('create-subscription-error', '');
   setModalOpen(document.getElementById('create-subscription-modal'), true);
   document.getElementById('create-phone').focus();
@@ -145,6 +171,11 @@ function openEditModal(row) {
 function renderPricesForm(prices, { canEdit = true } = {}) {
   const grid = document.getElementById('prices-grid');
   const byMonths = new Map((prices || []).map((row) => [Number(row.months), row]));
+  state.pricesByMonths = {};
+  for (const months of DURATIONS) {
+    const row = byMonths.get(months) || { amount: 0 };
+    state.pricesByMonths[String(months)] = Number(row.amount || 0);
+  }
   grid.innerHTML = DURATIONS.map((months) => {
     const row = byMonths.get(months) || { amount: 0, configured: false };
     const hint = row.configured
@@ -372,7 +403,11 @@ async function submitCreateSubscription(event) {
   const months = isCustom ? 0 : Number(monthsRaw);
   const endsAt = fromDateInputValue(document.getElementById('create-ends-at').value);
   const amountRaw = document.getElementById('create-amount').value;
-  const amount = amountRaw === '' ? 0 : Number(amountRaw);
+  const amount = isCustom
+    ? amountRaw === ''
+      ? 0
+      : Number(amountRaw)
+    : catalogAmountForMonths(months);
   if (!phone) {
     showModalError('create-subscription-error', 'Укажите телефон.');
     return;
@@ -381,11 +416,11 @@ async function submitCreateSubscription(event) {
     showModalError('create-subscription-error', 'Срок должен быть 1, 3, 6 или 12 месяцев.');
     return;
   }
-  if (!endsAt) {
+  if (isCustom && !endsAt) {
     showModalError('create-subscription-error', 'Укажите корректную дату окончания.');
     return;
   }
-  if (Date.parse(endsAt) <= Date.now()) {
+  if (isCustom && Date.parse(endsAt) <= Date.now()) {
     showModalError('create-subscription-error', 'Дата окончания должна быть в будущем.');
     return;
   }
@@ -445,16 +480,13 @@ function bindModals() {
   document.getElementById('create-subscription-btn').addEventListener('click', openCreateModal);
   document.getElementById('create-subscription-close').addEventListener('click', closeCreateModal);
   document.getElementById('create-subscription-cancel').addEventListener('click', closeCreateModal);
-  document.getElementById('create-months').addEventListener('change', (event) => {
-    const value = event.target.value;
-    if (value === 'custom') return;
-    const months = Number(value);
-    if (DURATIONS.includes(months)) {
-      document.getElementById('create-ends-at').value = suggestedEndsAtFromMonths(months);
-    }
+  document.getElementById('create-months').addEventListener('change', () => {
+    syncCreateDurationFields();
   });
   document.getElementById('create-ends-at').addEventListener('input', () => {
+    if (document.getElementById('create-ends-at').disabled) return;
     document.getElementById('create-months').value = 'custom';
+    syncCreateDurationFields();
   });
   document
     .getElementById('create-subscription-form')

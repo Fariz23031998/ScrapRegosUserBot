@@ -12,13 +12,14 @@ import {
   updateUser,
 } from "../api/admin";
 import EntityCards from "../components/EntityCards";
+import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
-import Pagination from "../components/Pagination";
 import SimpleTable from "../components/SimpleTable";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
+import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import type { BotUser, RegosUser, RightMeta } from "../lib/types";
 import { formatDateTime, phonesEqual } from "../lib/utils";
@@ -54,17 +55,17 @@ export default function UsersPage() {
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [role, setRole] = useState<"employee" | "customer">("employee");
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedUser, setSelectedUser] = useState<BotUser | null>(null);
   const [modalError, setModalError] = useState("");
 
   const rightsQuery = useQuery({ queryKey: ["rights-meta"], queryFn: getRightsMeta });
   const regosQuery = useQuery({ queryKey: ["regos-users"], queryFn: listRegosUsers, enabled: modalMode != null });
-  const usersQuery = useQuery({
-    queryKey: ["users", role, page, limit, search],
-    queryFn: () => listUsers({ role, page, limit, q: search || undefined }),
+  const usersQuery = usePagedInfiniteQuery({
+    queryKey: ["users", role, search],
+    queryFn: (page, pageSize) => listUsers({ role, page, limit: pageSize, q: search || undefined }),
+    getItems: (data) => data.users || [],
+    getItemId: (user) => user.id,
   });
 
   const rightsMeta = rightsQuery.data?.rights || [];
@@ -251,8 +252,8 @@ export default function UsersPage() {
     );
   }
 
-  const users = usersQuery.data?.users || [];
-  const total = usersQuery.data?.total || 0;
+  const users = usersQuery.items;
+  const total = usersQuery.total;
 
   function userDisplayName(user: BotUser): string {
     if (role === "customer") {
@@ -291,25 +292,18 @@ export default function UsersPage() {
     <section className="card">
       <div className="card-toolbar">
         <div>
-          <h1>Пользователи Telegram-бота</h1>
           <div className="role-tabs" role="tablist">
             <button
               type="button"
               className={`role-tab${role === "employee" ? " role-tab--active" : ""}`}
-              onClick={() => {
-                setRole("employee");
-                setPage(1);
-              }}
+              onClick={() => setRole("employee")}
             >
               Сотрудники
             </button>
             <button
               type="button"
               className={`role-tab${role === "customer" ? " role-tab--active" : ""}`}
-              onClick={() => {
-                setRole("customer");
-                setPage(1);
-              }}
+              onClick={() => setRole("customer")}
             >
               Клиенты
             </button>
@@ -336,10 +330,7 @@ export default function UsersPage() {
 
       <ListFiltersChrome
         search={search}
-        onSearchChange={(value) => {
-          setSearch(value);
-          setPage(1);
-        }}
+        onSearchChange={setSearch}
         searchPlaceholder="Поиск по телефону, имени, Telegram…"
       />
 
@@ -347,7 +338,7 @@ export default function UsersPage() {
         {compact ? (
           <EntityCards
             items={users}
-            isLoading={usersQuery.isLoading}
+            isLoading={usersQuery.isPending}
             emptyMessage={search ? "Ничего не найдено." : "Пользователей пока нет."}
             getKey={(user) => String(user.id)}
             getTitle={(user) => userDisplayName(user)}
@@ -391,14 +382,20 @@ export default function UsersPage() {
             tableKey={`bot-admin.users.${role}`}
             data={users}
             columns={role === "employee" ? employeeColumns : customerColumns}
-            isLoading={usersQuery.isLoading}
+            isLoading={usersQuery.isPending}
             serverSideSearch
             emptyMessage={search ? "Ничего не найдено." : "Пользователей пока нет."}
             getRowId={(row) => String(row.id)}
           />
         )}
 
-        <Pagination page={page} limit={limit} total={total} onPageChange={setPage} onLimitChange={setLimit} />
+        <InfiniteScrollSentinel
+          loaded={users.length}
+          total={total}
+          hasNextPage={Boolean(usersQuery.hasNextPage)}
+          isFetchingNextPage={usersQuery.isFetchingNextPage}
+          fetchNextPage={usersQuery.fetchNextPage}
+        />
       </div>
       <Modal
         open={modalMode != null}

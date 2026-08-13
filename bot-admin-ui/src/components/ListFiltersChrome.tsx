@@ -1,5 +1,6 @@
-import type { FormEvent, ReactNode } from "react";
+import { useRef, type FormEvent, type ReactNode } from "react";
 import filterFunnelIcon from "../assets/filter-funnel.png";
+import { useStickyOffsetVar } from "../hooks/useStickyOffsetVar";
 import Modal from "./Modal";
 import SearchField from "./SearchField";
 
@@ -32,6 +33,8 @@ export default function ListFiltersChrome({
   stickyClassName = "filters-sticky-head",
   children,
 }: ListFiltersChromeProps) {
+  const stickyRef = useRef<HTMLDivElement>(null);
+  useStickyOffsetVar(stickyRef);
   const showFilterButton = Boolean(sheetFilters && onFiltersModalOpenChange);
 
   function handleSubmit(event: FormEvent) {
@@ -42,7 +45,7 @@ export default function ListFiltersChrome({
 
   return (
     <>
-      <div className={stickyClassName}>
+      <div className={stickyClassName} ref={stickyRef}>
         {children}
         <form className="ticket-filters" onSubmit={handleSubmit}>
           {desktopFilters ? (
@@ -69,7 +72,6 @@ export default function ListFiltersChrome({
               </button>
             ) : null}
             <label className="ticket-filters__search">
-              <span>Поиск</span>
               <SearchField
                 value={search}
                 onChange={onSearchChange}

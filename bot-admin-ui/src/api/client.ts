@@ -1,3 +1,5 @@
+import { apiUrl } from "../lib/api-url";
+
 export class ApiError extends Error {
   status: number;
 
@@ -19,8 +21,8 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(path, {
-    credentials: "same-origin",
+  const response = await fetch(apiUrl(path), {
+    credentials: "include",
     ...init,
     headers,
   });

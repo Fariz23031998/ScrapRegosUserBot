@@ -31,7 +31,7 @@ export function useChatEvents({
 
   useEffect(() => {
     if (!enabled || !chatId) return;
-    const source = new EventSource(ticketEventsUrl());
+    const source = new EventSource(ticketEventsUrl(), { withCredentials: true });
     const expectedChatId = String(chatId);
 
     source.onmessage = (messageEvent) => {

@@ -1160,6 +1160,15 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
           created_date: 1767225800,
         },
         {
+          id: 'sys-edited',
+          chat_id: 'chat-uuid-42',
+          message_type: 'System',
+          action_code: 'TicketEdited',
+          action_payload: JSON.stringify({ id: 42 }),
+          text: null,
+          created_date: 1767225850,
+        },
+        {
           id: 'sys-unknown',
           chat_id: 'chat-uuid-42',
           message_type: 'System',
@@ -1195,6 +1204,10 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
         'Изменен ответственный обращения #42 Не назначен -> Mamatkulov Firuz'
       );
       assert.equal(data.messages[3].display_text, 'SomeFutureAction');
+      assert.equal(
+        data.messages.some((message) => message.action_code === 'TicketEdited'),
+        false
+      );
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
@@ -1290,5 +1303,74 @@ describe('chat-system-message', () => {
       ),
       'SomeFutureAction'
     );
+  });
+
+  it('hides generic TicketEdited system events from the chat feed', () => {
+    assert.equal(
+      formatSystemChatMessage(
+        {
+          message_type: 'System',
+          action_code: 'TicketEdited',
+          action_payload: JSON.stringify({ id: 2315 }),
+        },
+        { ticketId: 2315 }
+      ),
+      null
+    );
+    assert.equal(
+      formatSystemChatMessage(
+        {
+          message_type: 'System',
+          action_code: 'TicketParticipantsSet',
+          text: 'TicketParticipantsSet',
+        },
+        {}
+      ),
+      null
+    );
+    assert.equal(
+      formatSystemChatMessage(
+        {
+          message_type: 'System',
+          text: 'TicketEdited',
+        },
+        {}
+      ),
+      null
+    );
+
+    const enriched = enrichChatMessages(
+      [
+        {
+          id: 'keep',
+          message_type: 'System',
+          action_code: 'TicketClosed',
+          action_payload: JSON.stringify({ id: 2315, status: 'Closed' }),
+        },
+        {
+          id: 'hide-edited',
+          message_type: 'System',
+          action_code: 'TicketEdited',
+          action_payload: JSON.stringify({ id: 2315 }),
+        },
+        {
+          id: 'hide-text',
+          message_type: 'System',
+          text: 'TicketEdited',
+        },
+        {
+          id: 'regular',
+          message_type: 'Regular',
+          text: 'hello',
+        },
+      ],
+      { ticketId: 2315, userNames: {} }
+    );
+
+    assert.deepEqual(
+      enriched.map((message) => message.id),
+      ['keep', 'regular']
+    );
+    assert.equal(enriched[0].display_text, 'Обращение #2315 закрыто (Закрыт)');
   });
 });

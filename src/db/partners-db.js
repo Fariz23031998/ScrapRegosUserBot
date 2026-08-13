@@ -229,6 +229,29 @@ function getOrderById(db, orderId) {
 }
 
 const ORDER_LIST_STATUSES = new Set(['pending', 'paid', 'paid_cash', 'deleted']);
+const ORDER_PAYMENT_PROVIDERS = new Set(['payme', 'click', 'cash']);
+const PAID_LIST_STATUSES = ['paid', 'paid_cash'];
+
+function summarizeOrders(rows) {
+  const summary = {
+    count: Array.isArray(rows) ? rows.length : 0,
+    pending: 0,
+    paid: 0,
+    deleted: 0,
+    amount: 0,
+  };
+  for (const row of rows || []) {
+    const status = String(row?.status || '');
+    if (status === 'pending') summary.pending += 1;
+    else if (status === 'paid' || status === 'paid_cash') summary.paid += 1;
+    else if (status === 'deleted') summary.deleted += 1;
+    if (status === 'paid' || status === 'paid_cash') {
+      const amount = Number(row?.amount);
+      if (Number.isFinite(amount)) summary.amount += amount;
+    }
+  }
+  return summary;
+}
 
 function orderMatchesQuery(order, query) {
   const trimmed = String(query || '').trim();
@@ -279,14 +302,23 @@ function orderMatchesClientPhone(order, clientPhone) {
 
 function listOrders(
   db,
-  { query, clientPhone, status, from, to, telegramId, offset = 0, limit = 25 } = {}
+  { query, clientPhone, status, paymentProvider, from, to, telegramId, offset = 0, limit = 25 } = {}
 ) {
   let sql = 'SELECT * FROM orders WHERE 1=1';
   const params = [];
 
-  if (status && ORDER_LIST_STATUSES.has(status)) {
+  if (status === 'paid') {
+    sql += ` AND status IN (${PAID_LIST_STATUSES.map(() => '?').join(', ')})`;
+    params.push(...PAID_LIST_STATUSES);
+  } else if (status && ORDER_LIST_STATUSES.has(status)) {
     sql += ' AND status = ?';
     params.push(status);
+  }
+
+  const provider = String(paymentProvider || '').trim();
+  if (provider && ORDER_PAYMENT_PROVIDERS.has(provider)) {
+    sql += ' AND payment_provider = ?';
+    params.push(provider);
   }
 
   const employeeTelegramId = Number(telegramId);
@@ -323,6 +355,7 @@ function listOrders(
   return {
     orders: rows.slice(safeOffset, safeOffset + safeLimit),
     total,
+    summary: summarizeOrders(rows),
   };
 }
 

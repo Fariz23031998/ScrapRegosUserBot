@@ -1,19 +1,22 @@
 import { apiFetch } from "./client";
+import { toPriceCatalogPayload } from "../lib/price-catalog";
 import type { PriceCatalog, TechnicalSupportSubscription } from "../lib/types";
 
 export function getPrices() {
-  return apiFetch<{ catalog: PriceCatalog }>("/bot-admin/api/prices");
+  return apiFetch<PriceCatalog>("/bot-admin/api/prices");
 }
 
 export function savePrices(catalog: PriceCatalog) {
-  return apiFetch<{ catalog: PriceCatalog }>("/bot-admin/api/prices", {
+  return apiFetch<PriceCatalog>("/bot-admin/api/prices", {
     method: "PUT",
-    body: JSON.stringify({ catalog }),
+    body: JSON.stringify(toPriceCatalogPayload(catalog)),
   });
 }
 
 export function getTechnicalSupportPrices() {
-  return apiFetch<{ prices: Record<string, number> }>("/bot-admin/api/technical-support/prices");
+  return apiFetch<{ prices: Array<{ months: number; amount: number }> | Record<string, number> }>(
+    "/bot-admin/api/technical-support/prices",
+  );
 }
 
 export function saveTechnicalSupportPrices(prices: Record<string, number>) {

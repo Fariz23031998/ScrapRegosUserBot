@@ -62,9 +62,8 @@ export default function SettingsPage() {
 
   return (
     <section className="card">
-      <div className="card-toolbar">
-        <h1>Настройки каналов REGOS</h1>
-        {canEdit ? (
+      {canEdit ? (
+        <div className="card-toolbar">
           <button
             type="button"
             className="btn-primary"
@@ -73,8 +72,8 @@ export default function SettingsPage() {
           >
             Сохранить
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
       {message ? <p className={`message ${message.type || ""}`}>{message.text}</p> : null}
       {query.isLoading ? (
         <LoadingState />

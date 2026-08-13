@@ -14,6 +14,7 @@ const { attachSmsGateway } = require('../../src/sms/sms-gateway-ws');
 const { ensureCreatorPaidNotification } = require('../../src/bot/payment-notification');
 const { getServicePricesCatalog } = require('../../src/db/service-prices');
 const { sendVersionedHtmlFile } = require('../../src/http/asset-cache');
+const { applyCors } = require('../../src/http/cors');
 const {
   createRegosTicketWebhookHandler,
   createRegosTicketWebhookRouter,
@@ -24,6 +25,7 @@ const db = openDb();
 const port = Number(process.env.CLICK_SERVER_PORT || 3000);
 const publicStatic = express.static(getPublicDir());
 
+app.use(applyCors);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use((req, res, next) => {
