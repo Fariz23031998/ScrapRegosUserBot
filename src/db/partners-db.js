@@ -588,15 +588,20 @@ function listPendingOrdersWithPaymeReceipt(db) {
     .all();
 }
 
-function listPaymeOrdersForReconcile(db) {
-  return db
-    .prepare(
-      `SELECT * FROM orders
+function listPaymeOrdersForReconcile(db, { pendingCreatedAfterMs } = {}) {
+  const createdAfter = Number(pendingCreatedAfterMs);
+  const hasCutoff = Number.isFinite(createdAfter) && createdAfter > 0;
+  const sql = `SELECT * FROM orders
        WHERE (
          (
            status = 'pending'
            AND payme_receipt_id IS NOT NULL
            AND TRIM(payme_receipt_id) != ''
+           ${
+             hasCutoff
+               ? 'AND payme_receipt_created_at IS NOT NULL AND payme_receipt_created_at > ?'
+               : ''
+           }
          )
          OR (
            status = 'paid'
@@ -604,9 +609,8 @@ function listPaymeOrdersForReconcile(db) {
            AND paid_notified_at IS NULL
          )
        )
-       ORDER BY datetime(created_at) ASC`
-    )
-    .all();
+       ORDER BY datetime(created_at) ASC`;
+  return hasCutoff ? db.prepare(sql).all(createdAfter) : db.prepare(sql).all();
 }
 
 module.exports = {

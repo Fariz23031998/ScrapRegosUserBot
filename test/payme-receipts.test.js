@@ -11,6 +11,7 @@ const {
   getOrderById,
   setOrderPaymeReceiptId,
   listPendingOrdersWithPaymeReceipt,
+  listPaymeOrdersForReconcile,
   markOrderPaid,
 } = require('../src/db/partners-db');
 
@@ -89,6 +90,7 @@ describe('Payme receipt reuse and sync', () => {
       PAYME_TEST_MODE: process.env.PAYME_TEST_MODE,
       ENABLE_CLICK_PAYMENT: process.env.ENABLE_CLICK_PAYMENT,
       PAYME_RECEIPT_TTL_MS: process.env.PAYME_RECEIPT_TTL_MS,
+      PAYME_RECONCILE_INTERVAL_MS: process.env.PAYME_RECONCILE_INTERVAL_MS,
     };
   });
 
@@ -109,6 +111,7 @@ describe('Payme receipt reuse and sync', () => {
     process.env.PAYME_TEST_MODE = '1';
     process.env.ENABLE_CLICK_PAYMENT = '0';
     delete process.env.PAYME_RECEIPT_TTL_MS;
+    delete process.env.PAYME_RECONCILE_INTERVAL_MS;
 
     if (db) {
       db.close();
@@ -241,6 +244,121 @@ describe('Payme receipt reuse and sync', () => {
     assert.equal(result.errors, 0);
     assert.equal(getOrderById(db, order.id).status, 'paid');
     assert.equal(listPendingOrdersWithPaymeReceipt(db).length, 0);
+  });
+
+  it('reconciler skips pending receipts older than checkout ttl plus grace', async () => {
+    process.env.PAYME_RECEIPT_TTL_MS = '1000';
+    process.env.PAYME_RECONCILE_INTERVAL_MS = '100';
+    const order = makeOrder();
+    const receiptId = 'receipt-expired-1';
+    setOrderPaymeReceiptId(db, order.id, receiptId, Date.now() - 5000);
+
+    let checks = 0;
+    const { reconcile } = installMocks({
+      checkReceipt: async () => {
+        checks += 1;
+        return { state: realPaymeApi.RECEIPT_STATE_PAID };
+      },
+      createReceipt: async () => {
+        throw new Error('unused');
+      },
+    });
+
+    const result = await reconcile.reconcilePendingPaymeReceipts(db);
+    assert.equal(result.checked, 0);
+    assert.equal(result.paid, 0);
+    assert.equal(checks, 0);
+    assert.equal(getOrderById(db, order.id).status, 'pending');
+  });
+
+  it('syncPaymeReceiptStatus still marks expired pending receipt paid', async () => {
+    process.env.PAYME_RECEIPT_TTL_MS = '1000';
+    const order = makeOrder();
+    const receiptId = 'receipt-expired-paid-1';
+    setOrderPaymeReceiptId(db, order.id, receiptId, Date.now() - 60_000);
+
+    const { receipts } = installMocks({
+      checkReceipt: async (id) => {
+        assert.equal(id, receiptId);
+        return { state: realPaymeApi.RECEIPT_STATE_PAID };
+      },
+      createReceipt: async () => {
+        throw new Error('unused');
+      },
+    });
+
+    const result = await receipts.syncPaymeReceiptStatus(db, order.id);
+    assert.equal(result.status, 'paid');
+    assert.equal(getOrderById(db, order.id).status, 'paid');
+  });
+
+  it('getPaymentOptionsForOrder still marks expired pending receipt paid', async () => {
+    process.env.PAYME_RECEIPT_TTL_MS = '1000';
+    const order = makeOrder();
+    const receiptId = 'receipt-expired-options-1';
+    setOrderPaymeReceiptId(db, order.id, receiptId, Date.now() - 60_000);
+
+    const { paymentsApi } = installMocks({
+      checkReceipt: async () => ({ state: realPaymeApi.RECEIPT_STATE_PAID }),
+      createReceipt: async () => {
+        createCalls.push(true);
+        throw new Error('createReceipt must not be called');
+      },
+    });
+
+    const options = await paymentsApi.getPaymentOptionsForOrder(db, order.id);
+    assert.equal(options.order.status, 'paid');
+    assert.equal(options.payments.length, 0);
+    assert.equal(createCalls.length, 0);
+  });
+
+  it('reconciler still retries paid-unnotified orders after checkout expiry', async () => {
+    process.env.PAYME_RECEIPT_TTL_MS = '1000';
+    process.env.PAYME_RECONCILE_INTERVAL_MS = '100';
+    const order = makeOrder();
+    const receiptId = 'receipt-unnotified-old';
+    setOrderPaymeReceiptId(db, order.id, receiptId, Date.now() - 60_000);
+    markOrderPaid(db, order.id, { transactionId: receiptId, provider: 'payme' });
+    assert.equal(getOrderById(db, order.id).paid_notified_at, null);
+
+    const listed = listPaymeOrdersForReconcile(db, {
+      pendingCreatedAfterMs: Date.now() - 1100,
+    });
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].id, order.id);
+
+    const { reconcile, notifyCalls } = installMocks({
+      checkReceipt: async () => ({ state: realPaymeApi.RECEIPT_STATE_PAID }),
+      createReceipt: async () => {
+        throw new Error('unused');
+      },
+    });
+
+    const result = await reconcile.reconcilePendingPaymeReceipts(db);
+    assert.equal(result.checked, 1);
+    assert.equal(result.errors, 0);
+    assert.ok(getOrderById(db, order.id).paid_notified_at);
+    assert.equal(notifyCalls.length, 1);
+  });
+
+  it('creates a new checkout for a stale open receipt and sends Payme timeout', async () => {
+    process.env.PAYME_RECEIPT_TTL_MS = '1000';
+    const order = makeOrder();
+    setOrderPaymeReceiptId(db, order.id, 'stale-open', Date.now() - 60_000);
+
+    const { receipts } = installMocks({
+      checkReceipt: async () => ({ state: realPaymeApi.RECEIPT_STATE_OPEN }),
+      createReceipt: async (params) => {
+        createCalls.push(params);
+        return { _id: 'fresh-receipt' };
+      },
+    });
+
+    const url = await receipts.getOrCreatePaymeCheckoutUrl(db, order);
+    assert.equal(url, 'https://test.paycom.uz/fresh-receipt');
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].timeout, 1);
+    assert.equal(getOrderById(db, order.id).payme_receipt_id, 'fresh-receipt');
   });
 
   it('getPaymentOptionsForOrder syncs paid receipt before offering Payme', async () => {

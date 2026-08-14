@@ -50,12 +50,17 @@ async function paymeRpcCall(method, params, requestId = Date.now()) {
   return data.result;
 }
 
-async function createReceipt({ amountTiyin, account, description }) {
-  const result = await paymeRpcCall('receipts.create', {
+async function createReceipt({ amountTiyin, account, description, timeout } = {}) {
+  const params = {
     amount: amountTiyin,
     account,
     description,
-  });
+  };
+  const timeoutSec = Number(timeout);
+  if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
+    params.timeout = Math.floor(timeoutSec);
+  }
+  const result = await paymeRpcCall('receipts.create', params);
   return result.receipt;
 }
 

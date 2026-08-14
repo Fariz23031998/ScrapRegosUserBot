@@ -14,7 +14,8 @@ const {
 } = require('./payme-api');
 const { ensureCreatorPaidNotification } = require('../bot/payment-notification');
 
-const DEFAULT_RECEIPT_TTL_MS = 12 * 60 * 60 * 1000;
+// Payme checkout links expire after ~15000 seconds unless the merchant sets another timeout.
+const DEFAULT_RECEIPT_TTL_MS = 15_000_000;
 
 function getReceiptTtlMs() {
   const value = Number(process.env.PAYME_RECEIPT_TTL_MS);
@@ -24,12 +25,16 @@ function getReceiptTtlMs() {
   return value;
 }
 
-function isReceiptStale(order) {
+function getReceiptTimeoutSec() {
+  return Math.max(1, Math.floor(getReceiptTtlMs() / 1000));
+}
+
+function isReceiptStale(order, now = Date.now()) {
   const createdAt = Number(order.payme_receipt_created_at);
   if (!Number.isFinite(createdAt) || createdAt <= 0) {
     return true;
   }
-  return Date.now() - createdAt >= getReceiptTtlMs();
+  return now - createdAt >= getReceiptTtlMs();
 }
 
 function normalizeCustomerId(order) {
@@ -189,6 +194,7 @@ async function getOrCreatePaymeCheckoutUrl(db, order) {
     amountTiyin: uzsToTiyin(freshOrder.amount),
     account,
     description,
+    timeout: getReceiptTimeoutSec(),
   });
 
   setOrderPaymeReceiptId(db, freshOrder.id, receipt._id, Date.now());
@@ -196,6 +202,10 @@ async function getOrCreatePaymeCheckoutUrl(db, order) {
 }
 
 module.exports = {
+  DEFAULT_RECEIPT_TTL_MS,
+  getReceiptTtlMs,
+  getReceiptTimeoutSec,
+  isReceiptStale,
   getOrCreatePaymeCheckoutUrl,
   syncPaymeReceiptStatus,
   formatReceiptCheckoutUrl,

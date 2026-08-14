@@ -1,5 +1,5 @@
 const { listPaymeOrdersForReconcile, getOrderById } = require('../db/partners-db');
-const { syncPaymeReceiptStatus } = require('./payme-receipts');
+const { getReceiptTtlMs, syncPaymeReceiptStatus } = require('./payme-receipts');
 
 const DEFAULT_INTERVAL_MS = 450_000;
 const DEFAULT_CONCURRENCY = 3;
@@ -37,8 +37,18 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
+function getPendingReconcileCreatedAfterMs({
+  now = Date.now(),
+  ttlMs = getReceiptTtlMs(),
+  graceMs = getReconcileIntervalMs(),
+} = {}) {
+  return now - (Number(ttlMs) + Number(graceMs));
+}
+
 async function reconcilePendingPaymeReceipts(db, { concurrency = getReconcileConcurrency() } = {}) {
-  const orders = listPaymeOrdersForReconcile(db);
+  const orders = listPaymeOrdersForReconcile(db, {
+    pendingCreatedAfterMs: getPendingReconcileCreatedAfterMs(),
+  });
   if (!orders.length) {
     return { checked: 0, paid: 0, notified: 0, errors: 0 };
   }
@@ -116,4 +126,5 @@ module.exports = {
   startPaymeReceiptReconciler,
   getReconcileIntervalMs,
   getReconcileConcurrency,
+  getPendingReconcileCreatedAfterMs,
 };
