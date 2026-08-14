@@ -1048,6 +1048,20 @@ body.is-column-resizing * {
   padding: 0;
 }
 
+.modal-overlay--workspace {
+  position: fixed;
+  inset: 0 0 0 var(--sidebar-width);
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  background: var(--surface);
+  transition: left 0.2s ease;
+}
+
+.admin-shell:has(> .admin-sidebar--collapsed:not(.admin-sidebar--compact)) .modal-overlay--workspace {
+  left: 64px;
+}
+
 .modal {
   width: min(560px, 100%);
   background: var(--surface);
@@ -1066,6 +1080,57 @@ body.is-column-resizing * {
   max-height: min(92vh, 100%);
   border-radius: var(--radius) var(--radius) 0 0;
   border-bottom: none;
+}
+
+.modal--workspace {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal--workspace .modal-header {
+  flex-shrink: 0;
+}
+
+.modal--workspace .modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.stack-form.knowledge-article-form {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-article-form__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-article-form__body textarea {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  resize: none;
+}
+
+.knowledge-article-form .form-actions {
+  margin-top: auto;
+  flex-shrink: 0;
 }
 
 .modal-header {
@@ -3374,6 +3439,10 @@ body.is-column-resizing * {
   .card.tickets-page {
     padding-left: 0.5rem;
     padding-right: 0.5rem;
+  }
+
+  .modal-overlay--workspace {
+    left: 0;
   }
 
   .admin-sidebar {

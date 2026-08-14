@@ -357,9 +357,10 @@ export default function KnowledgePage() {
         open={editor != null}
         title={editor?.id ? "Редактирование статьи" : "Новая статья"}
         onClose={() => setEditor(null)}
+        size="workspace"
       >
         <form
-          className="stack-form"
+          className="stack-form knowledge-article-form"
           onSubmit={(event) => {
             event.preventDefault();
             setFormError("");
@@ -374,7 +375,7 @@ export default function KnowledgePage() {
               required
             />
           </label>
-          <label>
+          <label className="knowledge-article-form__body">
             Текст
             <textarea
               rows={8}

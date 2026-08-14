@@ -5,7 +5,7 @@ export type ModalProps = {
   title: string;
   onClose: () => void;
   children: ReactNode;
-  size?: "default" | "wide" | "confirm" | "sheet";
+  size?: "default" | "wide" | "confirm" | "sheet" | "workspace";
   className?: string;
 };
 
@@ -40,9 +40,14 @@ export default function Modal({
   if (!open) return null;
 
   const sheet = size === "sheet";
+  const workspace = size === "workspace";
 
   return (
-    <div className={`modal-overlay${sheet ? " modal-overlay--sheet" : ""}`}>
+    <div
+      className={`modal-overlay${sheet ? " modal-overlay--sheet" : ""}${
+        workspace ? " modal-overlay--workspace" : ""
+      }`}
+    >
       <div
         className={`modal modal--${size}${className ? ` ${className}` : ""}`}
         role="dialog"
