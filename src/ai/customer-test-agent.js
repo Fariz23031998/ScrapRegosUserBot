@@ -1,5 +1,5 @@
 const { loadAiSettings, resolveAgentModel } = require('./settings');
-const { runAgent, truncateText } = require('./run-agent');
+const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createCustomerTools } = require('./tools/customer');
 const { filterEnabledTools } = require('./tools/catalog');
@@ -213,6 +213,7 @@ async function runCustomerTestAgent({
       model: resolveAgentModel(settings, 'customer'),
       system: buildCustomerTestSystemPrompt(db),
       messages: history,
+      promptCacheKey: buildPromptCacheKey('customer_test', session.id),
       reasoningEffort: settings.reasoningEffort,
       hasVision: historyHasVisionParts(history),
       hasAudio: historyHasAudioTranscript(history),

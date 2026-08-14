@@ -38,6 +38,28 @@ function findTool(tools, name) {
   return (tools || []).find((tool) => tool.name === name) || null;
 }
 
+function prependUserContext(messages, content) {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  const text = String(content || '').trim();
+  if (!text) return list;
+  return [{ role: 'user', content: text }, ...list];
+}
+
+function buildPromptCacheKey(kind, id) {
+  const slug = String(kind || '').trim();
+  if (!slug) return '';
+  if (id == null || String(id).trim() === '') return slug;
+  return `${slug}:${String(id).trim()}`;
+}
+
+function logPromptCache({ model, promptCacheKey, step, usage } = {}) {
+  if (!usage) return;
+  const write = usage.cache_write_tokens != null ? ` write=${usage.cache_write_tokens}` : '';
+  console.info(
+    `[ai] prompt-cache model=${model || '-'} key=${promptCacheKey || '-'} step=${step} prompt=${usage.prompt_tokens} cached=${usage.cached_tokens}${write}`
+  );
+}
+
 async function executeTool(tool, args) {
   try {
     const result = await tool.execute(args || {});
@@ -65,6 +87,7 @@ async function runAgent({
   reasoningEffort,
   hasVision = false,
   hasAudio = false,
+  promptCacheKey,
 } = {}) {
   const impl = provider || getProvider(providerName || 'openai');
   if (!impl || typeof impl.chat !== 'function') {
@@ -81,6 +104,7 @@ async function runAgent({
   for (const message of messages || []) {
     history.push(message);
   }
+  let lastUsage = null;
 
   try {
     for (let step = 0; step < Math.max(1, Number(maxSteps) || DEFAULT_MAX_STEPS); step += 1) {
@@ -93,6 +117,14 @@ async function runAgent({
         tools,
         signal: controller.signal,
         reasoningEffort,
+        promptCacheKey,
+      });
+      lastUsage = response.usage || lastUsage;
+      logPromptCache({
+        model,
+        promptCacheKey,
+        step: step + 1,
+        usage: response.usage,
       });
       const toolCalls = response.toolCalls || [];
       if (toolCalls.length > 0) {
@@ -133,6 +165,7 @@ async function runAgent({
         content,
         steps: step + 1,
         messages: history,
+        usage: lastUsage,
       };
     }
     return {
@@ -140,6 +173,7 @@ async function runAgent({
       steps: maxSteps,
       messages: history,
       stopped: 'max_steps',
+      usage: lastUsage,
     };
   } finally {
     clearTimeout(timer);
@@ -153,5 +187,7 @@ module.exports = {
   truncateText,
   parseToolArguments,
   resolveAgentTimeoutMs,
+  prependUserContext,
+  buildPromptCacheKey,
   runAgent,
 };

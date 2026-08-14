@@ -1,5 +1,5 @@
 const { loadAiSettings, resolveAgentModel } = require('./settings');
-const { runAgent, truncateText } = require('./run-agent');
+const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { TICKET_SUMMARY_SYSTEM_PROMPT } = require('./default-prompts');
 const { getResolvedPrompt } = require('../db/ai-prompts');
@@ -201,6 +201,7 @@ async function summarizeTranscript({
 } = {}) {
   const system = getResolvedPrompt(db, 'ticket_summary');
   const resolvedModel = model || resolveAgentModel(settings, 'ticket_summary');
+  const promptCacheKey = buildPromptCacheKey('ticket_summary');
   if (chunks.length <= 1) {
     const result = await run({
       provider,
@@ -210,6 +211,7 @@ async function summarizeTranscript({
       messages: [{ role: 'user', content: chunks[0] || 'Сообщений нет.' }],
       tools: [],
       reasoningEffort: settings.reasoningEffort,
+      promptCacheKey,
     });
     return truncateText(result.content, 4000);
   }
@@ -229,6 +231,7 @@ async function summarizeTranscript({
       ],
       tools: [],
       reasoningEffort: settings.reasoningEffort,
+      promptCacheKey,
     });
     const partial = truncateText(result.content, 2000);
     if (partial) partials.push(partial);
@@ -247,6 +250,7 @@ async function summarizeTranscript({
     ],
     tools: [],
     reasoningEffort: settings.reasoningEffort,
+    promptCacheKey,
   });
   return truncateText(result.content, 4000);
 }

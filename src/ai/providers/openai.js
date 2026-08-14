@@ -2,6 +2,7 @@ const { isReasoningModel } = require('../settings');
 
 const DEFAULT_MAX_COMPLETION_TOKENS = 4096;
 const ALLOWED_REASONING_EFFORTS = ['none', 'low', 'medium', 'high'];
+const MAX_PROMPT_CACHE_KEY_LENGTH = 64;
 
 function getOpenAiConfig() {
   const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
@@ -36,7 +37,30 @@ function normalizeChatContent(content) {
   return '';
 }
 
-function buildChatRequest({ model, messages, tools, reasoningEffort } = {}) {
+function normalizePromptCacheKey(value) {
+  const key = String(value || '').trim();
+  if (!key) return '';
+  return key.length > MAX_PROMPT_CACHE_KEY_LENGTH ? key.slice(0, MAX_PROMPT_CACHE_KEY_LENGTH) : key;
+}
+
+function normalizeUsage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const details =
+    raw.prompt_tokens_details && typeof raw.prompt_tokens_details === 'object'
+      ? raw.prompt_tokens_details
+      : {};
+  const usage = {
+    prompt_tokens: Number(raw.prompt_tokens) || 0,
+    completion_tokens: Number(raw.completion_tokens) || 0,
+    cached_tokens: Number(details.cached_tokens) || 0,
+  };
+  if (details.cache_write_tokens != null && details.cache_write_tokens !== '') {
+    usage.cache_write_tokens = Number(details.cache_write_tokens) || 0;
+  }
+  return usage;
+}
+
+function buildChatRequest({ model, messages, tools, reasoningEffort, promptCacheKey } = {}) {
   const request = {
     model,
     messages,
@@ -54,10 +78,14 @@ function buildChatRequest({ model, messages, tools, reasoningEffort } = {}) {
       request.reasoning_effort = effort;
     }
   }
+  const cacheKey = normalizePromptCacheKey(promptCacheKey);
+  if (cacheKey) {
+    request.prompt_cache_key = cacheKey;
+  }
   return request;
 }
 
-async function chat({ model, messages, tools, signal, reasoningEffort } = {}) {
+async function chat({ model, messages, tools, signal, reasoningEffort, promptCacheKey } = {}) {
   const { apiKey, baseURL } = getOpenAiConfig();
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -65,7 +93,7 @@ async function chat({ model, messages, tools, signal, reasoningEffort } = {}) {
 
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey, baseURL });
-  const request = buildChatRequest({ model, messages, tools, reasoningEffort });
+  const request = buildChatRequest({ model, messages, tools, reasoningEffort, promptCacheKey });
 
   const completion = await client.chat.completions.create(request, signal ? { signal } : undefined);
   const choice = completion.choices?.[0];
@@ -79,6 +107,7 @@ async function chat({ model, messages, tools, signal, reasoningEffort } = {}) {
     })),
     finishReason: choice?.finish_reason || null,
     raw: message,
+    usage: normalizeUsage(completion.usage),
   };
 }
 
@@ -88,6 +117,9 @@ module.exports = {
   getOpenAiConfig,
   buildChatRequest,
   normalizeChatContent,
+  normalizePromptCacheKey,
+  normalizeUsage,
   isReasoningModel,
   DEFAULT_MAX_COMPLETION_TOKENS,
+  MAX_PROMPT_CACHE_KEY_LENGTH,
 };

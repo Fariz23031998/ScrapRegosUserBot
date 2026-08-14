@@ -9,8 +9,8 @@ const { createEmployeeUser } = require('../src/db/bot-users-db');
 const { loadAiSettings, saveAiSettings, serializeAiSettings, resolveAgentModel } = require('../src/ai/settings');
 const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_TEST_PROMPT_SUFFIX, CUSTOMER_ASSIST_PROMPT_SUFFIX, KB_SYSTEM_PROMPT, TICKET_SUMMARY_SYSTEM_PROMPT } = require('../src/ai/default-prompts');
 const { getProvider, registerProvider, listProviders } = require('../src/ai/providers/registry');
-const { buildChatRequest, normalizeChatContent } = require('../src/ai/providers/openai');
-const { runAgent, resolveAgentTimeoutMs } = require('../src/ai/run-agent');
+const { buildChatRequest, normalizeChatContent, normalizeUsage } = require('../src/ai/providers/openai');
+const { runAgent, resolveAgentTimeoutMs, prependUserContext, buildPromptCacheKey } = require('../src/ai/run-agent');
 const {
   listKnowledgeArticles,
   getKnowledgeArticle,
@@ -401,6 +401,39 @@ describe('provider registry and runAgent', () => {
     assert.equal(result.steps, 2);
   });
 
+  it('forwards promptCacheKey and returns usage from the last chat call', async () => {
+    const keys = [];
+    const provider = {
+      async chat({ promptCacheKey }) {
+        keys.push(promptCacheKey);
+        return {
+          content: 'ok',
+          toolCalls: [],
+          usage: { prompt_tokens: 1200, completion_tokens: 20, cached_tokens: 1024 },
+        };
+      },
+    };
+    const result = await runAgent({
+      provider,
+      model: 'gpt-4o-mini',
+      system: 'test',
+      messages: [{ role: 'user', content: 'hi' }],
+      promptCacheKey: 'customer:42',
+    });
+    assert.deepEqual(keys, ['customer:42']);
+    assert.deepEqual(result.usage, {
+      prompt_tokens: 1200,
+      completion_tokens: 20,
+      cached_tokens: 1024,
+    });
+    assert.deepEqual(prependUserContext([{ role: 'user', content: 'hi' }], 'context'), [
+      { role: 'user', content: 'context' },
+      { role: 'user', content: 'hi' },
+    ]);
+    assert.equal(buildPromptCacheKey('customer', 42), 'customer:42');
+    assert.equal(buildPromptCacheKey('ticket_summary'), 'ticket_summary');
+  });
+
   it('injects tool vision parts as a follow-up user message', async () => {
     let step = 0;
     let secondMessages = null;
@@ -621,6 +654,7 @@ describe('customer agent handler', () => {
         addTicketMessage: async () => ({ ok: true }),
         runAgent: async (args) => {
           system = args.system;
+          assert.equal(args.promptCacheKey, 'customer:42');
           return { content: 'Ответ', steps: 1 };
         },
         provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
@@ -728,7 +762,7 @@ describe('customer agent handler', () => {
     );
   });
 
-  it('injects prior ticket summaries into the customer system prompt', async () => {
+  it('injects prior ticket summaries as a later user message', async () => {
     const database = createDb();
     saveAiSettings(database, { enabled: true, testMode: false, model: 'gpt-4o-mini' });
     savePrompt(database, 'customer', 'BASE PROMPT');
@@ -772,9 +806,12 @@ describe('customer agent handler', () => {
       }),
     });
     assert.equal(result.handled, true);
-    assert.match(captured.system, /BASE PROMPT/);
-    assert.match(captured.system, /Клиент уже спрашивал про оплату/);
-    assert.ok(captured.system.length <= SUMMARY_TOKEN_BUDGET * 4 + 8);
+    assert.equal(captured.system, 'BASE PROMPT');
+    assert.equal(captured.messages[0].role, 'user');
+    assert.match(captured.messages[0].content, /Клиент уже спрашивал про оплату/);
+    assert.ok(!String(captured.system).includes('Клиент уже спрашивал про оплату'));
+    assert.ok(captured.messages[0].content.length <= SUMMARY_TOKEN_BUDGET * 4 + 8);
+    assert.equal(captured.promptCacheKey, 'customer:42');
   });
 
   it('skips ChatBot messages to prevent loops', async () => {
@@ -1549,7 +1586,7 @@ describe('customer agent prompt preview', () => {
     assert.equal(loadedMessages, false);
   });
 
-  it('includes prior ticket summaries in the preview system prompt', async () => {
+  it('includes prior ticket summaries as a later user message', async () => {
     const database = createDb();
     saveAiSettings(database, { enabled: true, testMode: false });
     upsertTicketSummary(database, {
@@ -1564,8 +1601,10 @@ describe('customer agent prompt preview', () => {
       ticketId: 42,
       deps: previewDeps(),
     });
-    assert.match(preview.system, /Ранее чинили кассу/);
-    assert.equal(preview.messages.length, 2);
+    assert.equal(preview.system.includes('Ранее чинили кассу'), false);
+    assert.equal(preview.messages[0].role, 'user');
+    assert.match(preview.messages[0].content, /Ранее чинили кассу/);
+    assert.equal(preview.messages.length, 3);
     assert.equal(preview.summary, null);
     assert.equal(preview.prior_summaries.length, 1);
     assert.equal(preview.prior_summaries[0].ticket_id, 11);
@@ -1730,10 +1769,22 @@ describe('openai gpt-5 request shape', () => {
       model: 'gpt-5.6-terra',
       messages: [{ role: 'user', content: 'hi' }],
       reasoningEffort: 'low',
+      promptCacheKey: 'customer:42',
     });
     assert.equal(gpt5.max_completion_tokens, 4096);
     assert.equal(gpt5.reasoning_effort, 'low');
     assert.equal(gpt5.temperature, undefined);
+    assert.equal(gpt5.prompt_cache_key, 'customer:42');
+    assert.equal(buildChatRequest({ model: 'gpt-4o-mini', messages: [] }).prompt_cache_key, undefined);
+    assert.deepEqual(
+      normalizeUsage({
+        prompt_tokens: 2000,
+        completion_tokens: 50,
+        prompt_tokens_details: { cached_tokens: 1920, cache_write_tokens: 80 },
+      }),
+      { prompt_tokens: 2000, completion_tokens: 50, cached_tokens: 1920, cache_write_tokens: 80 }
+    );
+    assert.equal(normalizeUsage(null), null);
   });
 
   it('normalizes array content parts', () => {
@@ -1900,20 +1951,21 @@ describe('knowledge base', () => {
   it('passes the stored KB system prompt into runAgent', async () => {
     const database = createDb();
     savePrompt(database, 'kb', 'KB STORED PROMPT');
-    let system = null;
+    let captured = null;
     const result = await runKbAgent({
       db: database,
       userId: 1,
       message: 'Найди статью про прайс',
       deps: {
         runAgent: async (args) => {
-          system = args.system;
+          captured = args;
           return { content: 'Нашёл.', steps: 1 };
         },
         provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
       },
     });
-    assert.equal(system, 'KB STORED PROMPT');
+    assert.equal(captured.system, 'KB STORED PROMPT');
+    assert.equal(captured.promptCacheKey, `kb:${result.session_id}`);
     assert.equal(result.reply, 'Нашёл.');
   });
 
@@ -2143,12 +2195,20 @@ describe('notify group topic', () => {
     });
   }
 
-  it('returns null config and omits tools until group settings are saved', () => {
+  it('returns null config but still exposes group tools', async () => {
     const database = createDb();
     assert.equal(loadAgentGroupConfig(database), null);
     const tools = createCustomerTools({ db: database });
-    assert.equal(tools.some((tool) => tool.name === 'list_group_topics'), false);
-    assert.equal(tools.some((tool) => tool.name === 'send_group_topic_message'), false);
+    const list = tools.find((tool) => tool.name === 'list_group_topics');
+    const send = tools.find((tool) => tool.name === 'send_group_topic_message');
+    assert.ok(list);
+    assert.ok(send);
+    const listed = await list.execute();
+    assert.equal(listed.ok, false);
+    assert.equal(listed.error, 'not_configured');
+    const sent = await send.execute({ topic_key: 'urgent', message: 'hello' });
+    assert.equal(sent.ok, false);
+    assert.equal(sent.error, 'not_configured');
   });
 
   it('lists allowlisted topics without thread ids', async () => {
@@ -2330,20 +2390,21 @@ describe('customer test agent', () => {
   it('uses the stored customer prompt plus test suffix', async () => {
     const database = createDb();
     savePrompt(database, 'customer', 'TEST CUSTOMER PROMPT');
-    let system = null;
+    let captured = null;
     await runCustomerTestAgent({
       db: database,
       userId: 1,
       message: 'Привет',
       deps: {
         runAgent: async (args) => {
-          system = args.system;
+          captured = args;
           return { content: 'Ок', steps: 1 };
         },
         provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
       },
     });
-    assert.equal(system, `TEST CUSTOMER PROMPT\n${CUSTOMER_TEST_PROMPT_SUFFIX}`);
+    assert.equal(captured.system, `TEST CUSTOMER PROMPT\n${CUSTOMER_TEST_PROMPT_SUFFIX}`);
+    assert.match(captured.promptCacheKey, /^customer_test:/);
   });
 
   it('inlines uploaded images in the sandbox customer chat', async () => {
@@ -2443,10 +2504,13 @@ describe('ticket AI assist agent', () => {
     assert.match(captured.system, /ASSIST CUSTOMER PROMPT/);
     assert.match(captured.system, /ASSIST STAFF SUFFIX/);
     assert.ok(!captured.system.includes(CUSTOMER_ASSIST_PROMPT_SUFFIX));
-    assert.match(captured.system, /Обращение #42/);
-    assert.match(captured.system, /Клиент: Сколько стоит лицензия\?/);
-    assert.match(captured.system, /Сотрудник: Сейчас уточню/);
+    assert.equal(captured.system.includes('Обращение #42'), false);
+    assert.equal(captured.messages[0].role, 'user');
+    assert.match(captured.messages[0].content, /Обращение #42/);
+    assert.match(captured.messages[0].content, /Клиент: Сколько стоит лицензия\?/);
+    assert.match(captured.messages[0].content, /Сотрудник: Сейчас уточню/);
     assert.equal(captured.messages.at(-1).content, 'Назови цену 450 тысяч и предложи акцию');
+    assert.equal(captured.promptCacheKey, 'customer_assist:42');
     assert.ok(captured.tools.some((tool) => tool.name === 'reply_to_customer'));
     assert.ok(captured.tools.some((tool) => tool.name === 'notify_employee'));
   });

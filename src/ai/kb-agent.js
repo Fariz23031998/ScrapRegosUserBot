@@ -1,5 +1,5 @@
 const { loadAiSettings, resolveAgentModel } = require('./settings');
-const { runAgent, truncateText } = require('./run-agent');
+const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createKnowledgeTools } = require('./tools/knowledge');
 const { filterEnabledTools } = require('./tools/catalog');
@@ -51,6 +51,7 @@ async function runKbAgent({
     model: resolveAgentModel(settings, 'kb'),
     system: getResolvedPrompt(db, 'kb'),
     messages: history,
+    promptCacheKey: buildPromptCacheKey('kb', session.id),
     tools: filterEnabledTools(
       createKnowledgeTools({ db, userId, write: canWrite, deps }),
       settings.disabledTools,

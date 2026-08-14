@@ -158,9 +158,10 @@ describe('ticket summary agent', () => {
             { id: '3', author_entity_type: 'User', message_type: 'Regular', text: 'Перезапустили', created_date: 1200 },
           ],
         }),
-        runAgent: async ({ messages }) => {
+        runAgent: async ({ messages, promptCacheKey }) => {
           assert.match(messages[0].content, /Касса сломалась/);
           assert.equal(messages[0].content.includes('old'), false);
+          assert.equal(promptCacheKey, 'ticket_summary');
           return { content: 'Клиент чинил кассу, перезапустили.', steps: 1 };
         },
       },

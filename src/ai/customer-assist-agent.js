@@ -1,12 +1,12 @@
 const { loadAiSettings, resolveAgentModel } = require('./settings');
-const { runAgent, truncateText } = require('./run-agent');
+const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createCustomerTools } = require('./tools/customer');
 const { filterEnabledTools } = require('./tools/catalog');
 const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_ASSIST_PROMPT_SUFFIX } = require('./default-prompts');
 const { getResolvedPrompt } = require('../db/ai-prompts');
 const { listClientTicketSummaries } = require('../db/ticket-summaries');
-const { appendPriorTicketSummaries, resolveTicketClientId } = require('./ticket-period');
+const { formatPriorSummariesForPrompt, resolveTicketClientId } = require('./ticket-period');
 const { historyHasAudioTranscript, historyHasVisionParts } = require('./chat-media');
 const { buildUploadedMessageContent, toModelHistory } = require('./chat-uploads');
 const {
@@ -55,12 +55,17 @@ function formatTicketMeta(ticket) {
   ].join(' ');
 }
 
-function buildCustomerAssistSystemPrompt(db, { ticket, chatSnapshot } = {}) {
-  const parts = [getResolvedPrompt(db, 'customer'), getResolvedPrompt(db, 'customer_assist')];
+function buildCustomerAssistSystemPrompt(db) {
+  return [getResolvedPrompt(db, 'customer'), getResolvedPrompt(db, 'customer_assist')]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function buildCustomerAssistContextContent(db, { ticket, chatSnapshot } = {}) {
+  const parts = [];
   const meta = formatTicketMeta(ticket);
   if (meta) parts.push(meta);
-  const summaries = appendPriorTicketSummaries(
-    '',
+  const summaries = formatPriorSummariesForPrompt(
     listClientTicketSummaries(db, resolveTicketClientId(ticket), { excludeTicketId: ticket?.id })
   );
   if (summaries) parts.push(summaries);
@@ -238,8 +243,12 @@ async function runTicketAssistAgent({
       provider,
       providerName: settings.provider,
       model: resolveAgentModel(settings, 'customer_assist'),
-      system: buildCustomerAssistSystemPrompt(db, { ticket, chatSnapshot }),
-      messages: history,
+      system: buildCustomerAssistSystemPrompt(db),
+      messages: prependUserContext(
+        history,
+        buildCustomerAssistContextContent(db, { ticket, chatSnapshot }),
+      ),
+      promptCacheKey: buildPromptCacheKey('customer_assist', ticket.id),
       tools,
       reasoningEffort: settings.reasoningEffort,
       hasVision: historyHasVisionParts(history),
@@ -266,6 +275,7 @@ module.exports = {
   CUSTOMER_ASSIST_SYSTEM_PROMPT,
   CUSTOMER_ASSIST_PROMPT_SUFFIX,
   buildCustomerAssistSystemPrompt,
+  buildCustomerAssistContextContent,
   formatTicketChatSnapshot,
   loadTicketAssistSession,
   runTicketAssistAgent,

@@ -81,10 +81,6 @@ function createCustomerTools({
     deps.listGroupTopics || (() => require('./notify-group').listAgentGroupTopics(db));
   const notifyGroupTopic =
     deps.notifyGroupTopic || ((args) => require('./notify-group').notifyGroupTopic(db, args));
-  const groupConfigured =
-    typeof deps.groupConfigured === 'boolean'
-      ? deps.groupConfigured
-      : Boolean(require('./notify-group').loadAgentGroupConfig(db));
 
   const tools = createKnowledgeTools({ db, write: false, deps });
 
@@ -265,36 +261,32 @@ function createCustomerTools({
           ticketId: ticket?.id ?? null,
         }),
     },
-    ...(groupConfigured
-      ? [
-          {
-            name: 'list_group_topics',
-            description:
-              'List internal Telegram group topics the agent may post to. Use this to pick a topic_key before send_group_topic_message.',
-            parameters: { type: 'object', properties: {} },
-            execute: async () => listGroupTopics(),
-          },
-          {
-            name: 'send_group_topic_message',
-            description:
-              'Post a message to an internal staff Telegram group topic (urgent help, KKM, new clients, field visits). Do not use this instead of answering the client. Call list_group_topics first if you are unsure which topic_key to use.',
-            parameters: {
-              type: 'object',
-              properties: {
-                topic_key: { type: 'string', description: 'Topic key from list_group_topics' },
-                message: { type: 'string' },
-              },
-              required: ['topic_key', 'message'],
-            },
-            execute: async ({ topic_key, message }) =>
-              notifyGroupTopic({
-                topicKey: topic_key,
-                message,
-                ticketId: ticket?.id ?? null,
-              }),
-          },
-        ]
-      : []),
+    {
+      name: 'list_group_topics',
+      description:
+        'List internal Telegram group topics the agent may post to. Use this to pick a topic_key before send_group_topic_message.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => listGroupTopics(),
+    },
+    {
+      name: 'send_group_topic_message',
+      description:
+        'Post a message to an internal staff Telegram group topic (urgent help, KKM, new clients, field visits). Do not use this instead of answering the client. Call list_group_topics first if you are unsure which topic_key to use.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic_key: { type: 'string', description: 'Topic key from list_group_topics' },
+          message: { type: 'string' },
+        },
+        required: ['topic_key', 'message'],
+      },
+      execute: async ({ topic_key, message }) =>
+        notifyGroupTopic({
+          topicKey: topic_key,
+          message,
+          ticketId: ticket?.id ?? null,
+        }),
+    },
     {
       name: 'assign_responsible',
       description: 'Assign a REGOS user as the ticket responsible. The employee must have regos_user_id.',
