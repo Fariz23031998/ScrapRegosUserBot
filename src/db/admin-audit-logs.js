@@ -56,6 +56,16 @@ function resolveActorFromSession(db, actor) {
     };
   }
 
+  if (actor.type === 'mcp') {
+    return {
+      actorType: 'mcp',
+      actorUserId: null,
+      actorTelegramId: null,
+      actorPhone: null,
+      actorName: 'MCP',
+    };
+  }
+
   const { getBotUserByTelegramId, getBotUserById } = require('./bot-users-db');
   let user = null;
   if (actor.type === 'telegram') {
@@ -225,6 +235,8 @@ const ENTITY_LABELS = {
   channel_settings: 'Настройки каналов',
   account: 'Аккаунт',
   rights: 'Права',
+  ai_prompt: 'Промпт AI',
+  knowledge_article: 'Статья базы знаний',
 };
 
 const ACTION_LABELS = {
@@ -241,6 +253,8 @@ const ACTION_LABELS = {
   delete_unpaid: 'Удаление неоплаченного',
   delete_cash: 'Удаление наличных',
   send_message: 'Сообщение',
+  lock: 'Блокировка',
+  unlock: 'Разблокировка',
 };
 
 function auditLogMatchesQuery(row, query) {

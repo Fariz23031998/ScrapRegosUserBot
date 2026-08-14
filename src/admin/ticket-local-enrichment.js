@@ -49,6 +49,7 @@ function mapFirmLinkSummary(link) {
     firm_record_id: link.firm_record_id,
     firm_name: link.firm_name,
     firm_phone: link.firm_phone,
+    firm_message: link.firm_message,
   };
 }
 
@@ -72,6 +73,39 @@ function orderMatchesAnyPhone(order, phones) {
     (phone) =>
       phonesMatch(order.client_phone, phone) || phonesMatch(order.additional_phone, phone)
   );
+}
+
+/**
+ * Seed matches are by ticket/firm phones. Expand to every unpaid order that shares
+ * a matched order's client_phone so the badge count matches the Orders link filter.
+ */
+function collectUnpaidOrdersForTicket(pendingOrders, ticketPhones) {
+  if (!ticketPhones.length) return [];
+  const seedMatches = pendingOrders.filter((order) => orderMatchesAnyPhone(order, ticketPhones));
+  if (!seedMatches.length) return [];
+
+  const clientPhones = [];
+  const seenClient = new Set();
+  for (const order of seedMatches) {
+    const phone = String(order.client_phone || '').trim();
+    if (!phone) continue;
+    const key = phone.replace(/\D/g, '');
+    if (!key || seenClient.has(key)) continue;
+    seenClient.add(key);
+    clientPhones.push(phone);
+  }
+  if (!clientPhones.length) return seedMatches;
+
+  const byId = new Map();
+  for (const order of pendingOrders) {
+    if (!clientPhones.some((phone) => phonesMatch(order.client_phone, phone))) continue;
+    byId.set(order.id, order);
+  }
+  // Keep any seed match that somehow lacks client_phone.
+  for (const order of seedMatches) {
+    byId.set(order.id, order);
+  }
+  return Array.from(byId.values());
 }
 
 const TS_RANK = { active: 2, expired: 1, none: 0 };
@@ -154,9 +188,7 @@ function enrichTicketsWithLocalData(db, tickets) {
     const clientId = ticketClientId(ticket);
     const firms = firmsForClient(clientId);
     const phones = collectTicketPhones(phone, firms);
-    const matchedOrders = phones.length
-      ? pendingOrders.filter((order) => orderMatchesAnyPhone(order, phones))
-      : [];
+    const matchedOrders = collectUnpaidOrdersForTicket(pendingOrders, phones);
     const technicalSupport = phones.reduce(
       (best, candidatePhone) => pickBetterTsStatus(best, tsForPhone(candidatePhone)),
       { status: 'none', ends_at: null, starts_at: null }
@@ -260,6 +292,7 @@ module.exports = {
   scheduleTicketRecordingDurationBackfill,
   summarizeUnpaidOrders,
   collectTicketPhones,
+  collectUnpaidOrdersForTicket,
   ticketClientId,
   ticketClientPhone,
   RECORDING_RESOLVE_CONCURRENCY,

@@ -472,6 +472,8 @@ describe('admin orders API', () => {
     assert.equal(filteredBody.orders[0].id, pending.id);
     assert.equal(filteredBody.orders[0].status, 'pending');
     assert.ok(filteredBody.orders[0].status_label);
+    assert.equal(filteredBody.orders[0].payment_provider, null);
+    assert.equal(filteredBody.orders[0].payment_provider_label, null);
 
     const byClient = await request(
       server,
@@ -512,6 +514,15 @@ describe('admin orders API', () => {
     const byPaymentBody = JSON.parse(byPayment.body);
     assert.equal(byPaymentBody.total, 1);
     assert.equal(byPaymentBody.orders[0].id, cash.id);
+
+    const byClick = await request(server, 'GET', '/bot-admin/api/orders?payment=click&limit=50', {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(byClick.statusCode, 200);
+    const byClickBody = JSON.parse(byClick.body);
+    assert.equal(byClickBody.total, 1);
+    assert.equal(byClickBody.orders[0].status, 'paid');
+    assert.equal(byClickBody.orders[0].payment_provider, 'click');
   });
 
   it('allows delete / paid-cash / renotify only for pending orders', async () => {

@@ -16,6 +16,9 @@ const TicketDetailPage = lazy(() => import("./pages/TicketDetailPage"));
 const TechnicalSupportPage = lazy(() => import("./pages/TechnicalSupportPage"));
 const PricesPage = lazy(() => import("./pages/PricesPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
+const CustomerAgentPage = lazy(() => import("./pages/CustomerAgentPage"));
+const PromptsPage = lazy(() => import("./pages/PromptsPage"));
 
 function SuspensePage({ children }: { children: React.ReactNode }) {
   return (
@@ -26,15 +29,8 @@ function SuspensePage({ children }: { children: React.ReactNode }) {
 }
 
 function HomeRedirect() {
-  const { firstAllowedPath, isLoading, hasPermission } = useAuth();
+  const { firstAllowedPath, isLoading } = useAuth();
   if (isLoading) return <LoadingState />;
-  if (hasPermission("users_read")) {
-    return (
-      <SuspensePage>
-        <UsersPage />
-      </SuspensePage>
-    );
-  }
   if (!firstAllowedPath) {
     return (
       <main className="page page--centered">
@@ -52,6 +48,16 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<BotAdminLayout />}>
           <Route index element={<HomeRedirect />} />
+          <Route element={<ProtectedRoute permission="users_read" />}>
+            <Route
+              path="users"
+              element={
+                <SuspensePage>
+                  <UsersPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
           <Route element={<ProtectedRoute permission="orders_read" />}>
             <Route
               path="orders"
@@ -120,7 +126,35 @@ export default function App() {
               }
             />
           </Route>
+          <Route element={<ProtectedRoute permission="knowledge_read" />}>
+            <Route
+              path="knowledge"
+              element={
+                <SuspensePage>
+                  <KnowledgePage />
+                </SuspensePage>
+              }
+            />
+          </Route>
+          <Route element={<ProtectedRoute permission="ai_customer_test" />}>
+            <Route
+              path="customer-agent"
+              element={
+                <SuspensePage>
+                  <CustomerAgentPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
           <Route element={<ProtectedRoute permission="settings_read" />}>
+            <Route
+              path="prompts"
+              element={
+                <SuspensePage>
+                  <PromptsPage />
+                </SuspensePage>
+              }
+            />
             <Route
               path="settings"
               element={

@@ -82,6 +82,21 @@ function beginEventProcessing(webhookData, nowMs) {
   return { duplicate: false, eventId };
 }
 
+function defaultHandleCustomerMessage(args) {
+  const { handleCustomerChatMessage } = require('../ai/customer-agent');
+  return handleCustomerChatMessage(args);
+}
+
+function defaultSummarizeClosedTicket(args) {
+  const { summarizeClosedTicket } = require('../ai/ticket-summary-agent');
+  return summarizeClosedTicket(args);
+}
+
+function ticketWasClosed(eventAction, ticket) {
+  const { shouldSummarizeClosedTicket } = require('../ai/ticket-summary-agent');
+  return shouldSummarizeClosedTicket(eventAction, ticket);
+}
+
 function createRegosTicketWebhookHandler({
   connectedIntegrationId = process.env.REGOS_INTEGRATION_TOKEN,
   findTicket = findTicketById,
@@ -89,6 +104,8 @@ function createRegosTicketWebhookHandler({
   now = () => Date.now(),
   db = null,
   resolveRecordingCache = resolveTicketRecordingCache,
+  handleCustomerMessage = defaultHandleCustomerMessage,
+  summarizeClosedTicket = defaultSummarizeClosedTicket,
   schedule = (task) => {
     setImmediate(task);
   },
@@ -124,6 +141,23 @@ function createRegosTicketWebhookHandler({
         source_action: eventAction,
         occurred_at: occurredAt,
       });
+
+      if (db && ticket && typeof summarizeClosedTicket === 'function') {
+        if (ticketWasClosed(eventAction, ticket)) {
+          schedule(() => {
+            Promise.resolve(
+              summarizeClosedTicket({
+                db,
+                ticket,
+                occurredAt,
+                now: nowMs,
+              })
+            ).catch((error) => {
+              console.error(`[ai] ticket summary failed for #${ticketId}:`, error);
+            });
+          });
+        }
+      }
 
       if (
         db &&
@@ -201,6 +235,29 @@ function createRegosTicketWebhookHandler({
         source_action: eventAction,
         occurred_at: occurredAt,
       });
+    }
+
+    if (eventAction === 'ChatMessageAdded' && db && typeof handleCustomerMessage === 'function') {
+      const authorType = String(payload.author_entity_type || '');
+      const messageType = payload.message_type != null ? String(payload.message_type) : '';
+      const isSystem = messageType === 'System';
+      const knownStaffOrBot = Boolean(authorType) && authorType !== 'Client' && !isSystem;
+      const knownOtherType = Boolean(messageType) && messageType !== 'Regular' && !isSystem;
+      if (!knownStaffOrBot && !knownOtherType) {
+        const messageId = parseOptionalMessageId(payload.id);
+        schedule(() => {
+          Promise.resolve(
+            handleCustomerMessage({
+              db,
+              chatId,
+              messageId,
+              payload,
+            })
+          ).catch((error) => {
+            console.error('[ai] customer agent failed', error);
+          });
+        });
+      }
     }
 
     return { ok: true, message: 'Webhook processed' };

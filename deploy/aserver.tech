@@ -32,6 +32,8 @@ server {
     }
 
     # ScrapRegosUserBot — payment / prices / admin server (port 3000, npm run server)
+    # Bot admin is the React SPA built from bot-admin-ui/ (npm run bot-admin-ui:build).
+    # Deep links under /bot-admin/* are served as the SPA shell; APIs stay on /bot-admin/api/*.
 
     location /api/orders/ {
         proxy_pass http://127.0.0.1:3000/api/orders/;
@@ -88,7 +90,7 @@ server {
         proxy_read_timeout 1h;
     }
 
-    # HTML / API under /bot-admin/ (CSS/JS matched by regex below keep long cache).
+    # HTML / SPA shell / API under /bot-admin/ (hashed Vite assets matched below keep long cache).
     location /bot-admin/ {
         proxy_pass http://127.0.0.1:3000/bot-admin/;
         proxy_http_version 1.1;
@@ -188,7 +190,21 @@ server {
         add_header Cache-Control "public, max-age=604800" always;
     }
 
-    # Admin panel CSS/JS/images (matched before the /bot-admin/ HTML proxy).
+    # Vite hashed assets (filenames change per build — safe to cache long).
+    location ^~ /bot-admin/assets/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800, immutable" always;
+    }
+
+    # Other admin static files (favicon, images, non-hashed CSS/JS if any).
     location ~* ^/bot-admin/.+\.(?:css|js|png|jpe?g|gif|svg|webp|ico|woff2?)$ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;

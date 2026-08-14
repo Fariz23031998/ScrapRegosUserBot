@@ -291,6 +291,7 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
     onAddFile,
     onSetParticipants,
     onSetResponsible,
+    onGetMessages,
     messages,
     files,
     chatFiles,
@@ -300,26 +301,35 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
   } = {}) {
     global.fetch = async (url, options) => {
       const urlStr = String(url);
-      if (cdn && urlStr === cdn.url) {
-        if (onCdnFetch) onCdnFetch(options);
-        const range = options?.headers?.Range || options?.headers?.range || '';
-        if (range && cdn.rangeBody != null) {
-          return new Response(cdn.rangeBody, {
-            status: 206,
+      if (cdn) {
+        if (cdn.redirectFrom && urlStr === cdn.redirectFrom) {
+          if (onCdnFetch) onCdnFetch({ ...options, url: urlStr, redirected: true });
+          return new Response(null, {
+            status: cdn.redirectStatus || 302,
+            headers: { location: cdn.url },
+          });
+        }
+        if (urlStr === cdn.url) {
+          if (onCdnFetch) onCdnFetch(options);
+          const range = options?.headers?.Range || options?.headers?.range || '';
+          if (range && cdn.rangeBody != null) {
+            return new Response(cdn.rangeBody, {
+              status: 206,
+              headers: {
+                'content-type': cdn.contentType || 'application/octet-stream',
+                'content-range': cdn.contentRange || 'bytes 0-4/10',
+                'accept-ranges': 'bytes',
+              },
+            });
+          }
+          return new Response(cdn.body, {
+            status: 200,
             headers: {
               'content-type': cdn.contentType || 'application/octet-stream',
-              'content-range': cdn.contentRange || 'bytes 0-4/10',
               'accept-ranges': 'bytes',
             },
           });
         }
-        return new Response(cdn.body, {
-          status: 200,
-          headers: {
-            'content-type': cdn.contentType || 'application/octet-stream',
-            'accept-ranges': 'bytes',
-          },
-        });
       }
       const endpoint = urlStr.split('/v1/')[1] || '';
       const body = options?.body && typeof options.body === 'string' ? JSON.parse(options.body) : {};
@@ -415,15 +425,25 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
       }
 
       if (endpoint === 'ChatMessage/Get') {
+        if (onGetMessages) onGetMessages(body);
         const rows = messages || [];
+        const newestFirst = [...rows].sort((a, b) => {
+          const dateA = Number(a?.created_date) || 0;
+          const dateB = Number(b?.created_date) || 0;
+          if (dateA !== dateB) return dateB - dateA;
+          return String(b?.id || '').localeCompare(String(a?.id || ''));
+        });
+        const limit = Math.max(1, Number(body.limit) || newestFirst.length || 1);
+        const offset = Math.max(0, Number(body.offset) || 0);
+        const slice = newestFirst.slice(offset, offset + limit);
         return {
           ok: true,
           async json() {
             return {
               ok: true,
-              result: rows,
-              next_offset: rows.length,
-              total: rows.length,
+              result: slice,
+              next_offset: offset + slice.length,
+              total: newestFirst.length,
             };
           },
         };
@@ -915,6 +935,60 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
     }
   });
 
+  it('loads the latest ChatMessage page for from_end and older pages by increasing offset', async () => {
+    const all = Array.from({ length: 80 }, (_, index) => ({
+      id: `msg-${index + 1}`,
+      chat_id: 'chat-uuid-42',
+      text: `m${index + 1}`,
+      created_date: 1000 + index,
+    }));
+    const requested = [];
+    mockRegos({
+      ticket: {
+        id: 42,
+        subject: 'Help',
+        status: 'Open',
+        chat_id: 'chat-uuid-42',
+      },
+      messages: all,
+      onGetMessages: (body) => requested.push({ limit: body.limit, offset: body.offset }),
+    });
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const { cookie } = await loginWithTicketsRead(server, { regosUserId: 27 });
+      const latest = await getPath(server, '/bot-admin/api/tickets/42/messages?limit=50&from_end=1', {
+        Cookie: cookie,
+      });
+      assert.equal(latest.statusCode, 200);
+      const latestBody = JSON.parse(latest.body.toString('utf8'));
+      assert.deepEqual(requested, [{ limit: 50, offset: 0 }]);
+      assert.equal(latestBody.offset, 0);
+      assert.equal(latestBody.next_offset, 50);
+      assert.equal(latestBody.has_older, true);
+      assert.equal(latestBody.messages.length, 50);
+      assert.equal(latestBody.messages[0].id, 'msg-31');
+      assert.equal(latestBody.messages.at(-1).id, 'msg-80');
+
+      const older = await getPath(server, '/bot-admin/api/tickets/42/messages?limit=50&offset=50', {
+        Cookie: cookie,
+      });
+      assert.equal(older.statusCode, 200);
+      const olderBody = JSON.parse(older.body.toString('utf8'));
+      assert.deepEqual(requested[1], { limit: 50, offset: 50 });
+      assert.equal(olderBody.has_older, false);
+      assert.equal(olderBody.messages[0].id, 'msg-1');
+      assert.equal(olderBody.messages.at(-1).id, 'msg-30');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it('proxies chat file bytes from File/Get url', async () => {
     const pngBytes = Buffer.from('fake-png-bytes');
     mockRegos({
@@ -953,6 +1027,56 @@ describe('POST /bot-admin/api/tickets/:id/messages', () => {
       assert.equal(res.statusCode, 200);
       assert.match(String(res.headers['content-type']), /image\/png/);
       assert.equal(res.body.equals(pngBytes), true);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('follows CDN redirects and maps ogg voice Content-Type', async () => {
+    const oggBytes = Buffer.from('OggS-fake-voice');
+    const fetched = [];
+    mockRegos({
+      ticket: {
+        id: 42,
+        subject: 'Help',
+        status: 'Open',
+        chat_id: 'chat-uuid-42',
+      },
+      files: [
+        {
+          id: 161871,
+          name: 'voice_161871.ogg',
+          extension: 'ogg',
+          mime_type: 'application/octet-stream',
+          media_type: 'voice',
+          url: 'https://cdn.example.com/files/161871',
+        },
+      ],
+      cdn: {
+        redirectFrom: 'https://cdn.example.com/files/161871',
+        url: 'https://cdn.example.com/signed/161871?token=abc',
+        body: oggBytes,
+        contentType: 'application/octet-stream',
+      },
+      onCdnFetch: (options) => {
+        fetched.push(options);
+      },
+    });
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const { cookie } = await loginWithTicketsRead(server, { regosUserId: 27 });
+      const res = await getPath(server, '/bot-admin/api/tickets/42/files/161871', { Cookie: cookie });
+      assert.equal(res.statusCode, 200);
+      assert.equal(String(res.headers['content-type']), 'audio/ogg');
+      assert.equal(res.body.equals(oggBytes), true);
+      assert.equal(fetched.some((item) => item.redirected), true);
+      assert.equal(fetched.some((item) => !item.redirected), true);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

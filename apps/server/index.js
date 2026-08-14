@@ -1,5 +1,6 @@
 const path = require('path');
-const { envPath, brandLogoPath } = require('../../src/paths');
+const fs = require('fs');
+const { envPath, brandLogoPath, botAdminUiDistDir } = require('../../src/paths');
 require('dotenv').config({ path: envPath() });
 
 const http = require('http');
@@ -213,9 +214,19 @@ server.listen(port, () => {
   const adminConfigured = Boolean(
     process.env.BOT_ADMIN_LOGIN?.trim() && process.env.BOT_ADMIN_PASSWORD?.trim()
   );
+  const legacyForced = String(process.env.BOT_ADMIN_USE_LEGACY_UI || '').trim() === '1';
+  const reactUiReady = !legacyForced && fs.existsSync(path.join(botAdminUiDistDir(), 'index.html'));
   console.log(`CLICK server listening on :${port}`);
   if (!adminConfigured) {
     console.warn('BOT_ADMIN_LOGIN / BOT_ADMIN_PASSWORD not set — /bot-admin/ is disabled.');
+  } else if (reactUiReady) {
+    console.log('Bot admin UI: React SPA (bot-admin-ui/dist)');
+  } else if (legacyForced) {
+    console.warn('Bot admin UI: legacy public/bot-admin (BOT_ADMIN_USE_LEGACY_UI=1)');
+  } else {
+    console.warn(
+      'Bot admin UI: legacy public/bot-admin — run `npm run bot-admin-ui:build` to enable the React SPA.'
+    );
   }
 });
 

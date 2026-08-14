@@ -37,6 +37,28 @@ export function escapeHtml(value: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Render Telegram-style HTML used in firm cards.
+ * Keeps a small allowlist (b/code/a/…) and strips everything else.
+ * Does not re-escape content: messages already escape user values server-side.
+ */
+export function sanitizeTelegramHtml(value: unknown): string {
+  const raw = String(value ?? "");
+  if (!raw) return "";
+
+  return raw
+    .replace(/<script\b[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son\w+\s*=\s*(["']).*?\1/gi, "")
+    .replace(/<(?!\/?(?:b|strong|i|em|u|s|code|pre|br|a)(?:\s|\/|>))\/?[a-zA-Z][^>]*>/g, "")
+    .replace(/<br\s*\/?>/gi, "<br />")
+    .replace(/<a\s+[^>]*>/gi, (tag) => {
+      const hrefMatch = tag.match(/href\s*=\s*(["'])(.*?)\1/i);
+      const href = hrefMatch?.[2]?.trim() || "";
+      if (!/^https?:\/\//i.test(href)) return "";
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`;
+    });
+}
+
 export function formatDateTime(value: unknown): string {
   if (!value) return "—";
   const raw = String(value);

@@ -1,7 +1,7 @@
 const { listPaymeOrdersForReconcile, getOrderById } = require('../db/partners-db');
 const { syncPaymeReceiptStatus } = require('./payme-receipts');
 
-const DEFAULT_INTERVAL_MS = 45_000;
+const DEFAULT_INTERVAL_MS = 450_000;
 const DEFAULT_CONCURRENCY = 3;
 
 function getReconcileIntervalMs() {

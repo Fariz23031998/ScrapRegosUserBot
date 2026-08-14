@@ -1,4 +1,5 @@
 const { openDb } = require('../db/partners-db');
+const { listLinksByFirm } = require('../db/client-firm-links');
 const { loadVipClients, isVipClient, VIP_LABEL, extractPhoneFromText } = require('./vip-clients');
 const {
   getActiveTechnicalSupportSubscription,
@@ -708,76 +709,101 @@ async function getFirmCardByTypeAndId(db, type, recordId) {
 
     if (firmType === 'partner') {
       const partner = await liveGetPartnerById(id);
-      if (!partner) return null;
-      entry = {
-        type: 'partner',
-        phone: partner.phone,
-        recordId: partner.id,
-        clientName: partner.name,
-        message: formatWithExpiry(formatPartner(partner), partner.registered_at),
-      };
+      if (partner) {
+        entry = {
+          type: 'partner',
+          phone: partner.phone,
+          recordId: partner.id,
+          clientName: partner.name,
+          message: formatWithExpiry(formatPartner(partner), partner.registered_at),
+        };
+      }
     } else if (firmType === 'vcr1_partner') {
       const partner = await liveGetVcr1PartnerById(id);
-      if (!partner) return null;
-      entry = {
-        type: 'vcr1_partner',
-        phone: partner.phone,
-        recordId: partner.id,
-        clientName: partner.name,
-        message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
-      };
+      if (partner) {
+        entry = {
+          type: 'vcr1_partner',
+          phone: partner.phone,
+          recordId: partner.id,
+          clientName: partner.name,
+          message: formatWithExpiry(formatVcr1Partner(partner), partner.registered_at),
+        };
+      }
     } else if (firmType === 'vcr1_license') {
       const license = await liveGetVcr1LicenseById(id);
-      if (!license) return null;
-      const partner = await findVcr1PartnerForLicense(license, null);
-      entry = {
-        type: 'vcr1_license',
-        phone: partner?.phone || null,
-        recordId: license.id,
-        clientName: license.partner || partner?.name || null,
-        message: formatWithExpiry(
-          formatVcr1License(license, partner),
-          partner?.registered_at || null
-        ),
-      };
+      if (license) {
+        const partner = await findVcr1PartnerForLicense(license, null);
+        entry = {
+          type: 'vcr1_license',
+          phone: partner?.phone || null,
+          recordId: license.id,
+          clientName: license.partner || partner?.name || null,
+          message: formatWithExpiry(
+            formatVcr1License(license, partner),
+            partner?.registered_at || null
+          ),
+        };
+      }
     } else if (firmType === 'license') {
       const license = await liveGetLicenseById(id);
-      if (!license) return null;
-      entry = {
-        type: 'license',
-        phone: license.phone,
-        recordId: license.id,
-        clientName: license.fio,
-        message: formatWithExpiry(formatLicense(license), license.generated),
-      };
+      if (license) {
+        entry = {
+          type: 'license',
+          phone: license.phone,
+          recordId: license.id,
+          clientName: license.fio,
+          message: formatWithExpiry(formatLicense(license), license.generated),
+        };
+      }
     } else if (firmType === 'rpos_client') {
       const client = await liveGetRposClientById(id);
-      if (!client) return null;
-      entry = {
-        type: 'rpos_client',
-        phone: client.phone,
-        recordId: client.id,
-        clientName: client.name,
-        message: formatWithExpiry(formatRposClient(client), client.created_at),
-      };
+      if (client) {
+        entry = {
+          type: 'rpos_client',
+          phone: client.phone,
+          recordId: client.id,
+          clientName: client.name,
+          message: formatWithExpiry(formatRposClient(client), client.created_at),
+        };
+      }
     } else if (firmType === 'rpos_account') {
       const account = await liveGetRposAccountById(id);
-      if (!account) return null;
-      entry = {
-        type: 'rpos_account',
-        phone: null,
-        recordId: account.id,
-        clientName: account.client_name,
-        message: formatWithExpiry(formatRposAccount(account), account.created_at),
-      };
-    } else {
-      return null;
+      if (account) {
+        entry = {
+          type: 'rpos_account',
+          phone: null,
+          recordId: account.id,
+          clientName: account.client_name,
+          message: formatWithExpiry(formatRposAccount(account), account.created_at),
+        };
+      }
     }
 
-    const built = buildSearchResult([entry], db);
-    return built.found ? built.results[0] : entry;
+    if (entry) {
+      const built = buildSearchResult([entry], db);
+      return built.found ? built.results[0] : entry;
+    }
   } catch (err) {
     console.error('Live firm card failed:', err?.message || err);
+  }
+
+  return getCachedFirmCard(db, firmType, id);
+}
+
+function getCachedFirmCard(db, firmType, recordId) {
+  try {
+    const link = listLinksByFirm(db, firmType, recordId)[0];
+    if (!link) return null;
+    if (!link.firm_message && !link.firm_name) return null;
+    return {
+      type: link.firm_type,
+      phone: link.firm_phone || null,
+      recordId: link.firm_record_id,
+      clientName: link.firm_name || null,
+      message: link.firm_message || link.firm_name || null,
+    };
+  } catch (error) {
+    console.error('Cached firm card failed:', error?.message || error);
     return null;
   }
 }

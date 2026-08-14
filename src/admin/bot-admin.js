@@ -85,6 +85,9 @@ const {
   editTicket,
   setTicketStatus,
   setTicketResponsible,
+  setTicketParticipants,
+  normalizeParticipantUserIds,
+  participantUserIdsEqual,
   mapRegosUserSummary,
   mapRegosChannelSummary,
   matchPhoneToRegosUser,
@@ -128,6 +131,39 @@ const { formatPaymentPageUrl, getDefaultPaymentProvider } = require('../payments
 const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
+const { loadAiSettings, saveAiSettings, serializeAiSettings } = require('../ai/settings');
+const { notifyGroupTopic } = require('../ai/tools/notify-group');
+const { runKbAgent } = require('../ai/kb-agent');
+const { previewCustomerAgentPrompt } = require('../ai/customer-agent');
+const { loadCustomerTestSession, runCustomerTestAgent } = require('../ai/customer-test-agent');
+const { loadTicketAssistSession, runTicketAssistAgent } = require('../ai/customer-assist-agent');
+const { CHAT_MESSAGE_JSON_LIMIT, parseChatUploadFiles } = require('../ai/chat-uploads');
+const {
+  listKnowledgeArticles,
+  getKnowledgeArticle,
+  createKnowledgeArticle,
+  updateKnowledgeArticle,
+  deleteKnowledgeArticle,
+  setKnowledgeArticleLocked,
+  getOrCreateKbSession,
+  listKbSessionMessages,
+  clearKbSessionHistory,
+} = require('../db/knowledge-articles');
+const {
+  listPromptTypes,
+  getPrompt,
+  createPrompt,
+  updatePrompt,
+  setActivePrompt,
+  deletePrompt,
+} = require('../db/ai-prompts');
+const {
+  getTicketSummary,
+  saveTicketSummaryText,
+  deleteTicketSummary,
+} = require('../db/ticket-summaries');
+const { resolveTicketClientId } = require('../ai/ticket-period');
+const { createKnowledgeMcpRouter } = require('../mcp/knowledge-mcp');
 const { getTicketRecordingUrl } = require('./ticket-recording');
 const {
   summarizeByDuration,
@@ -247,6 +283,8 @@ function mapUserResponse(user) {
     role: user.role,
     phone: user.phone,
     display_name: user.display_name,
+    job_title: user.job_title || null,
+    description: user.description || null,
     first_name: user.first_name,
     last_name: user.last_name,
     username: user.username,
@@ -269,6 +307,8 @@ function snapshotUserForAudit(user) {
     role: user.role ?? null,
     phone: user.phone ?? null,
     display_name: user.display_name ?? null,
+    job_title: user.job_title ?? null,
+    description: user.description ?? null,
     admin_login: user.admin_login || null,
     has_password: Boolean(user.password_hash || user.has_password),
     regos_user_id: user.regos_user_id ?? null,
@@ -423,16 +463,35 @@ function sendPublicFile(res, publicDir, filename) {
   return res.sendFile(absolutePath);
 }
 
-function useBotAdminReactUi() {
-  return String(process.env.BOT_ADMIN_USE_REACT_UI || '').trim() === '1';
-}
-
 function botAdminReactUiIndexPath() {
   return path.join(botAdminUiDistDir(), 'index.html');
 }
 
+/** React SPA is the default UI when `bot-admin-ui/dist` is built. */
+function isBotAdminReactUiReady() {
+  if (String(process.env.BOT_ADMIN_USE_LEGACY_UI || '').trim() === '1') {
+    return false;
+  }
+  return fs.existsSync(botAdminReactUiIndexPath());
+}
+
 function sendBotAdminReactUiIndex(res) {
   return res.sendFile(botAdminReactUiIndexPath());
+}
+
+function isBotAdminSpaPath(reqPath) {
+  const pathname = String(reqPath || '').split('?')[0];
+  if (!pathname || pathname === '/') return false;
+  if (
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/auth/') ||
+    pathname.startsWith('/mcp') ||
+    pathname === '/rights-meta'
+  ) {
+    return false;
+  }
+  if (path.extname(pathname)) return false;
+  return true;
 }
 
 function parsePaginationQuery(req) {
@@ -453,7 +512,12 @@ const ORDER_STATUS_LABELS = {
   deleted: 'Удалён',
 };
 
+function isPaidOrderStatus(status) {
+  return status === 'paid' || status === 'paid_cash';
+}
+
 function mapAdminOrderRow(order) {
+  const paymentProvider = isPaidOrderStatus(order.status) ? order.payment_provider ?? null : null;
   return {
     id: order.id,
     status: order.status,
@@ -466,8 +530,8 @@ function mapAdminOrderRow(order) {
     employee_name: order.employee_name || null,
     employee_phone: order.employee_phone || order.bot_user_phone || null,
     customer_name: order.customer_name || null,
-    payment_provider: order.payment_provider ?? null,
-    payment_provider_label: formatPaymentProviderLabel(order.payment_provider),
+    payment_provider: paymentProvider,
+    payment_provider_label: formatPaymentProviderLabel(paymentProvider),
     ticket_id: order.ticket_id ?? null,
     created_at: order.created_at,
     paid_at: order.paid_at ?? null,
@@ -567,22 +631,7 @@ function buildDurationSummary(tickets, channelSettings, db = null) {
   };
 }
 
-const MAX_CHAT_FILES = 5;
-const MAX_CHAT_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_CHAT_FILE_NAME = 200;
-const MAX_CHAT_FILE_EXTENSION = 10;
 const CHAT_FILE_CACHE_TTL_MS = 10 * 60 * 1000;
-const CHAT_MESSAGE_JSON_LIMIT = '12mb';
-
-function stripChatFileBase64(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const comma = raw.indexOf(',');
-  if (/^data:/i.test(raw) && comma >= 0) {
-    return raw.slice(comma + 1).replace(/\s+/g, '');
-  }
-  return raw.replace(/\s+/g, '');
-}
 
 function collectMessageFileIds(messages) {
   const ids = [];
@@ -610,76 +659,6 @@ function toPublicChatFile(file) {
   };
 }
 
-function parseChatUploadFiles(rawFiles) {
-  if (rawFiles == null || rawFiles === '') return [];
-  if (!Array.isArray(rawFiles)) {
-    const error = new Error('Некорректный список файлов.');
-    error.status = 400;
-    throw error;
-  }
-  if (rawFiles.length > MAX_CHAT_FILES) {
-    const error = new Error(`Можно прикрепить не больше ${MAX_CHAT_FILES} файлов.`);
-    error.status = 400;
-    throw error;
-  }
-
-  return rawFiles.map((item, index) => {
-    const name = String(item?.name || '').trim() || `file-${index + 1}`;
-    if (name.length > MAX_CHAT_FILE_NAME) {
-      const error = new Error('Имя файла слишком длинное.');
-      error.status = 400;
-      throw error;
-    }
-
-    let extension = String(item?.extension || '')
-      .trim()
-      .replace(/^\./, '');
-    if (!extension) {
-      const dot = name.lastIndexOf('.');
-      if (dot > 0 && dot < name.length - 1) {
-        extension = name.slice(dot + 1);
-      }
-    }
-    extension = extension.toLowerCase();
-    if (!extension || extension.length > MAX_CHAT_FILE_EXTENSION || /[^a-z0-9]/i.test(extension)) {
-      const error = new Error('Укажите корректное расширение файла.');
-      error.status = 400;
-      throw error;
-    }
-
-    const data = stripChatFileBase64(item?.data);
-    let buffer;
-    try {
-      buffer = data ? Buffer.from(data, 'base64') : null;
-    } catch {
-      buffer = null;
-    }
-    if (!buffer || !buffer.length) {
-      const error = new Error('Файл пустой или повреждён.');
-      error.status = 400;
-      throw error;
-    }
-    if (buffer.length > MAX_CHAT_FILE_BYTES) {
-      const error = new Error('Файл слишком большой (максимум 10 МБ).');
-      error.status = 400;
-      throw error;
-    }
-
-    const parsed = {
-      name,
-      extension,
-      data: buffer.toString('base64'),
-    };
-    const width = Number(item?.width);
-    const height = Number(item?.height);
-    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-      parsed.width = Math.round(width);
-      parsed.height = Math.round(height);
-    }
-    return parsed;
-  });
-}
-
 function isSafeFileUrl(value) {
   try {
     const url = new URL(String(value || '').trim());
@@ -687,6 +666,90 @@ function isSafeFileUrl(value) {
   } catch {
     return false;
   }
+}
+
+const CHAT_FILE_MIME_BY_EXTENSION = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  mp3: 'audio/mpeg',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/ogg',
+  wav: 'audio/wav',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  weba: 'audio/webm',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  ogv: 'video/ogg',
+};
+
+function isGenericMimeType(value) {
+  const mime = String(value || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  return !mime || mime === 'application/octet-stream' || mime === 'binary/octet-stream';
+}
+
+function mimeFromChatFileExtension(file) {
+  const ext = String(file?.extension || '')
+    .trim()
+    .replace(/^\./, '')
+    .toLowerCase();
+  if (ext && CHAT_FILE_MIME_BY_EXTENSION[ext]) return CHAT_FILE_MIME_BY_EXTENSION[ext];
+  const name = String(file?.name || '')
+    .split(/[\\/]/)
+    .pop() || '';
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return '';
+  return CHAT_FILE_MIME_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] || '';
+}
+
+function resolveChatFileContentType(file, upstreamType) {
+  const declared = String(file?.mime_type || '').trim();
+  if (declared && !isGenericMimeType(declared)) return declared;
+  const upstream = String(upstreamType || '').trim();
+  if (upstream && !isGenericMimeType(upstream)) return upstream;
+  return mimeFromChatFileExtension(file) || upstream || declared || 'application/octet-stream';
+}
+
+/**
+ * Fetch remote chat/recording media while following http(s) redirects.
+ * `redirect: 'manual'` alone breaks CDN signed-URL hops and leaves <audio>/<video> empty.
+ */
+async function fetchUpstreamMedia(url, { range = '', signal, maxRedirects = 5 } = {}) {
+  let current = String(url || '').trim();
+  for (let hop = 0; hop <= maxRedirects; hop += 1) {
+    if (!isSafeFileUrl(current)) {
+      const error = new Error('Unsafe media URL');
+      error.code = 'UNSAFE_MEDIA_URL';
+      throw error;
+    }
+    const headers = {};
+    if (/^bytes=\d*-\d*$/i.test(range)) headers.Range = range;
+    const response = await fetch(current, {
+      headers,
+      redirect: 'manual',
+      signal,
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      return response;
+    }
+    const location = response.headers.get('location');
+    if (!location) return response;
+    current = new URL(location, current).href;
+  }
+  const error = new Error('Too many media redirects');
+  error.code = 'TOO_MANY_REDIRECTS';
+  throw error;
 }
 
 function writeSseEvent(res, event) {
@@ -721,12 +784,15 @@ function writeSseEvent(res, event) {
 function createBotAdminRouter(db) {
   const router = express.Router();
   const publicDir = botAdminPublicDir();
-  const reactUiEnabled = useBotAdminReactUi();
   const reactUiDistDir = botAdminUiDistDir();
-  const reactUiIndexPath = botAdminReactUiIndexPath();
-  const reactUiReady = reactUiEnabled && fs.existsSync(reactUiIndexPath);
+  const reactUiReady = isBotAdminReactUiReady();
   const recordingUrlCache = new Map();
   const chatFileCache = new Map();
+
+  function sendBotAdminPage(res, legacyFilename) {
+    if (reactUiReady) return sendBotAdminReactUiIndex(res);
+    return sendPublicFile(res, publicDir, legacyFilename);
+  }
 
   function getCachedChatFile(fileId) {
     const key = Number(fileId);
@@ -806,10 +872,7 @@ function createBotAdminRouter(db) {
     return seedRecordingUrlCache(recordingUrlCache, ticketId, row.recording_url);
   }
 
-  router.get('/login', (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'login.html');
-  });
+  router.get('/login', (_req, res) => sendBotAdminPage(res, 'login.html'));
   router.get('/login.css', (_req, res) => {
     if (reactUiReady) return res.status(404).end();
     return sendPublicFile(res, publicDir, 'login.css');
@@ -818,6 +881,8 @@ function createBotAdminRouter(db) {
     if (reactUiReady) return res.status(404).end();
     return sendPublicFile(res, publicDir, 'login.js');
   });
+
+  router.use(createKnowledgeMcpRouter(db));
 
   router.get('/auth/telegram', (req, res) => {
     const creds = getAdminCredentials();
@@ -1179,6 +1244,7 @@ function createBotAdminRouter(db) {
           phone: client.phone || null,
           email: client.email || null,
           external_id: client.external_id || null,
+          photo_url: client.photo_url || null,
         })),
       });
     } catch (error) {
@@ -1199,6 +1265,7 @@ function createBotAdminRouter(db) {
       email: client.email || null,
       external_id: client.external_id || null,
       description: client.description || null,
+      photo_url: client.photo_url || null,
     };
   }
 
@@ -1392,6 +1459,14 @@ function createBotAdminRouter(db) {
           description: req.body?.description,
           responsible_user_id: req.body?.responsible_user_id,
         });
+
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        let participantIds = null;
+        if (Object.hasOwn(body, 'participant_user_ids')) {
+          participantIds = normalizeParticipantUserIds(body.participant_user_ids);
+          await setTicketParticipants(created.id, participantIds, { replaceMode: true });
+        }
+
         const ticket = await findTicketById(created.id);
         if (!ticket) {
           return res.status(502).json({
@@ -1414,6 +1489,7 @@ function createBotAdminRouter(db) {
               subject: req.body?.subject ?? null,
               direction: req.body?.direction ?? null,
               responsible_user_id: req.body?.responsible_user_id ?? null,
+              participant_user_ids: participantIds,
             },
           }),
         });
@@ -1470,6 +1546,16 @@ function createBotAdminRouter(db) {
           await setTicketStatus(current.id, body.status);
         }
 
+        let nextParticipantIds = null;
+        let participantsChanged = false;
+        if (Object.hasOwn(body, 'participant_user_ids')) {
+          nextParticipantIds = normalizeParticipantUserIds(body.participant_user_ids);
+          if (!participantUserIdsEqual(nextParticipantIds, current.participant_user_ids)) {
+            await setTicketParticipants(current.id, nextParticipantIds, { replaceMode: true });
+            participantsChanged = true;
+          }
+        }
+
         const ticket = await findTicketById(current.id);
         if (!ticket) {
           return res.status(502).json({
@@ -1497,12 +1583,25 @@ function createBotAdminRouter(db) {
           before.status = current.status ?? null;
           after.status = ticket.status ?? body.status ?? null;
         }
+        if (participantsChanged) {
+          before.participant_user_ids = normalizeParticipantUserIds(current.participant_user_ids);
+          const refreshed = normalizeParticipantUserIds(ticket.participant_user_ids);
+          after.participant_user_ids = refreshed.length ? refreshed : nextParticipantIds;
+        }
         auditAdminChange(db, req, {
           entityType: 'ticket',
           entityId: current.id,
           action: 'update',
           summary: `Изменён тикет #${current.id}`,
           details: buildAuditDetails({ before, after }),
+        });
+        // Push list refresh immediately; do not wait for REGOS webhook round-trip.
+        ticketEventHub.publish({
+          type: 'ticket_changed',
+          ticket_id: ticket.id,
+          responsible_user_id: ticket.responsible_user_id ?? null,
+          source_action: 'TicketEdited',
+          occurred_at: Date.now(),
         });
         return res.json({ ticket });
       } catch (error) {
@@ -1611,6 +1710,519 @@ function createBotAdminRouter(db) {
     }
   );
 
+  router.get('/api/settings/ai', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json(serializeAiSettings(loadAiSettings(db)));
+    } catch (error) {
+      console.error('Load AI settings error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить настройки AI.' });
+    }
+  });
+
+  router.put('/api/settings/ai', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const before = loadAiSettings(db);
+      const saved = saveAiSettings(db, {
+        enabled: req.body?.enabled,
+        testMode: req.body?.test_mode ?? req.body?.testMode,
+        provider: req.body?.provider,
+        model: req.body?.model,
+        agentModels: req.body?.agent_models ?? req.body?.agentModels,
+        transcribeModel: req.body?.transcribe_model ?? req.body?.transcribeModel,
+        reasoningEffort: req.body?.reasoning_effort ?? req.body?.reasoningEffort,
+        historyLimit: req.body?.history_limit ?? req.body?.historyLimit,
+        groupChatId: req.body?.group_chat_id ?? req.body?.groupChatId,
+        groupTopics: req.body?.group_topics ?? req.body?.groupTopics,
+        disabledTools: req.body?.disabled_tools ?? req.body?.disabledTools,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'ai_settings',
+        entityId: null,
+        action: 'update',
+        summary: 'Обновлены настройки AI',
+        details: buildAuditDetails({
+          before: serializeAiSettings(before),
+          after: serializeAiSettings(saved),
+        }),
+      });
+      return res.json({ ok: true, ...serializeAiSettings(saved) });
+    } catch (error) {
+      if (
+        error.message === 'INVALID_AI_PROVIDER' ||
+        error.message === 'INVALID_AI_MODEL' ||
+        error.message === 'INVALID_AI_AGENT_MODELS' ||
+        error.message === 'INVALID_AI_TRANSCRIBE_MODEL' ||
+        error.message === 'INVALID_AI_REASONING_EFFORT' ||
+        error.message === 'INVALID_AI_HISTORY_LIMIT' ||
+        error.message === 'INVALID_AI_GROUP_CHAT_ID' ||
+        error.message === 'INVALID_AI_GROUP_TOPICS' ||
+        error.message === 'INVALID_AI_DISABLED_TOOLS'
+      ) {
+        return res.status(400).json({ message: 'Некорректные настройки AI.' });
+      }
+      console.error('Save AI settings error:', error);
+      return res.status(500).json({ message: 'Не удалось сохранить настройки AI.' });
+    }
+  });
+
+  router.post('/api/settings/ai/group-test', requireRight(db, 'settings_edit'), express.json(), async (req, res) => {
+    const topicKey = String(req.body?.topic_key || req.body?.topicKey || '').trim();
+    const message = String(req.body?.message || '').trim();
+    try {
+      const result = await notifyGroupTopic(db, {
+        topicKey,
+        message: message ? `Тест из bot-admin:\n\n${message}` : '',
+      });
+      if (!result.ok) {
+        const error = result.error || 'notify_failed';
+        const status =
+          error === 'not_configured' || error === 'unknown_topic' || error === 'empty_message'
+            ? 400
+            : error === 'no_bot'
+              ? 503
+              : 502;
+        const messages = {
+          not_configured: 'Сначала сохраните ID группы и хотя бы одну тему.',
+          unknown_topic: 'Тема не найдена в сохранённом списке.',
+          empty_message: 'Введите текст сообщения.',
+          no_bot: 'Не задан TELEGRAM_BOT_TOKEN.',
+        };
+        return res.status(status).json({
+          ok: false,
+          error,
+          message: messages[error] || `Не удалось отправить: ${error}`,
+        });
+      }
+      auditAdminChange(db, req, {
+        entityType: 'ai_group_topic',
+        entityId: result.topic_key,
+        action: 'test',
+        summary: `Тестовое сообщение в тему ${result.topic_name || result.topic_key}`,
+        details: buildAuditDetails({
+          topic_key: result.topic_key,
+          topic_name: result.topic_name,
+        }),
+      });
+      return res.json({
+        ok: true,
+        topic_key: result.topic_key,
+        topic_name: result.topic_name,
+      });
+    } catch (error) {
+      console.error('Test AI group topic error:', error);
+      return res.status(500).json({ message: 'Не удалось отправить тестовое сообщение.' });
+    }
+  });
+
+  function respondPromptWriteError(res, error, fallbackMessage) {
+    if (error.message === 'PROMPT_NOT_FOUND' || error.message === 'INVALID_PROMPT_SLUG') {
+      return res.status(404).json({ message: 'Промпт не найден.' });
+    }
+    if (error.message === 'INVALID_PROMPT_BODY' || error.message === 'INVALID_PROMPT_NAME') {
+      return res.status(400).json({ message: 'Некорректные данные промпта.' });
+    }
+    console.error(fallbackMessage, error);
+    return res.status(500).json({ message: fallbackMessage });
+  }
+
+  router.get('/api/ai/prompts', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ types: listPromptTypes(db) });
+    } catch (error) {
+      console.error('List AI prompts error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить промпты.' });
+    }
+  });
+
+  router.post('/api/ai/prompts', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const prompt = createPrompt(
+        db,
+        { type: req.body?.type, name: req.body?.name, body: req.body?.body },
+        { updatedBy: resolveKnowledgeActorUserId(req) }
+      );
+      auditAdminChange(db, req, {
+        entityType: 'ai_prompt',
+        entityId: prompt.id,
+        action: 'create',
+        summary: `Создан промпт «${prompt.name}»`,
+        details: buildAuditDetails({ before: null, after: prompt }),
+      });
+      return res.status(201).json({ prompt });
+    } catch (error) {
+      return respondPromptWriteError(res, error, 'Не удалось создать промпт.');
+    }
+  });
+
+  router.put('/api/ai/prompts/active', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const prompt = setActivePrompt(db, req.body?.type, req.body?.prompt_id);
+      auditAdminChange(db, req, {
+        entityType: 'ai_prompt',
+        entityId: prompt.id ?? `${prompt.type}:default`,
+        action: 'update',
+        summary: prompt.is_default
+          ? `Включён промпт по умолчанию «${prompt.type}»`
+          : `Включён промпт «${prompt.name}»`,
+        details: buildAuditDetails({ after: prompt }),
+      });
+      return res.json({ prompt });
+    } catch (error) {
+      return respondPromptWriteError(res, error, 'Не удалось включить промпт.');
+    }
+  });
+
+  router.put('/api/ai/prompts/:id', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const before = getPrompt(db, req.params.id);
+      const prompt = updatePrompt(
+        db,
+        req.params.id,
+        { name: req.body?.name, body: req.body?.body },
+        { updatedBy: resolveKnowledgeActorUserId(req) }
+      );
+      auditAdminChange(db, req, {
+        entityType: 'ai_prompt',
+        entityId: prompt.id,
+        action: 'update',
+        summary: `Изменён промпт «${prompt.name}»`,
+        details: buildAuditDetails({ before, after: prompt }),
+      });
+      return res.json({ prompt });
+    } catch (error) {
+      return respondPromptWriteError(res, error, 'Не удалось сохранить промпт.');
+    }
+  });
+
+  router.delete('/api/ai/prompts/:id', requireRight(db, 'settings_edit'), (req, res) => {
+    try {
+      const before = getPrompt(db, req.params.id);
+      const prompt = deletePrompt(db, req.params.id);
+      auditAdminChange(db, req, {
+        entityType: 'ai_prompt',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалён промпт «${before.name}»`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true, prompt });
+    } catch (error) {
+      return respondPromptWriteError(res, error, 'Не удалось удалить промпт.');
+    }
+  });
+
+  function resolveKnowledgeActorUserId(req) {
+    const actor = getSessionActor(req);
+    if (actor?.type === 'user') return Number(actor.userId) || null;
+    if (actor?.type === 'telegram') {
+      const user = getBotUserByTelegramId(db, actor.telegramId);
+      return user?.id ?? null;
+    }
+    return null;
+  }
+
+  function knowledgeArticleLockMessage() {
+    return 'Статья заблокирована. Изменение и удаление недоступны.';
+  }
+
+  function respondKnowledgeWriteError(res, error, fallbackMessage) {
+    if (error.message === 'NOT_FOUND') {
+      return res.status(404).json({ message: 'Статья не найдена.' });
+    }
+    if (error.message === 'ARTICLE_LOCKED') {
+      return res.status(409).json({ message: knowledgeArticleLockMessage() });
+    }
+    if (['INVALID_ARTICLE_TITLE', 'INVALID_ARTICLE_BODY', 'INVALID_ARTICLE_TAGS'].includes(error.message)) {
+      return res.status(400).json({ message: 'Некорректные данные статьи.' });
+    }
+    console.error(fallbackMessage, error);
+    return res.status(500).json({ message: fallbackMessage });
+  }
+
+  router.get('/api/knowledge/articles', requireRight(db, 'knowledge_read'), (req, res) => {
+    try {
+      const query = String(req.query.q || '').trim();
+      return res.json({ articles: listKnowledgeArticles(db, { query }) });
+    } catch (error) {
+      console.error('List knowledge articles error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить базу знаний.' });
+    }
+  });
+
+  router.get('/api/knowledge/articles/:id', requireRight(db, 'knowledge_read'), (req, res) => {
+    const article = getKnowledgeArticle(db, req.params.id);
+    if (!article) return res.status(404).json({ message: 'Статья не найдена.' });
+    return res.json({ article });
+  });
+
+  router.post('/api/knowledge/articles', requireRight(db, 'knowledge_edit'), express.json(), (req, res) => {
+    try {
+      const article = createKnowledgeArticle(
+        db,
+        { title: req.body?.title, body: req.body?.body, tags: req.body?.tags },
+        { updatedBy: resolveKnowledgeActorUserId(req) }
+      );
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_article',
+        entityId: article.id,
+        action: 'create',
+        summary: `Создана статья «${article.title}»`,
+        details: buildAuditDetails({ before: null, after: article }),
+      });
+      return res.status(201).json({ article });
+    } catch (error) {
+      if (['INVALID_ARTICLE_TITLE', 'INVALID_ARTICLE_BODY', 'INVALID_ARTICLE_TAGS'].includes(error.message)) {
+        return res.status(400).json({ message: 'Некорректные данные статьи.' });
+      }
+      console.error('Create knowledge article error:', error);
+      return res.status(500).json({ message: 'Не удалось создать статью.' });
+    }
+  });
+
+  router.put('/api/knowledge/articles/:id', requireRight(db, 'knowledge_edit'), express.json(), (req, res) => {
+    try {
+      const before = getKnowledgeArticle(db, req.params.id);
+      const article = updateKnowledgeArticle(
+        db,
+        req.params.id,
+        { title: req.body?.title, body: req.body?.body, tags: req.body?.tags },
+        { updatedBy: resolveKnowledgeActorUserId(req) }
+      );
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_article',
+        entityId: article.id,
+        action: 'update',
+        summary: `Изменена статья #${article.id}`,
+        details: buildAuditDetails({ before, after: article }),
+      });
+      return res.json({ article });
+    } catch (error) {
+      return respondKnowledgeWriteError(res, error, 'Не удалось обновить статью.');
+    }
+  });
+
+  router.post('/api/knowledge/articles/:id/lock', requireRight(db, 'knowledge_lock'), (req, res) => {
+    try {
+      const before = getKnowledgeArticle(db, req.params.id);
+      const article = setKnowledgeArticleLocked(db, req.params.id, true, {
+        updatedBy: resolveKnowledgeActorUserId(req),
+      });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_article',
+        entityId: article.id,
+        action: 'lock',
+        summary: `Заблокирована статья #${article.id}`,
+        details: buildAuditDetails({ before, after: article }),
+      });
+      return res.json({ article });
+    } catch (error) {
+      return respondKnowledgeWriteError(res, error, 'Не удалось заблокировать статью.');
+    }
+  });
+
+  router.post('/api/knowledge/articles/:id/unlock', requireRight(db, 'knowledge_unlock'), (req, res) => {
+    try {
+      const before = getKnowledgeArticle(db, req.params.id);
+      const article = setKnowledgeArticleLocked(db, req.params.id, false, {
+        updatedBy: resolveKnowledgeActorUserId(req),
+      });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_article',
+        entityId: article.id,
+        action: 'unlock',
+        summary: `Разблокирована статья #${article.id}`,
+        details: buildAuditDetails({ before, after: article }),
+      });
+      return res.json({ article });
+    } catch (error) {
+      return respondKnowledgeWriteError(res, error, 'Не удалось разблокировать статью.');
+    }
+  });
+
+  router.delete('/api/knowledge/articles/:id', requireRight(db, 'knowledge_edit'), (req, res) => {
+    try {
+      const before = getKnowledgeArticle(db, req.params.id);
+      const deleted = deleteKnowledgeArticle(db, req.params.id);
+      if (!deleted) return res.status(404).json({ message: 'Статья не найдена.' });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_article',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалена статья #${before.id}`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondKnowledgeWriteError(res, error, 'Не удалось удалить статью.');
+    }
+  });
+
+  router.get('/api/ai/kb-session', requireRight(db, 'knowledge_read'), (req, res) => {
+    try {
+      const session = getOrCreateKbSession(db, { userId: resolveKnowledgeActorUserId(req) });
+      return res.json({
+        session_id: session.id,
+        messages: listKbSessionMessages(db, session.id),
+      });
+    } catch (error) {
+      console.error('Load KB session error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить чат базы знаний.' });
+    }
+  });
+
+  router.post('/api/ai/kb-session', requireRight(db, 'knowledge_edit'), express.json(), (req, res) => {
+    try {
+      const userId = resolveKnowledgeActorUserId(req);
+      const session = Boolean(req.body?.reset)
+        ? clearKbSessionHistory(db, { sessionId: req.body?.session_id, userId })
+        : getOrCreateKbSession(db, { sessionId: req.body?.session_id, userId });
+      return res.json({
+        session_id: session.id,
+        messages: listKbSessionMessages(db, session.id),
+      });
+    } catch (error) {
+      if (error.message === 'FORBIDDEN') {
+        return res.status(403).json({ message: 'Нет доступа к этому чату.' });
+      }
+      console.error('Update KB session error:', error);
+      return res.status(500).json({ message: 'Не удалось обновить чат базы знаний.' });
+    }
+  });
+
+  router.post(
+    '/api/ai/kb-chat',
+    requireRight(db, 'knowledge_edit'),
+    express.json({ limit: CHAT_MESSAGE_JSON_LIMIT }),
+    async (req, res) => {
+    try {
+      let files;
+      try {
+        files = parseChatUploadFiles(req.body?.files);
+      } catch (parseError) {
+        return res.status(parseError.status || 400).json({
+          message: parseError.message || 'Некорректный файл.',
+        });
+      }
+      const message = String(req.body?.message || '').trim();
+      if (!message && files.length === 0) {
+        return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+      }
+      const result = await runKbAgent({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        sessionId: req.body?.session_id,
+        message,
+        files,
+        canWrite: actorHasPermission(db, getSessionActor(req), 'knowledge_edit'),
+      });
+      return res.json(result);
+    } catch (error) {
+      if (error.message === 'EMPTY_MESSAGE') {
+        return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+      }
+      if (error.message === 'OPENAI_API_KEY is not configured' || String(error.message || '').includes('OPENAI')) {
+        return res.status(503).json({ message: 'AI не настроен. Укажите OPENAI_API_KEY.' });
+      }
+      console.error('KB chat error:', error);
+      return res.status(500).json({ message: 'Не удалось получить ответ агента.' });
+    }
+  });
+
+  function parseOptionalTestTicketId(value) {
+    if (value === undefined) return undefined;
+    if (value == null || value === '') return null;
+    const id = Number(value);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  function parseOptionalTestPhone(value) {
+    if (value === undefined) return undefined;
+    return String(value || '').trim();
+  }
+
+  function sendCustomerTestError(res, error) {
+    if (error.message === 'EMPTY_MESSAGE') {
+      return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+    }
+    if (error.message === 'TICKET_NOT_FOUND') {
+      return res.status(404).json({ message: 'Тикет не найден.' });
+    }
+    if (error.message === 'SESSION_BUSY') {
+      return res.status(409).json({ message: 'Агент ещё отвечает. Подождите.' });
+    }
+    if (error instanceof RegosCrmError) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    if (error.message === 'OPENAI_API_KEY is not configured' || String(error.message || '').includes('OPENAI')) {
+      return res.status(503).json({ message: 'AI не настроен. Укажите OPENAI_API_KEY.' });
+    }
+    console.error('Customer test agent error:', error);
+    return res.status(500).json({ message: 'Не удалось получить ответ агента поддержки.' });
+  }
+
+  router.get('/api/ai/customer-test-session', requireRight(db, 'ai_customer_test'), async (req, res) => {
+    try {
+      const result = await loadCustomerTestSession({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        sessionId: req.query.session_id,
+        requireTicket: false,
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
+  router.post('/api/ai/customer-test-session', requireRight(db, 'ai_customer_test'), express.json(), async (req, res) => {
+    try {
+      const result = await loadCustomerTestSession({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        sessionId: req.body?.session_id,
+        ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
+        clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+        reset: Boolean(req.body?.reset),
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
+  router.post(
+    '/api/ai/customer-test-chat',
+    requireRight(db, 'ai_customer_test'),
+    express.json({ limit: CHAT_MESSAGE_JSON_LIMIT }),
+    async (req, res) => {
+    try {
+      let files;
+      try {
+        files = parseChatUploadFiles(req.body?.files);
+      } catch (parseError) {
+        return res.status(parseError.status || 400).json({
+          message: parseError.message || 'Некорректный файл.',
+        });
+      }
+      const message = String(req.body?.message || '').trim();
+      if (!message && files.length === 0) {
+        return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+      }
+      const result = await runCustomerTestAgent({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        sessionId: req.body?.session_id,
+        message,
+        files,
+        ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
+        clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
   router.get('/api/tickets/:id', requireRight(db, 'tickets_read'), async (req, res) => {
     try {
       const ticket = await findTicketById(req.params.id);
@@ -1633,6 +2245,182 @@ function createBotAdminRouter(db) {
       return res.status(500).json({ message: 'Не удалось загрузить тикет.' });
     }
   });
+
+  router.get('/api/tickets/:id/ai-prompt', requireRight(db, 'tickets_ai_prompt'), async (req, res) => {
+    try {
+      const rawMessageId = req.query.message_id != null ? String(req.query.message_id).trim() : '';
+      const preview = await previewCustomerAgentPrompt({
+        db,
+        ticketId: req.params.id,
+        messageId: rawMessageId || undefined,
+      });
+      return res.json(preview);
+    } catch (error) {
+      if (error?.code === 'ticket-not-found') {
+        return res.status(404).json({ message: 'Тикет не найден.' });
+      }
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      console.error('Get ticket AI prompt error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить промпт ИИ.' });
+    }
+  });
+
+  async function resolveSummaryTicketContext(ticketId) {
+    try {
+      return await findTicketById(ticketId);
+    } catch (error) {
+      if (error instanceof RegosCrmError && error.status === 404) return null;
+      console.warn('[bot-admin] Failed to load ticket for summary:', error.message || error);
+      return null;
+    }
+  }
+
+  router.put(
+    '/api/tickets/:id/summary',
+    requireRight(db, 'tickets_ai_prompt'),
+    express.json(),
+    async (req, res) => {
+      try {
+        const existing = getTicketSummary(db, req.params.id);
+        const bodyClientId = req.body?.client_id ?? req.body?.clientId;
+        const bodyChatId = req.body?.chat_id ?? req.body?.chatId;
+        const ticket =
+          existing || bodyClientId != null || bodyChatId != null
+            ? null
+            : await resolveSummaryTicketContext(req.params.id);
+        const summary = saveTicketSummaryText(db, req.params.id, req.body?.summary, {
+          clientId: bodyClientId ?? (ticket ? resolveTicketClientId(ticket) : undefined),
+          chatId: bodyChatId ?? ticket?.chat_id,
+        });
+        auditAdminChange(db, req, {
+          entityType: 'ticket_summary',
+          entityId: summary.ticket_id,
+          action: existing ? 'update' : 'create',
+          summary: existing
+            ? `Изменена сводка обращения #${summary.ticket_id}`
+            : `Создана сводка обращения #${summary.ticket_id}`,
+          details: buildAuditDetails({ before: existing, after: summary }),
+        });
+        return res.json({ summary });
+      } catch (error) {
+        if (error.message === 'INVALID_TICKET_ID') {
+          return res.status(400).json({ message: 'Некорректный идентификатор тикета.' });
+        }
+        if (error.message === 'INVALID_SUMMARY') {
+          return res.status(400).json({ message: 'Введите текст сводки.' });
+        }
+        console.error('Save ticket summary error:', error);
+        return res.status(500).json({ message: 'Не удалось сохранить сводку обращения.' });
+      }
+    }
+  );
+
+  router.delete('/api/tickets/:id/summary', requireRight(db, 'tickets_ai_prompt'), (req, res) => {
+    try {
+      const before = deleteTicketSummary(db, req.params.id);
+      if (!before) {
+        return res.status(404).json({ message: 'Сводка обращения не найдена.' });
+      }
+      auditAdminChange(db, req, {
+        entityType: 'ticket_summary',
+        entityId: before.ticket_id,
+        action: 'delete',
+        summary: `Удалена сводка обращения #${before.ticket_id}`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      if (error.message === 'INVALID_TICKET_ID') {
+        return res.status(400).json({ message: 'Некорректный идентификатор тикета.' });
+      }
+      console.error('Delete ticket summary error:', error);
+      return res.status(500).json({ message: 'Не удалось удалить сводку обращения.' });
+    }
+  });
+
+  function sendTicketAssistError(res, error) {
+    if (error.message === 'EMPTY_MESSAGE') {
+      return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+    }
+    if (error.message === 'TICKET_NOT_FOUND' || error.message === 'INVALID_TICKET_ID') {
+      return res.status(404).json({ message: 'Тикет не найден.' });
+    }
+    if (error.message === 'SESSION_BUSY') {
+      return res.status(409).json({ message: 'Агент ещё отвечает. Подождите.' });
+    }
+    if (error instanceof RegosCrmError) {
+      return res.status(error.status).json({ message: error.message });
+    }
+    if (error.message === 'OPENAI_API_KEY is not configured' || String(error.message || '').includes('OPENAI')) {
+      return res.status(503).json({ message: 'AI не настроен. Укажите OPENAI_API_KEY.' });
+    }
+    console.error('Ticket AI assist error:', error);
+    return res.status(500).json({ message: 'Не удалось получить ответ агента поддержки.' });
+  }
+
+  router.get('/api/tickets/:id/ai-assist', requireRight(db, 'tickets_read'), async (req, res) => {
+    try {
+      const result = await loadTicketAssistSession({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        ticketId: req.params.id,
+        sessionId: req.query.session_id,
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendTicketAssistError(res, error);
+    }
+  });
+
+  router.post('/api/tickets/:id/ai-assist', requireRight(db, 'tickets_read'), express.json(), async (req, res) => {
+    try {
+      const result = await loadTicketAssistSession({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        ticketId: req.params.id,
+        sessionId: req.body?.session_id,
+        reset: Boolean(req.body?.reset),
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendTicketAssistError(res, error);
+    }
+  });
+
+  router.post(
+    '/api/tickets/:id/ai-assist-chat',
+    requireRight(db, 'tickets_read'),
+    express.json({ limit: CHAT_MESSAGE_JSON_LIMIT }),
+    async (req, res) => {
+      try {
+        let files;
+        try {
+          files = parseChatUploadFiles(req.body?.files);
+        } catch (parseError) {
+          return res.status(parseError.status || 400).json({
+            message: parseError.message || 'Некорректный файл.',
+          });
+        }
+        const message = String(req.body?.message || '').trim();
+        if (!message && files.length === 0) {
+          return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+        }
+        const result = await runTicketAssistAgent({
+          db,
+          userId: resolveKnowledgeActorUserId(req),
+          ticketId: req.params.id,
+          sessionId: req.body?.session_id,
+          message,
+          files,
+        });
+        return res.json(result);
+      } catch (error) {
+        return sendTicketAssistError(res, error);
+      }
+    }
+  );
 
   router.get('/api/tickets/:id/recording', requireRight(db, 'tickets_read'), async (req, res) => {
     const abortController = new AbortController();
@@ -1660,9 +2448,8 @@ function createBotAdminRouter(db) {
       }
 
       const range = String(req.headers.range || '').trim();
-      const upstream = await fetch(recordingUrl, {
-        headers: /^bytes=\d*-\d*$/i.test(range) ? { Range: range } : {},
-        redirect: 'manual',
+      const upstream = await fetchUpstreamMedia(recordingUrl, {
+        range,
         signal: abortController.signal,
       });
 
@@ -1726,20 +2513,9 @@ function createBotAdminRouter(db) {
         100,
         Math.max(1, Number(req.query.limit) || DEFAULT_CHAT_MESSAGE_LIMIT)
       );
-      const fromEnd =
-        req.query.from_end === '1' ||
-        req.query.from_end === 'true' ||
-        String(req.query.from_end || '').toLowerCase() === 'yes';
-
-      let offset = Math.max(0, Number(req.query.offset) || 0);
-      if (fromEnd && req.query.offset == null) {
-        const probe = await getTicketMessages(chatId, {
-          limit: 1,
-          offset: 0,
-          includeStaffPrivate: true,
-        });
-        offset = Math.max(0, (probe.total || 0) - limit);
-      }
+      // ChatMessage/Get is newest-first: offset 0 is the latest page.
+      // from_end is accepted for compatibility and maps to that latest page.
+      const offset = Math.max(0, Number(req.query.offset) || 0);
 
       const page = await getTicketMessages(chatId, {
         limit,
@@ -1765,14 +2541,16 @@ function createBotAdminRouter(db) {
         ticketId: ticket.id,
         userNames,
       });
+      const total = Number(page.total) || messages.length;
+      const nextOffset = page.next_offset ?? page.offset + messages.length;
 
       return res.json({
         chat_id: chatId,
         messages,
-        next_offset: page.next_offset,
-        total: page.total,
+        next_offset: nextOffset,
+        total,
         offset: page.offset,
-        has_older: page.offset > 0,
+        has_older: nextOffset < total,
       });
     } catch (error) {
       if (error instanceof RegosCrmError) {
@@ -1933,9 +2711,8 @@ function createBotAdminRouter(db) {
       }
 
       const range = String(req.headers.range || '').trim();
-      const upstream = await fetch(file.url, {
-        headers: /^bytes=\d*-\d*$/i.test(range) ? { Range: range } : {},
-        redirect: 'manual',
+      const upstream = await fetchUpstreamMedia(file.url, {
+        range,
         signal: abortController.signal,
       });
       if (![200, 206].includes(upstream.status) || !upstream.body) {
@@ -1946,10 +2723,7 @@ function createBotAdminRouter(db) {
       }
 
       res.status(upstream.status);
-      const contentType =
-        file.mime_type ||
-        upstream.headers.get('content-type') ||
-        'application/octet-stream';
+      const contentType = resolveChatFileContentType(file, upstream.headers.get('content-type'));
       res.setHeader('Content-Type', contentType);
       for (const header of ['accept-ranges', 'content-length', 'content-range', 'etag', 'last-modified']) {
         const value = upstream.headers.get(header);
@@ -2774,6 +3548,8 @@ function createBotAdminRouter(db) {
       let user = createEmployeeUser(db, {
         phone,
         displayName: req.body?.display_name,
+        jobTitle: req.body?.job_title,
+        description: req.body?.description,
         rights: parseRightsBody(req.body?.rights || req.body),
         adminLogin: parseOptionalCredential(req.body?.admin_login),
         password: parseOptionalCredential(req.body?.password),
@@ -2827,6 +3603,8 @@ function createBotAdminRouter(db) {
       const updates = {
         phone: req.body?.phone,
         displayName: req.body?.display_name,
+        jobTitle: req.body?.job_title,
+        description: req.body?.description,
         rights: req.body?.rights ? parseRightsBody(req.body.rights) : parseRightsBody(req.body),
       };
       if (Object.prototype.hasOwnProperty.call(req.body || {}, 'admin_login')) {
@@ -2891,6 +3669,8 @@ function createBotAdminRouter(db) {
       const beforeUser = getBotUserById(db, userId);
       let user = convertCustomerToEmployee(db, userId, {
         displayName: req.body?.display_name,
+        jobTitle: req.body?.job_title,
+        description: req.body?.description,
         rights: parseRightsBody(req.body?.rights || req.body),
         adminLogin: parseOptionalCredential(req.body?.admin_login),
         password: parseOptionalCredential(req.body?.password),
@@ -3159,45 +3939,58 @@ function createBotAdminRouter(db) {
     }
   });
 
-  router.get('/order-logs', requireRight(db, 'order_logs_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'order-logs.html');
-  });
+  if (reactUiReady) {
+    // SPA client routes — auth/permissions are enforced by the React app and APIs.
+    const spaPagePaths = [
+      '/users',
+      '/orders',
+      '/order-logs',
+      '/logs',
+      '/tickets',
+      '/tickets/:id',
+      '/technical-support',
+      '/prices',
+      '/knowledge',
+      '/customer-agent',
+      '/prompts',
+      '/settings',
+    ];
+    for (const spaPath of spaPagePaths) {
+      router.get(spaPath, (_req, res) => sendBotAdminReactUiIndex(res));
+    }
+  } else {
+    router.get('/order-logs', requireRight(db, 'order_logs_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'order-logs.html');
+    });
 
-  router.get('/logs', requireRight(db, 'logs_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'logs.html');
-  });
+    router.get('/logs', requireRight(db, 'logs_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'logs.html');
+    });
 
-  router.get('/orders', requireRight(db, 'orders_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'orders.html');
-  });
+    router.get('/orders', requireRight(db, 'orders_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'orders.html');
+    });
 
-  router.get('/tickets/:id', requireRight(db, 'tickets_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'ticket-detail.html');
-  });
+    router.get('/tickets/:id', requireRight(db, 'tickets_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'ticket-detail.html');
+    });
 
-  router.get('/tickets', requireRight(db, 'tickets_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'tickets.html');
-  });
+    router.get('/tickets', requireRight(db, 'tickets_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'tickets.html');
+    });
 
-  router.get('/technical-support', requireRight(db, 'technical_support_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'technical-support.html');
-  });
+    router.get('/technical-support', requireRight(db, 'technical_support_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'technical-support.html');
+    });
 
-  router.get('/prices', requireRight(db, 'prices_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'prices.html');
-  });
+    router.get('/prices', requireRight(db, 'prices_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'prices.html');
+    });
 
-  router.get('/settings', requireRight(db, 'settings_read'), (_req, res) => {
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'settings.html');
-  });
+    router.get('/settings', requireRight(db, 'settings_read'), (_req, res) => {
+      return sendPublicFile(res, publicDir, 'settings.html');
+    });
+  }
 
   router.get('/', (req, res) => {
     // Without the trailing slash the browser resolves page-relative asset URLs
@@ -3210,26 +4003,33 @@ function createBotAdminRouter(db) {
     if (!isAuthenticated(req)) {
       return res.redirect('/bot-admin/login');
     }
+    if (reactUiReady) {
+      return sendBotAdminReactUiIndex(res);
+    }
     const actor = getSessionActor(req);
     const permissions = getSessionPermissions(db, actor);
-    if (!permissions.users_read) {
-      if (permissions.orders_read) return res.redirect('/bot-admin/orders');
-      if (permissions.order_logs_read) return res.redirect('/bot-admin/order-logs');
-      if (permissions.logs_read) return res.redirect('/bot-admin/logs');
-      if (permissions.tickets_read) return res.redirect('/bot-admin/tickets');
-      if (permissions.technical_support_read) return res.redirect('/bot-admin/technical-support');
-      if (permissions.prices_read) return res.redirect('/bot-admin/prices');
-      if (permissions.settings_read) return res.redirect('/bot-admin/settings');
+    if (permissions.tickets_read) return res.redirect('/bot-admin/tickets');
+    if (permissions.orders_read) return res.redirect('/bot-admin/orders');
+    if (permissions.order_logs_read) return res.redirect('/bot-admin/order-logs');
+    if (permissions.logs_read) return res.redirect('/bot-admin/logs');
+    if (permissions.technical_support_read) return res.redirect('/bot-admin/technical-support');
+    if (permissions.prices_read) return res.redirect('/bot-admin/prices');
+    if (permissions.settings_read) return res.redirect('/bot-admin/settings');
+    if (permissions.users_read) {
+      return sendPublicFile(res, publicDir, 'index.html');
     }
-    if (reactUiReady) return sendBotAdminReactUiIndex(res);
-    return sendPublicFile(res, publicDir, 'index.html');
+    return res.status(403).send('Нет доступа. Недостаточно прав для этого раздела.');
   });
 
   if (reactUiReady && fs.existsSync(reactUiDistDir)) {
     router.use(express.static(reactUiDistDir, { index: false }));
+    router.get('*', (req, res, next) => {
+      if (!isBotAdminSpaPath(req.path)) return next();
+      return sendBotAdminReactUiIndex(res);
+    });
+  } else {
+    router.use(requireAdminAuth, express.static(publicDir, { index: false }));
   }
-
-  router.use(requireAdminAuth, express.static(publicDir, { index: false }));
 
   return router;
 }

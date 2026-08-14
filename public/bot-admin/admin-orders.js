@@ -49,7 +49,9 @@ function formatEmployee(order) {
 }
 
 function formatPayment(order) {
-  return order.payment_provider_label || order.payment_provider || '—';
+  const status = String(order.status || '');
+  if (status !== 'paid' && status !== 'paid_cash') return '';
+  return order.payment_provider_label || order.payment_provider || '';
 }
 
 function formatTicketCell(order) {

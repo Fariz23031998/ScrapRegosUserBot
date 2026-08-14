@@ -32,6 +32,7 @@ const DEFAULT_RIGHTS = {
   tickets_create: 0,
   tickets_edit: 0,
   tickets_edit_closed: 0,
+  tickets_ai_prompt: 0,
   clients_edit: 0,
   clients_link_firm: 0,
   technical_support_read: 0,
@@ -44,6 +45,11 @@ const DEFAULT_RIGHTS = {
   prices_delete: 0,
   settings_read: 0,
   settings_edit: 0,
+  knowledge_read: 0,
+  knowledge_edit: 0,
+  knowledge_lock: 0,
+  knowledge_unlock: 0,
+  ai_customer_test: 0,
 };
 
 const RIGHTS_COLUMNS = Object.keys(DEFAULT_RIGHTS);
@@ -61,6 +67,7 @@ const ADMIN_RIGHTS_COLUMNS = [
   'tickets_create',
   'tickets_edit',
   'tickets_edit_closed',
+  'tickets_ai_prompt',
   'clients_edit',
   'clients_link_firm',
   'technical_support_read',
@@ -73,6 +80,11 @@ const ADMIN_RIGHTS_COLUMNS = [
   'prices_delete',
   'settings_read',
   'settings_edit',
+  'knowledge_read',
+  'knowledge_edit',
+  'knowledge_lock',
+  'knowledge_unlock',
+  'ai_customer_test',
 ];
 
 function normalizePhoneKey(phone) {
@@ -207,6 +219,16 @@ function ensureRegosLinkColumns(db) {
   `);
 }
 
+function ensureEmployeeProfileColumns(db) {
+  if (!tableExists(db, 'bot_users')) return;
+  if (!columnExists(db, 'bot_users', 'job_title')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN job_title TEXT');
+  }
+  if (!columnExists(db, 'bot_users', 'description')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN description TEXT');
+  }
+}
+
 function finishBotUsersMigration(db) {
   if (tableExists(db, 'bot_users_new') && !tableExists(db, 'bot_users')) {
     db.exec('ALTER TABLE bot_users_new RENAME TO bot_users');
@@ -215,6 +237,7 @@ function finishBotUsersMigration(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_bot_users_telegram_id ON bot_users(telegram_id)');
   ensureAdminCredentialColumns(db);
   ensureRegosLinkColumns(db);
+  ensureEmployeeProfileColumns(db);
   ensureUserRightsTable(db);
   seedMissingEmployeeRights(db);
 }
@@ -293,6 +316,7 @@ function migrateBotUsersSchema(db) {
   if (columnExists(db, 'bot_users', 'id')) {
     ensureAdminCredentialColumns(db);
     ensureRegosLinkColumns(db);
+    ensureEmployeeProfileColumns(db);
     ensureUserRightsTable(db);
     if (tableExists(db, 'bot_users_new')) {
       db.exec('DROP TABLE bot_users_new');
@@ -403,6 +427,7 @@ function migrateBotUsersSchema(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_bot_users_telegram_id ON bot_users(telegram_id)');
   ensureAdminCredentialColumns(db);
   ensureRegosLinkColumns(db);
+  ensureEmployeeProfileColumns(db);
   ensureUserRightsTable(db);
 
   const employees = db.prepare("SELECT id, phone FROM bot_users WHERE role = 'employee'").all();
@@ -586,7 +611,8 @@ function applyEmployeeAdminCredentials(db, userId, { adminLogin, password } = {}
   );
 }
 
-function createEmployeeUser(db, { phone, displayName, rights = {}, adminLogin, password } = {}) {
+function createEmployeeUser(db, { phone, displayName, jobTitle, description, rights = {}, adminLogin, password } = {}) {
+  ensureEmployeeProfileColumns(db);
   const normalized = normalizeStoredPhone(phone);
   const existing = findUserByPhone(db, normalized);
   if (existing) {
@@ -603,12 +629,14 @@ function createEmployeeUser(db, { phone, displayName, rights = {}, adminLogin, p
 
   const result = db
     .prepare(
-      `INSERT INTO bot_users (phone, role, display_name, admin_login, password_hash)
-       VALUES (?, 'employee', ?, ?, ?)`
+      `INSERT INTO bot_users (phone, role, display_name, job_title, description, admin_login, password_hash)
+       VALUES (?, 'employee', ?, ?, ?, ?, ?)`
     )
     .run(
       normalized,
       displayName?.trim() || null,
+      jobTitle?.trim() || null,
+      description?.trim() || null,
       login,
       login ? hashAdminPassword(password) : null
     );
@@ -617,7 +645,8 @@ function createEmployeeUser(db, { phone, displayName, rights = {}, adminLogin, p
   return getEmployeeWithRights(db, userId);
 }
 
-function updateEmployeeUser(db, userId, { phone, displayName, rights, adminLogin, password } = {}) {
+function updateEmployeeUser(db, userId, { phone, displayName, jobTitle, description, rights, adminLogin, password } = {}) {
+  ensureEmployeeProfileColumns(db);
   const user = getBotUserById(db, userId);
   if (!user || user.role !== 'employee') {
     throw new Error('NOT_FOUND');
@@ -635,6 +664,14 @@ function updateEmployeeUser(db, userId, { phone, displayName, rights, adminLogin
     db.prepare('UPDATE bot_users SET display_name = ? WHERE id = ?').run(displayName?.trim() || null, userId);
   }
 
+  if (jobTitle !== undefined) {
+    db.prepare('UPDATE bot_users SET job_title = ? WHERE id = ?').run(jobTitle?.trim() || null, userId);
+  }
+
+  if (description !== undefined) {
+    db.prepare('UPDATE bot_users SET description = ? WHERE id = ?').run(description?.trim() || null, userId);
+  }
+
   applyEmployeeAdminCredentials(db, userId, { adminLogin, password });
 
   if (rights) {
@@ -644,7 +681,8 @@ function updateEmployeeUser(db, userId, { phone, displayName, rights, adminLogin
   return getEmployeeWithRights(db, userId);
 }
 
-function convertCustomerToEmployee(db, userId, { displayName, rights = {}, adminLogin, password } = {}) {
+function convertCustomerToEmployee(db, userId, { displayName, jobTitle, description, rights = {}, adminLogin, password } = {}) {
+  ensureEmployeeProfileColumns(db);
   const user = getBotUserById(db, userId);
   if (!user) {
     throw new Error('NOT_FOUND');
@@ -658,7 +696,9 @@ function convertCustomerToEmployee(db, userId, { displayName, rights = {}, admin
       ? displayName?.trim() || null
       : [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || null;
 
-  db.prepare("UPDATE bot_users SET role = 'employee', display_name = ? WHERE id = ?").run(name, userId);
+  db.prepare(
+    "UPDATE bot_users SET role = 'employee', display_name = ?, job_title = ?, description = ? WHERE id = ?"
+  ).run(name, jobTitle?.trim() || null, description?.trim() || null, userId);
   applyEmployeeAdminCredentials(db, userId, { adminLogin, password }, { requirePair: true });
   upsertUserRights(db, userId, { ...DEFAULT_RIGHTS, ...rights });
   return getEmployeeWithRights(db, userId);
@@ -746,6 +786,8 @@ function userMatchesQuery(user, query) {
   const searchable = [
     user.phone,
     user.display_name,
+    user.job_title,
+    user.description,
     user.first_name,
     user.last_name,
     user.username,

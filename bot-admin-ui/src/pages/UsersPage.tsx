@@ -123,6 +123,7 @@ export default function UsersPage() {
         },
       },
       { id: "login", header: "Логин", accessorKey: "admin_login", cell: ({ getValue }) => getValue() || "—" },
+      { id: "job_title", header: "Должность", accessorKey: "job_title", cell: ({ getValue }) => getValue() || "—" },
       {
         id: "regos",
         header: "REGOS",
@@ -233,6 +234,8 @@ export default function UsersPage() {
     const body: Record<string, unknown> = {
       phone: form.get("phone"),
       display_name: form.get("display_name"),
+      job_title: form.get("job_title"),
+      description: form.get("description"),
       admin_login: String(form.get("admin_login") || "").trim(),
       rights: Object.fromEntries(
         rightsMeta.map((r) => [r.key, form.get(`right_${r.key}`) === "on"]),
@@ -422,6 +425,14 @@ export default function UsersPage() {
           <label>
             Имя
             <input name="display_name" defaultValue={selectedUser?.display_name || ""} />
+          </label>
+          <label>
+            Должность
+            <input name="job_title" defaultValue={selectedUser?.job_title || ""} placeholder="Менеджер по продажам" />
+          </label>
+          <label>
+            Описание для AI
+            <textarea name="description" rows={3} defaultValue={selectedUser?.description || ""} />
           </label>
           <label>
             Логин админ-панели

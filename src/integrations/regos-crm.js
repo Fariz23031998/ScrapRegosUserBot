@@ -150,7 +150,8 @@ function sortChatMessagesAscending(messages) {
 
 /**
  * Load chat messages for a ticket chat UUID (ChatMessage/Get).
- * Always returns messages sorted by created_date ascending for chat-style display.
+ * The API page is newest-first (offset 0 = latest messages). This helper then
+ * sorts that page by created_date ascending for chat-style display.
  */
 async function getTicketMessages(
   chatId,
@@ -178,6 +179,14 @@ async function getTicketMessages(
     total: page.total ?? page.result.length,
     offset: safeOffset,
   };
+}
+
+async function fetchTicketPeriodMessages(chatId, options = {}) {
+  const { fetchChatMessagesInPeriod } = require('../ai/ticket-period');
+  return fetchChatMessagesInPeriod(chatId, {
+    ...options,
+    getTicketMessages: options.getTicketMessages || getTicketMessages,
+  });
 }
 
 function stripBase64Prefix(value) {
@@ -502,11 +511,45 @@ async function ensureTicketParticipant(ticketId, userId) {
     });
   }
 
-  return postRegosMutation('Ticket/SetParticipants', {
+  return setTicketParticipants(id, [uid], { replaceMode: false });
+}
+
+/**
+ * Normalize a participant_user_ids payload into unique positive integers.
+ */
+function normalizeParticipantUserIds(value) {
+  const list = Array.isArray(value) ? value : value == null || value === '' ? [] : [value];
+  const ids = [];
+  const seen = new Set();
+  for (const item of list) {
+    const id = Number(item);
+    if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function participantUserIdsEqual(a, b) {
+  const left = [...normalizeParticipantUserIds(a)].sort((x, y) => x - y);
+  const right = [...normalizeParticipantUserIds(b)].sort((x, y) => x - y);
+  if (left.length !== right.length) return false;
+  return left.every((id, index) => id === right[index]);
+}
+
+/**
+ * Replace or append CRM ticket staff participants (Ticket/SetParticipants).
+ * replace_mode true replaces the list; false appends the provided users.
+ */
+async function setTicketParticipants(ticketId, participantUserIds, { replaceMode = true } = {}) {
+  const id = requirePositiveId(ticketId, 'id');
+  const ids = normalizeParticipantUserIds(participantUserIds);
+  const data = await postRegosMutation('Ticket/SetParticipants', {
     id,
-    participant_user_ids: [uid],
-    replace_mode: false,
+    participant_user_ids: ids,
+    replace_mode: Boolean(replaceMode),
   });
+  return data.result;
 }
 
 function isTicketStaffParticipant(ticket, userId) {
@@ -999,6 +1042,33 @@ async function findTicketById(ticketId) {
   return page.result[0] || null;
 }
 
+async function findTicketByChatId(chatId) {
+  const id = String(chatId || '').trim();
+  if (!id) return null;
+
+  // Ticket/Get has no chat_id filter; Chat/Get returns the linked Ticket entity_id.
+  const page = await postChatGet({
+    filters: [{ Field: 'id', Operator: 'equal', Value: id }],
+    limit: 1,
+    offset: 0,
+  });
+  const chat =
+    (page.result || []).find((row) => String(row?.id || '').trim() === id) || page.result[0] || null;
+  if (!chat || String(chat.entity_type || '') !== 'Ticket') {
+    return null;
+  }
+
+  return findTicketById(chat.entity_id);
+}
+
+async function fetchTicketsByClientId(clientId) {
+  const id = Number(clientId);
+  if (!Number.isFinite(id) || id <= 0) return [];
+  return fetchAllTickets({
+    filters: [{ Field: 'client_id', Operator: 'equal', Value: String(id) }],
+  });
+}
+
 /** Active when the latest ticket is Open or WaitingStaff. */
 const ACTIVE_TICKET_STATUSES = new Set(['Open', 'WaitingStaff']);
 
@@ -1048,12 +1118,16 @@ module.exports = {
   postChatGet,
   postChatMessageGet,
   getTicketMessages,
+  fetchTicketPeriodMessages,
   addTicketMessage,
   addChatFile,
   getFilesByIds,
   getChatMessageFiles,
   getChatFilesByIds,
   ensureTicketParticipant,
+  setTicketParticipants,
+  normalizeParticipantUserIds,
+  participantUserIdsEqual,
   isTicketStaffParticipant,
   sortChatMessagesAscending,
   fetchAllTickets,
@@ -1077,6 +1151,8 @@ module.exports = {
   buildTicketFilters,
   findLatestTicketForResponsibleUser,
   findTicketById,
+  findTicketByChatId,
+  fetchTicketsByClientId,
   resolveActiveTicket,
   mapActiveTicket,
 };

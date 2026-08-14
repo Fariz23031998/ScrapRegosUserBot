@@ -67,12 +67,13 @@ TELEGRAM_BOT_USERNAME=@YourBot
 
 ### Other integrations (optional)
 
-- **Bot admin panel**: `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (enables `/bot-admin/`). Password login remains available. Employees with the `open_admin_dashboard` right can also use `/open_dashboard` in Telegram to receive a one-time HTTPS login link (about 5 minutes, single use) built from `PUBLIC_BASE_URL`. Configure technical-support prices and view subscription history under **Техподдержка**.
+- **Bot admin panel**: `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (enables `/bot-admin/`). Production UI is the React app in `bot-admin-ui/` — run `npm run bot-admin-ui:build` before (or after) deploying the server so `bot-admin-ui/dist` exists. Password login remains available. Employees with the `open_admin_dashboard` right can also use `/open_dashboard` in Telegram to receive a one-time HTTPS login link (about 5 minutes, single use) built from `PUBLIC_BASE_URL`. Configure technical-support prices and view subscription history under **Техподдержка**.
 - **CLICK payments (optional)**: `ENABLE_CLICK_PAYMENT=1` plus `CLICK_MERCHANT_ID`, `CLICK_SERVICE_ID`, `CLICK_MERCHANT_USER_ID`, `CLICK_SECRET_KEY` — see [docs/payme-integration.md](docs/payme-integration.md) and [docs/click-deploy-linux.md](docs/click-deploy-linux.md). With `ENABLE_CLICK_PAYMENT=0` (or blank keys) the bot and server run on Payme only: no CLICK button on the payment page, new orders use the `payme` provider, and `/click/prepare` / `/click/complete` reply with `error: -9`.
 - **Payment links**: `PUBLIC_BASE_URL`, `CLICK_SERVER_PORT` — `PUBLIC_BASE_URL` is required for payment pages, tech-support orders, Telegram dashboard login links, and the public `/prices` page opened by the bot `/prices` command.
 - **Payme receipts**: `PAYME_*`
 - **SMS transports**: Android uses `SMS_GATEWAY_ENABLED`, `REDIS_URL`, and `SMS_GATEWAY_TOKEN`; GETSMS.UZ uses `ENABLE_GETSMS`, `GETSMS_LOGIN`, and `GETSMS_PASSWORD`; Eskiz.uz uses `ENABLE_ESKIZ`, `ESKIZ_EMAIL`, and `ESKIZ_PASSWORD`. The switches are independent and enabled providers may all send. Each transport can use its own template (`GETSMS_MESSAGE_TEMPLATE`, `ESKIZ_MESSAGE_TEMPLATE`, `SMS_GATEWAY_MESSAGE_TEMPLATE`, `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE`) — see [docs/sms-gateway.md](docs/sms-gateway.md), [docs/getsms.md](docs/getsms.md), and [docs/eskiz.md](docs/eskiz.md)
 - **RPOS (optional)**: `{ACCOUNT}_RPOS_USERNAME`, `{ACCOUNT}_RPOS_PASSWORD`
+- **Knowledge-base MCP (optional)**: `MCP_TOKEN` enables Streamable HTTP MCP at `POST /bot-admin/mcp`. Set `MCP_KNOWLEDGE_READONLY=1` to expose search/get only. See [Knowledge-base MCP](#knowledge-base-mcp).
 
 See `.env.example` for the full annotated list.
 
@@ -105,12 +106,64 @@ Employees with the `open_admin_dashboard` right see **Open Admin Dashboard** (`/
 ### HTTP server (payments, bot-admin, SMS gateway)
 
 ```bash
+npm run bot-admin-ui:build   # once per UI change / deploy
 npm run server
 ```
 
-Serves the payment pages, CLICK/Payme endpoints, the `/bot-admin/` panel, the public bilingual price list at `/prices`, and the SMS gateway WebSocket. Listens on `CLICK_SERVER_PORT` (default `3000`).
+Serves the payment pages, CLICK/Payme endpoints, the `/bot-admin/` React panel (including optional MCP at `/bot-admin/mcp`), the public bilingual price list at `/prices`, and the SMS gateway WebSocket. Listens on `CLICK_SERVER_PORT` (default `3000`).
 
 Public price catalog: open `/prices` (Russian / O‘zbekcha switch). Edit it after logging into `/bot-admin/prices`. The Telegram `/prices` command is available to everyone and opens the public page.
+
+Local UI development (Vite on port 5301 with API proxy) is documented in [bot-admin-ui/README.md](bot-admin-ui/README.md).
+
+### Knowledge-base MCP
+
+IDEs can search and (unless read-only) edit the same knowledge base as `/bot-admin` over Streamable HTTP. No extra npm packages; the endpoint is token-authenticated and stateless JSON.
+
+1. Set a long random `MCP_TOKEN` in `.env`. Leave it unset to keep the endpoint disabled (`503`).
+2. Optionally set `MCP_KNOWLEDGE_READONLY=1` so only `knowledge_search` / `knowledge_get` are listed.
+3. Restart `npm run server`. Clients call `POST https://YOUR_HOST/bot-admin/mcp` with `Authorization: Bearer <MCP_TOKEN>` (or `X-MCP-Token`).
+
+Do not commit a real token. Copy [`.cursor/mcp.json.example`](.cursor/mcp.json.example) to `.cursor/mcp.json` and replace placeholders.
+
+**Cursor** (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "scrapregos-knowledge": {
+      "url": "https://HOST/bot-admin/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+**Claude Code** (`~/.claude.json` / project MCP config):
+
+```json
+{
+  "mcpServers": {
+    "scrapregos-knowledge": {
+      "type": "http",
+      "url": "https://HOST/bot-admin/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+**Codex** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.scrapregos-knowledge]
+url = "https://HOST/bot-admin/mcp"
+http_headers = { Authorization = "Bearer YOUR_MCP_TOKEN" }
+```
 
 ### Portal sessions
 
@@ -153,9 +206,11 @@ For Linux deployment see [docs/server-deploy-linux.md](docs/server-deploy-linux.
 apps/
   bot/        Telegram bot entry point (npm run bot)
   server/     Express server: payments, bot-admin, SMS gateway (npm run server)
+bot-admin-ui/ React admin SPA (npm run bot-admin-ui:build → served at /bot-admin/)
 cli/          Session warm-up and legacy stubs
 src/
-  admin/      Bot admin panel (users, rights, tech-support prices)
+  admin/      Bot admin API + SPA/legacy page hosting
+  mcp/        Streamable HTTP MCP (knowledge base for IDEs)
   bot/        Search, formatting, VIP/service/report/tech-support handlers
   db/         SQLite app-state schema (orders, users, TP, …)
   live/       Cookie sessions + HTTP client for portal queries

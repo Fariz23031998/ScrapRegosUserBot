@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, FileText, MessageSquare, Paperclip, Send } from "lucide-react";
+import { ArrowLeft, Bot, FileText, MessageSquare, Paperclip } from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type DragEvent,
@@ -12,18 +13,27 @@ import {
 import { Link, useParams } from "react-router-dom";
 import { createOrder } from "../api/admin";
 import {
+  deleteTicketSummary,
   getClient,
   getTicket,
+  getTicketAiPrompt,
   getTicketMessages,
   listTicketUsers,
+  saveTicketSummary,
   searchFirms,
   sendTicketMessage,
   ticketFileUrl,
   ticketRecordingUrl,
   updateTicket,
 } from "../api/tickets";
+import ChatCompose from "../components/ChatCompose";
+import ChatHistorySearch from "../components/ChatHistorySearch";
+import EntityAvatar from "../components/EntityAvatar";
 import LoadingState from "../components/LoadingState";
 import Modal from "../components/Modal";
+import TicketAiAssistModal from "../components/TicketAiAssistModal";
+import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
+import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { useChatEvents, type ChatStreamEvent } from "../hooks/useChatEvents";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -35,16 +45,18 @@ import {
   chatAuthorBadge,
   chatFileDisplayName,
   chatFileHasMetadata,
-  chatFileMimeType,
   chatMessageClass,
   fileExtension,
   fileToBase64,
   filesFromDataTransfer,
+  findChatMessageMatchIds,
   formatFileSize,
   isChatAudio,
   isChatImage,
   isChatVideo,
   mergeMessages,
+  nextOlderMessagesOffset,
+  splitSearchHighlight,
 } from "../lib/ticket-chat";
 import {
   directionLabel,
@@ -59,6 +71,9 @@ import type {
   ChatFile,
   ChatMessage,
   FirmSearchResult,
+  TicketAiPrompt,
+  TicketAiPromptMessage,
+  TicketChatSummary,
   TicketDetail,
   TicketField,
 } from "../lib/types";
@@ -68,6 +83,20 @@ type PendingChatFile = {
   file: File;
   previewUrl: string;
 };
+
+function highlightSearchText(text: string, query: string): ReactNode {
+  const segments = splitSearchHighlight(text, query);
+  if (segments.length === 1 && !segments[0]?.match) return text;
+  return segments.map((segment, index) =>
+    segment.match ? (
+      <mark key={`h-${index}`} className="ticket-chat__search-mark">
+        {segment.text}
+      </mark>
+    ) : (
+      <span key={`t-${index}`}>{segment.text}</span>
+    ),
+  );
+}
 
 type ChatViewMode = "chat" | "detail";
 
@@ -206,7 +235,6 @@ function ChatFileAttachment({ ticketId, file }: { ticketId: number; file: ChatFi
   if (id == null || id === "") return null;
   const name = chatFileDisplayName(file);
   const url = ticketFileUrl(ticketId, Number(id));
-  const mimeType = chatFileMimeType(file);
 
   if (isChatImage(file)) {
     return (
@@ -218,8 +246,14 @@ function ChatFileAttachment({ ticketId, file }: { ticketId: number; file: ChatFi
   if (isChatAudio(file)) {
     return (
       <div className="ticket-chat__media ticket-chat__media--audio">
-        <audio className="ticket-chat__audio" controls preload="metadata" crossOrigin="use-credentials">
-          <source src={url} type={mimeType || undefined} />
+        <audio
+          className="ticket-chat__audio"
+          controls
+          preload="metadata"
+          crossOrigin="use-credentials"
+          src={url}
+        >
+          Ваш браузер не поддерживает воспроизведение аудио.
         </audio>
         <a className="ticket-chat__media-link" href={url} target="_blank" rel="noopener noreferrer">
           {name}
@@ -230,8 +264,15 @@ function ChatFileAttachment({ ticketId, file }: { ticketId: number; file: ChatFi
   if (isChatVideo(file)) {
     return (
       <div className="ticket-chat__media ticket-chat__media--video">
-        <video className="ticket-chat__video" controls preload="metadata" playsInline crossOrigin="use-credentials">
-          <source src={url} type={mimeType || undefined} />
+        <video
+          className="ticket-chat__video"
+          controls
+          preload="metadata"
+          playsInline
+          crossOrigin="use-credentials"
+          src={url}
+        >
+          Ваш браузер не поддерживает воспроизведение видео.
         </video>
         <a className="ticket-chat__media-link" href={url} target="_blank" rel="noopener noreferrer">
           {name}
@@ -270,7 +311,19 @@ function formatMessageDayLabel(message: ChatMessage): string {
   return `${day}.${month}.${year}`;
 }
 
-function ChatMessageItem({ ticketId, message }: { ticketId: number; message: ChatMessage }) {
+function ChatMessageItem({
+  ticketId,
+  message,
+  searchQuery = "",
+  searchHit = false,
+  searchActive = false,
+}: {
+  ticketId: number;
+  message: ChatMessage;
+  searchQuery?: string;
+  searchHit?: boolean;
+  searchActive?: boolean;
+}) {
   const messageType = String(message.message_type || "");
   const isSystem = messageType === "System" || Boolean(message.is_system);
   const badge = chatAuthorBadge(message);
@@ -285,38 +338,395 @@ function ChatMessageItem({ ticketId, message }: { ticketId: number; message: Cha
   const bodyText = String(message.display_text || message.text || "").trim();
   const replyText = message.replay_text || (message.reply_id != null ? `Ответ на ${message.reply_id}` : "");
   const dayLabel = formatMessageDayLabel(message);
+  const className = [
+    chatMessageClass(message),
+    searchHit ? "ticket-chat__msg--search-hit" : "",
+    searchActive ? "ticket-chat__msg--search-active" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <article
-      className={chatMessageClass(message)}
+      className={className}
       data-message-id={String(message.id || "")}
       data-message-day={dayLabel || undefined}
     >
-      <div className={`ticket-chat__meta${isSystem ? " ticket-chat__meta--system" : ""}`}>
-        {!isSystem ? <span className="ticket-chat__author">{author}</span> : null}
-        <span className={badge.className}>{badge.label}</span>
-        <time dateTime={String(message.created_date || message.created_at || "")}>
-          {formatUnix(message.created_date) !== "—"
-            ? formatUnix(message.created_date)
-            : message.created_at
-              ? formatUnix(Math.floor(new Date(message.created_at).getTime() / 1000))
-              : "—"}
-        </time>
-      </div>
-      {replyText ? <div className="ticket-chat__reply">{replyText}</div> : null}
-      {bodyText ? (
-        <p className="ticket-chat__text">{bodyText}</p>
-      ) : files.length || isSystem ? null : (
-        <p className="ticket-chat__text ticket-chat__text--empty">—</p>
-      )}
-      {files.length ? (
-        <div className="ticket-chat__files">
-          {files.map((file) => (
-            <ChatFileAttachment key={String(file.id)} ticketId={ticketId} file={file} />
-          ))}
-        </div>
+      {!isSystem ? (
+        <EntityAvatar
+          className="ticket-chat__msg-avatar"
+          src={message.author_entity_photo}
+          name={author}
+          size="md"
+        />
       ) : null}
+      <div className="ticket-chat__bubble">
+        <div className={`ticket-chat__meta${isSystem ? " ticket-chat__meta--system" : ""}`}>
+          {!isSystem ? <span className="ticket-chat__author">{author}</span> : null}
+          <span className={badge.className}>{badge.label}</span>
+          <time dateTime={String(message.created_date || message.created_at || "")}>
+            {formatUnix(message.created_date) !== "—"
+              ? formatUnix(message.created_date)
+              : message.created_at
+                ? formatUnix(Math.floor(new Date(message.created_at).getTime() / 1000))
+                : "—"}
+          </time>
+        </div>
+        {replyText ? <div className="ticket-chat__reply">{replyText}</div> : null}
+        {bodyText ? (
+          <p className="ticket-chat__text">
+            {searchHit ? highlightSearchText(bodyText, searchQuery) : bodyText}
+          </p>
+        ) : files.length || isSystem ? null : (
+          <p className="ticket-chat__text ticket-chat__text--empty">—</p>
+        )}
+        {files.length ? (
+          <div className="ticket-chat__files">
+            {files.map((file) => (
+              <ChatFileAttachment key={String(file.id)} ticketId={ticketId} file={file} />
+            ))}
+          </div>
+        ) : null}
+      </div>
     </article>
+  );
+}
+
+const AI_GATE_LABELS: Record<string, string> = {
+  disabled: "ИИ выключен",
+  "not-regular": "не обычное сообщение",
+  bot: "сообщение бота",
+  "not-client": "не клиент",
+  "own-author": "собственный автор",
+  closed: "тикет закрыт",
+  "test-mode": "тестовый режим",
+  "no-chat": "нет чата",
+  "message-not-found": "сообщение не найдено",
+  "empty-history": "пустая история",
+};
+
+function formatAiGate(gate?: TicketAiPrompt["gate"]) {
+  if (!gate) return "—";
+  if (gate.handle) return "Ответил бы";
+  const reason = gate.reason ? AI_GATE_LABELS[gate.reason] || gate.reason : "пропуск";
+  return `Пропуск: ${reason}`;
+}
+
+function formatAiMessageContent(content: TicketAiPromptMessage["content"]) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (part?.type === "text") return String(part.text || "");
+      if (part?.type === "image_url") {
+        const name = part.image_url?.name || part.image_url?.file_id || "изображение";
+        return `[изображение: ${name}]`;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function summaryStatusLabel(status: string) {
+  if (status === "done") return "Готово";
+  if (status === "error") return "Ошибка";
+  return status || "—";
+}
+
+function TicketChatSummaryCard({
+  ticketId,
+  title,
+  summary,
+  allowCreate = false,
+  emptyText = "Сводка ещё не создана.",
+  clientId = null,
+  chatId = null,
+  onChanged,
+}: {
+  ticketId: number;
+  title: string;
+  summary: TicketChatSummary | null;
+  allowCreate?: boolean;
+  emptyText?: string;
+  clientId?: number | null;
+  chatId?: string | null;
+  onChanged: () => void;
+}) {
+  const confirm = useConfirm();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(summary?.summary || "");
+  const [formError, setFormError] = useState("");
+
+  const saveMutation = useMutation({
+    mutationFn: () => {
+      const text = draft.trim();
+      if (!text) throw new Error("Введите текст сводки.");
+      return saveTicketSummary(ticketId, {
+        summary: text,
+        client_id: clientId,
+        chat_id: chatId,
+      });
+    },
+    onSuccess: () => {
+      setEditing(false);
+      setFormError("");
+      onChanged();
+    },
+    onError: (error: Error) => setFormError(error.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteTicketSummary(ticketId),
+    onSuccess: () => {
+      setEditing(false);
+      setDraft("");
+      setFormError("");
+      onChanged();
+    },
+    onError: (error: Error) => setFormError(error.message),
+  });
+
+  async function handleDelete() {
+    const ok = await confirm({
+      message: `Удалить сводку обращения #${ticketId}?`,
+      variant: "danger",
+      confirmLabel: "Удалить",
+    });
+    if (ok) deleteMutation.mutate();
+  }
+
+  const meta = [
+    summary ? summaryStatusLabel(summary.status) : null,
+    [summary?.provider, summary?.model].filter(Boolean).join(" · ") || null,
+    summary && (summary.period_start || summary.period_end)
+      ? `${formatUnix(summary.period_start)} — ${formatUnix(summary.period_end)}`
+      : null,
+  ].filter(Boolean);
+
+  return (
+    <article className="ticket-ai-prompt__summary">
+      <div className="ticket-ai-prompt__summary-head">
+        <strong className="ticket-ai-prompt__summary-title">{title}</strong>
+        {!editing ? (
+          <div className="ticket-ai-prompt__actions">
+            {summary || allowCreate ? (
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => {
+                  setDraft(summary?.summary || "");
+                  setFormError("");
+                  setEditing(true);
+                }}
+              >
+                {summary ? "Изменить" : "Добавить"}
+              </button>
+            ) : null}
+            {summary ? (
+              <button
+                type="button"
+                className="btn-danger btn-sm"
+                onClick={() => void handleDelete()}
+                disabled={deleteMutation.isPending}
+              >
+                {deleteMutation.isPending ? "Удаление…" : "Удалить"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {meta.length ? <p className="ticket-ai-prompt__summary-meta">{meta.join(" · ")}</p> : null}
+      {summary?.status === "error" && summary.error ? (
+        <p className="message error">{summary.error}</p>
+      ) : null}
+      {editing ? (
+        <form
+          className="stack-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setFormError("");
+            saveMutation.mutate();
+          }}
+        >
+          <label>
+            Текст сводки
+            <textarea
+              rows={8}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              required
+            />
+          </label>
+          {formError ? <p className="message error">{formError}</p> : null}
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setEditing(false);
+                setFormError("");
+                setDraft(summary?.summary || "");
+              }}
+            >
+              Отмена
+            </button>
+            <button type="submit" className="btn-primary" disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? "Сохранение…" : "Сохранить"}
+            </button>
+          </div>
+        </form>
+      ) : summary?.summary ? (
+        <pre className="ticket-ai-prompt__pre">{summary.summary}</pre>
+      ) : (
+        <p className="muted-copy">{emptyText}</p>
+      )}
+    </article>
+  );
+}
+
+function TicketAiPromptSection({
+  ticketId,
+  clientId,
+  chatId,
+}: {
+  ticketId: number;
+  clientId?: number | null;
+  chatId?: string | null;
+}) {
+  const [copied, setCopied] = useState(false);
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: ["ticket-ai-prompt", ticketId],
+    queryFn: () => getTicketAiPrompt(ticketId),
+    retry: false,
+  });
+  const prompt = query.data;
+  const priorSummaries = prompt?.prior_summaries || [];
+
+  function refreshPrompt() {
+    void queryClient.invalidateQueries({ queryKey: ["ticket-ai-prompt", ticketId] });
+  }
+
+  async function handleCopy() {
+    if (!prompt) return;
+    const payload = {
+      system: prompt.system,
+      messages: prompt.messages,
+      tools: prompt.tools,
+      summary: prompt.summary,
+      prior_summaries: prompt.prior_summaries,
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <section className="ticket-detail__section">
+      <h4>Промпт ИИ</h4>
+      <div className="ticket-ai-prompt">
+        <div className="ticket-ai-prompt__actions">
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => void query.refetch()}
+            disabled={query.isFetching}
+          >
+            {query.isFetching ? "Загрузка…" : "Обновить"}
+          </button>
+          {prompt ? (
+            <button type="button" className="btn-secondary btn-sm" onClick={() => void handleCopy()}>
+              {copied ? "Скопировано" : "Копировать JSON"}
+            </button>
+          ) : null}
+        </div>
+        {query.isError ? (
+          <p className="message error">{query.error instanceof Error ? query.error.message : "Не удалось загрузить промпт ИИ."}</p>
+        ) : null}
+        {prompt ? (
+          <>
+            <div className="ticket-ai-prompt__block">
+              <h5>Сводка обращения</h5>
+              <TicketChatSummaryCard
+                ticketId={ticketId}
+                title={`Тикет #${ticketId}`}
+                summary={prompt.summary || null}
+                allowCreate
+                clientId={clientId}
+                chatId={chatId}
+                emptyText="Сводка этого обращения ещё не создана."
+                onChanged={refreshPrompt}
+              />
+            </div>
+            <div className="ticket-ai-prompt__block">
+              <h5>Сводки предыдущих обращений</h5>
+              {priorSummaries.length ? (
+                <div className="ticket-ai-prompt__summaries">
+                  {priorSummaries.map((item) => (
+                    <TicketChatSummaryCard
+                      key={item.ticket_id}
+                      ticketId={item.ticket_id}
+                      title={`Тикет #${item.ticket_id}`}
+                      summary={item}
+                      onChanged={refreshPrompt}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="muted-copy">Нет сохранённых сводок других обращений этого клиента.</p>
+              )}
+            </div>
+            <dl className="ticket-detail">
+              <DetailRow label="Реакция">{formatAiGate(prompt.gate)}</DetailRow>
+              <DetailRow label="Модель">
+                {[prompt.settings.provider, prompt.settings.model].filter(Boolean).join(" · ") || "—"}
+              </DetailRow>
+              <DetailRow label="Сообщений">{textOrDash(prompt.settings.history_limit)}</DetailRow>
+              <DetailRow label="Триггер">{textOrDash(prompt.trigger_message_id)}</DetailRow>
+            </dl>
+            <div className="ticket-ai-prompt__block">
+              <h5>Системный промпт</h5>
+              <pre className="ticket-ai-prompt__pre">{prompt.system || "—"}</pre>
+            </div>
+            <div className="ticket-ai-prompt__block">
+              <h5>Сообщения</h5>
+              {prompt.messages.length ? (
+                <div className="ticket-ai-prompt__turns">
+                  {prompt.messages.map((message, index) => (
+                    <article key={`${message.role}-${index}`} className="ticket-ai-prompt__turn">
+                      <span className="ticket-ai-prompt__role">{message.role}</span>
+                      <pre className="ticket-ai-prompt__pre">{formatAiMessageContent(message.content) || "—"}</pre>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted-copy">Нет сообщений для модели.</p>
+              )}
+            </div>
+            <div className="ticket-ai-prompt__block">
+              <h5>Инструменты</h5>
+              {prompt.tools.length ? (
+                <ul className="ticket-ai-prompt__tools">
+                  {prompt.tools.map((tool) => (
+                    <li key={tool.name}>
+                      <strong>{tool.name}</strong>
+                      {tool.description ? <span> — {tool.description}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted-copy">Инструменты недоступны.</p>
+              )}
+            </div>
+          </>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -462,6 +872,11 @@ function EditTicketModal({
   onSaved: (ticket: TicketDetail) => void;
 }) {
   const [error, setError] = useState("");
+  const [participantIds, setParticipantIds] = useState<number[]>(() =>
+    Array.isArray(ticket.participant_user_ids)
+      ? ticket.participant_user_ids.map(Number).filter((id) => id > 0)
+      : [],
+  );
   const mutation = useMutation({
     mutationFn: (payload: Record<string, unknown>) => updateTicket(ticket.id, payload),
     onSuccess: (data) => {
@@ -472,8 +887,14 @@ function EditTicketModal({
   });
 
   useEffect(() => {
-    if (open) setError("");
-  }, [open]);
+    if (!open) return;
+    setError("");
+    setParticipantIds(
+      Array.isArray(ticket.participant_user_ids)
+        ? ticket.participant_user_ids.map(Number).filter((id) => id > 0)
+        : [],
+    );
+  }, [open, ticket.participant_user_ids]);
 
   return (
     <Modal title="Изменить тикет" open={open} onClose={onClose} size="wide">
@@ -488,6 +909,7 @@ function EditTicketModal({
             description: String(form.get("description") || "").trim(),
             direction: form.get("direction"),
             status: form.get("status"),
+            participant_user_ids: participantIds,
           };
           const responsible = String(form.get("responsible_user_id") || "");
           if (responsible) payload.responsible_user_id = Number(responsible);
@@ -528,6 +950,12 @@ function EditTicketModal({
             ))}
           </select>
         </label>
+        <TicketParticipantsPicker
+          users={users}
+          value={participantIds}
+          onChange={setParticipantIds}
+          disabled={mutation.isPending}
+        />
         <label>
           Описание
           <textarea name="description" rows={6} defaultValue={ticket.description || ""} />
@@ -561,6 +989,8 @@ function CreateOrderModal({
   const [firmQuery, setFirmQuery] = useState("");
   const [searchQ, setSearchQ] = useState("");
   const [selectedFirm, setSelectedFirm] = useState<FirmSearchResult | null>(null);
+  const [autoSelectFirm, setAutoSelectFirm] = useState(true);
+  const [phoneLookupDone, setPhoneLookupDone] = useState(false);
   const defaultPhone = ticket.client?.phone || ticket.client_phone || "";
   const clientId = getTicketClientId(ticket);
 
@@ -568,6 +998,21 @@ function CreateOrderModal({
     queryKey: ["order-linked-firms", clientId],
     queryFn: () => getClient(clientId!),
     enabled: open && clientId != null,
+  });
+
+  const linkedFirmsReady = clientId == null || linkedClientQuery.isFetched;
+  const hasLinkedFirm = Boolean(linkedClientQuery.data?.firms?.length);
+  const phoneLookupQuery = useQuery({
+    queryKey: ["order-firm-phone-lookup", defaultPhone.trim()],
+    queryFn: () => searchFirms(defaultPhone.trim()),
+    enabled:
+      open &&
+      autoSelectFirm &&
+      !selectedFirm &&
+      !phoneLookupDone &&
+      linkedFirmsReady &&
+      !hasLinkedFirm &&
+      defaultPhone.trim().length >= 7,
   });
 
   const firmSearchQuery = useQuery({
@@ -581,12 +1026,14 @@ function CreateOrderModal({
       setFirmQuery("");
       setSearchQ("");
       setSelectedFirm(null);
+      setAutoSelectFirm(true);
+      setPhoneLookupDone(false);
       setError("");
     }
   }, [open]);
 
   useEffect(() => {
-    if (!open || selectedFirm) return;
+    if (!open || !autoSelectFirm || selectedFirm) return;
     const link = linkedClientQuery.data?.firms?.[0];
     if (!link) return;
     setSelectedFirm({
@@ -596,7 +1043,31 @@ function CreateOrderModal({
       phone: link.firm_phone,
       message: link.firm_message,
     });
-  }, [linkedClientQuery.data?.firms, open, selectedFirm]);
+    setPhoneLookupDone(true);
+  }, [autoSelectFirm, linkedClientQuery.data?.firms, open, selectedFirm]);
+
+  useEffect(() => {
+    if (!open || !autoSelectFirm || selectedFirm || !phoneLookupQuery.isFetched) return;
+    const firm = phoneLookupQuery.data?.results?.[0] || null;
+    if (firm) {
+      setSelectedFirm(firm);
+      setFirmQuery(defaultPhone.trim());
+    }
+    setPhoneLookupDone(true);
+  }, [
+    autoSelectFirm,
+    defaultPhone,
+    open,
+    phoneLookupQuery.data?.results,
+    phoneLookupQuery.isFetched,
+    selectedFirm,
+  ]);
+
+  function clearSelectedFirm() {
+    setSelectedFirm(null);
+    setAutoSelectFirm(false);
+    setPhoneLookupDone(true);
+  }
 
   const orderMutation = useMutation({
     mutationFn: createOrder,
@@ -663,6 +1134,9 @@ function CreateOrderModal({
               Найти
             </button>
           </div>
+          {phoneLookupQuery.isFetching ? (
+            <p className="firm-search-status">Подбор фирмы по телефону…</p>
+          ) : null}
           {firmSearchQuery.isFetching ? <p className="firm-search-status">Поиск…</p> : null}
           {!firmSearchQuery.isFetching && searchQ && !(firmSearchQuery.data?.results || []).length ? (
             <p className="firm-search-status">Ничего не найдено.</p>
@@ -689,7 +1163,7 @@ function CreateOrderModal({
                   {selectedFirm.phone ? ` · ${selectedFirm.phone}` : ""}
                 </span>
               </div>
-              <button type="button" className="btn-secondary btn-sm" onClick={() => setSelectedFirm(null)}>
+              <button type="button" className="btn-secondary btn-sm" onClick={clearSelectedFirm}>
                 Сбросить
               </button>
             </div>
@@ -736,6 +1210,8 @@ export default function TicketDetailPage() {
   const [view, setView] = useState<ChatViewMode>("chat");
   const [editOpen, setEditOpen] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
+  const [aiPromptOpen, setAiPromptOpen] = useState(false);
+  const [aiAssistOpen, setAiAssistOpen] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -756,10 +1232,12 @@ export default function TicketDetailPage() {
   const [dropActive, setDropActive] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [typingLabel, setTypingLabel] = useState<string | null>(null);
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const [chatSearchActiveIndex, setChatSearchActiveIndex] = useState(0);
 
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const pendingSeqRef = useRef(0);
   const chatRequestIdRef = useRef(0);
   const chatIdRef = useRef<string | null>(null);
@@ -794,6 +1272,36 @@ export default function TicketDetailPage() {
     loadingOlderRef.current = loadingOlder;
   }, [loadingOlder]);
 
+  const chatSearchMatchIds = useMemo(
+    () => (chatSearchOpen ? findChatMessageMatchIds(chatMessages, chatSearchQuery) : []),
+    [chatSearchOpen, chatMessages, chatSearchQuery],
+  );
+  const chatSearchMatchIdSet = useMemo(() => new Set(chatSearchMatchIds), [chatSearchMatchIds]);
+  const chatSearchNeedle = chatSearchOpen ? chatSearchQuery.trim() : "";
+
+  useEffect(() => {
+    setChatSearchActiveIndex((prev) => {
+      if (!chatSearchMatchIds.length) return 0;
+      return Math.min(prev, chatSearchMatchIds.length - 1);
+    });
+  }, [chatSearchMatchIds]);
+
+  useEffect(() => {
+    if (!chatSearchOpen || !chatSearchMatchIds.length) return;
+    const activeId = chatSearchMatchIds[chatSearchActiveIndex];
+    if (!activeId) return;
+    const el = chatMessagesRef.current?.querySelector(
+      `[data-message-id="${CSS.escape(activeId)}"]`,
+    ) as HTMLElement | null;
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [chatSearchOpen, chatSearchMatchIds, chatSearchActiveIndex]);
+
+  const closeChatSearch = useCallback(() => {
+    setChatSearchOpen(false);
+    setChatSearchQuery("");
+    setChatSearchActiveIndex(0);
+  }, []);
+
   const ticketQuery = useQuery({
     queryKey: ["ticket", ticketId],
     queryFn: () => getTicket(ticketId),
@@ -814,6 +1322,7 @@ export default function TicketDetailPage() {
 
   const canEditTickets = hasPermission("tickets_edit");
   const canEditClosedTickets = hasPermission("tickets_edit_closed");
+  const canViewAiPrompt = hasPermission("tickets_ai_prompt");
   const canShowEdit =
     canEditTickets && !(ticket && String(ticket.status || "") === "Closed" && !canEditClosedTickets);
 
@@ -946,7 +1455,7 @@ export default function TicketDetailPage() {
         renderChatIntoState(
           messages,
           {
-            offset: data.offset || 0,
+            offset: nextOlderMessagesOffset(data),
             total,
             hasOlder: Boolean(data.has_older),
             chatIdValue: data.chat_id,
@@ -968,7 +1477,10 @@ export default function TicketDetailPage() {
   );
 
   const loadOlderChatMessages = useCallback(async () => {
-    if (!chatHasOlder || chatOffset <= 0 || !Number.isFinite(ticketId) || loadingOlderRef.current) return;
+    const olderOffset = chatOffsetRef.current;
+    if (!chatHasOlderRef.current || olderOffset <= 0 || !Number.isFinite(ticketId) || loadingOlderRef.current) {
+      return;
+    }
     const requestId = ++chatRequestIdRef.current;
     const el = chatMessagesRef.current;
     const preserveOffset = el ? { height: el.scrollHeight, top: el.scrollTop } : undefined;
@@ -976,19 +1488,18 @@ export default function TicketDetailPage() {
     setChatBusy(true);
     setChatStatus({ message: "Загрузка предыдущих сообщений…", loading: true });
     try {
-      const nextOffset = Math.max(0, chatOffset - CHAT_PAGE_LIMIT);
-      const limit = chatOffset - nextOffset;
-      const data = await getTicketMessages(ticketId, { limit, offset: nextOffset });
+      const data = await getTicketMessages(ticketId, { limit: CHAT_PAGE_LIMIT, offset: olderOffset });
       if (requestId !== chatRequestIdRef.current) return;
-      const merged = mergeMessages(chatMessages, data.messages || [], { prepend: true });
+      const page = data.messages || [];
+      const merged = mergeMessages(chatMessagesStateRef.current, page, { prepend: true });
       const total = data.total ?? chatTotal;
       renderChatIntoState(
         merged,
         {
-          offset: data.offset ?? nextOffset,
+          offset: nextOlderMessagesOffset(data, olderOffset + page.length),
           total,
           hasOlder: Boolean(data.has_older),
-          chatIdValue: data.chat_id || chatId,
+          chatIdValue: data.chat_id || chatIdRef.current,
         },
         { preserveOffset },
       );
@@ -1005,7 +1516,7 @@ export default function TicketDetailPage() {
         setLoadingOlder(false);
       }
     }
-  }, [chatHasOlder, chatOffset, chatMessages, chatTotal, chatId, renderChatIntoState, ticketId]);
+  }, [chatTotal, renderChatIntoState, ticketId]);
 
   loadOlderChatMessagesRef.current = loadOlderChatMessages;
 
@@ -1072,31 +1583,26 @@ export default function TicketDetailPage() {
     const incoming = data.messages || [];
     const existing = chatMessagesStateRef.current;
     const knownIds = new Set(existing.map((m) => String(m.id)));
-    const hasNew = incoming.some((m) => m?.id != null && !knownIds.has(String(m.id)));
-    if (!hasNew && incoming.length <= existing.length) {
+    const newCount = incoming.filter((m) => m?.id != null && !knownIds.has(String(m.id))).length;
+    if (!newCount && incoming.length <= existing.length) {
       if (data.total != null) setChatTotal(data.total);
       return;
     }
     const merged = mergeMessages(existing, incoming);
     const total = data.total ?? chatTotal;
-    let nextOffset = chatOffsetRef.current;
-    let nextHasOlder = chatHasOlder;
-    if (typeof data.offset === "number" && data.offset < chatOffsetRef.current) {
-      nextOffset = data.offset;
-      nextHasOlder = Boolean(data.has_older);
-    }
+    const nextOffset = chatOffsetRef.current + newCount;
     renderChatIntoState(
       merged,
       {
         offset: nextOffset,
         total,
-        hasOlder: nextHasOlder,
+        hasOlder: total > 0 ? nextOffset < total : chatHasOlderRef.current,
         chatIdValue: data.chat_id,
       },
       { stickToBottom: true },
     );
     setChatStatus(null);
-  }, [chatHasOlder, chatTotal, renderChatIntoState, ticketId]);
+  }, [chatTotal, renderChatIntoState, ticketId]);
 
   useEffect(() => {
     if (!Number.isFinite(ticketId)) return;
@@ -1109,6 +1615,9 @@ export default function TicketDetailPage() {
     setScrollDateLabel("");
     setScrollDateVisible(false);
     scrollDateLabelRef.current = "";
+    setChatSearchOpen(false);
+    setChatSearchQuery("");
+    setChatSearchActiveIndex(0);
     clearPendingFiles();
     void loadChatMessages();
   }, [ticketId, loadChatMessages, clearPendingFiles]);
@@ -1189,22 +1698,6 @@ export default function TicketDetailPage() {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [refreshChatTail]);
 
-  const resizeMessageInput = useCallback(() => {
-    const el = messageInputRef.current;
-    if (!el) return;
-    if (!messageText.trim()) {
-      el.style.height = "";
-      return;
-    }
-    el.style.height = "0px";
-    const next = Math.min(Math.max(el.scrollHeight, 36), 128);
-    el.style.height = `${next}px`;
-  }, [messageText]);
-
-  useEffect(() => {
-    resizeMessageInput();
-  }, [messageText, resizeMessageInput]);
-
   async function handleSend(event?: FormEvent) {
     event?.preventDefault();
     const text = messageText.trim();
@@ -1229,9 +1722,6 @@ export default function TicketDetailPage() {
       await sendTicketMessage(ticketId, { text, files });
       setMessageText("");
       clearPendingFiles();
-      requestAnimationFrame(() => {
-        if (messageInputRef.current) messageInputRef.current.style.height = "";
-      });
       await refreshChatTail();
       setChatStatus(null);
     } catch (err) {
@@ -1341,6 +1831,28 @@ export default function TicketDetailPage() {
             className={`ticket-chat__messages${dropActive ? " ticket-chat__messages--drop" : ""}`}
             aria-live="polite"
           >
+            <ChatHistorySearch
+              open={chatSearchOpen}
+              query={chatSearchQuery}
+              matchCount={chatSearchMatchIds.length}
+              activeIndex={chatSearchActiveIndex}
+              onOpen={() => setChatSearchOpen(true)}
+              onClose={closeChatSearch}
+              onQueryChange={(value) => {
+                setChatSearchQuery(value);
+                setChatSearchActiveIndex(0);
+              }}
+              onPrev={() => {
+                if (!chatSearchMatchIds.length) return;
+                setChatSearchActiveIndex(
+                  (prev) => (prev - 1 + chatSearchMatchIds.length) % chatSearchMatchIds.length,
+                );
+              }}
+              onNext={() => {
+                if (!chatSearchMatchIds.length) return;
+                setChatSearchActiveIndex((prev) => (prev + 1) % chatSearchMatchIds.length);
+              }}
+            />
             <div className="ticket-chat__status-row" aria-live="polite">
               {chatStatus?.isError || chatStatus?.loading ? (
                 <p
@@ -1375,16 +1887,74 @@ export default function TicketDetailPage() {
             ) : chatMessages.length === 0 && !chatBusy ? (
               <p className="ticket-chat__empty">Сообщений пока нет.</p>
             ) : (
-              chatMessages.map((message) => (
-                <ChatMessageItem key={String(message.id)} ticketId={ticketId} message={message} />
-              ))
+              chatMessages.map((message) => {
+                const messageId = String(message.id);
+                const searchHit = Boolean(chatSearchNeedle) && chatSearchMatchIdSet.has(messageId);
+                const searchActive =
+                  searchHit && chatSearchMatchIds[chatSearchActiveIndex] === messageId;
+                return (
+                  <ChatMessageItem
+                    key={messageId}
+                    ticketId={ticketId}
+                    message={message}
+                    searchQuery={chatSearchNeedle}
+                    searchHit={searchHit}
+                    searchActive={searchActive}
+                  />
+                );
+              })
             )}
           </div>
 
           {chatId ? (
-            <form
-              className={`ticket-chat__compose${dropActive ? " ticket-chat__compose--drop" : ""}`}
-              onSubmit={(event) => void handleSend(event)}
+            <ChatCompose
+              className={dropActive ? "ticket-chat__compose--drop" : ""}
+              value={messageText}
+              onChange={setMessageText}
+              onSubmit={() => void handleSend()}
+              placeholder="Введите сообщение или перетащите файл…"
+              disabled={!chatId}
+              busy={sendBusy}
+              onPaste={(event) => {
+                const files = [...(event.clipboardData?.files || [])].filter((file) => isChatImage(file));
+                if (!files.length) return;
+                event.preventDefault();
+                addPendingFiles(files);
+              }}
+              extraActions={
+                <>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-icon ticket-chat__action-btn"
+                    aria-label="Агент поддержки"
+                    title="Агент поддержки"
+                    onClick={() => setAiAssistOpen(true)}
+                  >
+                    <Bot size={18} aria-hidden="true" />
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="visually-hidden"
+                    multiple
+                    disabled={!composerEnabled}
+                    onChange={(event) => {
+                      addPendingFiles(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary btn-icon ticket-chat__action-btn"
+                    disabled={!composerEnabled}
+                    aria-label="Файл"
+                    title="Файл"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Paperclip size={18} aria-hidden="true" />
+                  </button>
+                </>
+              }
             >
               {pendingFiles.length ? (
                 <div className="ticket-chat__pending">
@@ -1409,67 +1979,7 @@ export default function TicketDetailPage() {
                   ))}
                 </div>
               ) : null}
-              <div className="ticket-chat__compose-row">
-                <label className="ticket-chat__compose-field">
-                  <span className="visually-hidden">Сообщение</span>
-                  <textarea
-                    ref={messageInputRef}
-                    rows={1}
-                    placeholder="Введите сообщение или перетащите файл…"
-                    maxLength={4000}
-                    value={messageText}
-                    disabled={!composerEnabled}
-                    onChange={(e) => setMessageText(e.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" || event.shiftKey) return;
-                      event.preventDefault();
-                      if (!composerEnabled) return;
-                      void handleSend();
-                    }}
-                    onPaste={(event) => {
-                      const files = [...(event.clipboardData?.files || [])].filter((file) => isChatImage(file));
-                      if (!files.length) return;
-                      event.preventDefault();
-                      addPendingFiles(files);
-                    }}
-                  />
-                </label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="visually-hidden"
-                  multiple
-                  disabled={!composerEnabled}
-                  onChange={(event) => {
-                    addPendingFiles(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
-                <button
-                  type="button"
-                  className="btn-secondary btn-icon ticket-chat__action-btn"
-                  disabled={!composerEnabled}
-                  aria-label="Файл"
-                  title="Файл"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Paperclip size={18} aria-hidden="true" />
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary btn-icon ticket-chat__action-btn"
-                  disabled={!composerEnabled}
-                  aria-label="Отправить"
-                  title="Отправить"
-                >
-                  {sendBusy ? (
-                    <span className="process-spinner process-spinner--inline" aria-hidden="true" />
-                  ) : (
-                    <Send size={18} aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-            </form>
+            </ChatCompose>
           ) : null}
         </section>
 
@@ -1481,6 +1991,11 @@ export default function TicketDetailPage() {
           <div className="card-toolbar">
             <h2>Детали</h2>
             <div className="card-toolbar-right">
+              {canViewAiPrompt ? (
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setAiPromptOpen(true)}>
+                  Промпт ИИ
+                </button>
+              ) : null}
               {canShowEdit ? (
                 <button type="button" className="btn-secondary btn-sm" onClick={() => setEditOpen(true)}>
                   Изменить
@@ -1502,6 +2017,30 @@ export default function TicketDetailPage() {
         </section>
       </div>
 
+      {canViewAiPrompt ? (
+        <Modal
+          open={aiPromptOpen}
+          title="Промпт ИИ"
+          size="wide"
+          onClose={() => setAiPromptOpen(false)}
+        >
+          <TicketAiPromptSection
+            ticketId={ticketId}
+            clientId={getTicketClientId(ticket)}
+            chatId={ticket.chat_id != null ? String(ticket.chat_id) : null}
+          />
+        </Modal>
+      ) : null}
+
+      <TicketAiAssistModal
+        open={aiAssistOpen}
+        ticketId={ticketId}
+        onClose={() => setAiAssistOpen(false)}
+        onCustomerReply={() => {
+          void refreshChatTail().catch(() => {});
+        }}
+      />
+
       <EditTicketModal
         ticket={ticket}
         open={editOpen}
@@ -1512,6 +2051,7 @@ export default function TicketDetailPage() {
           setError("");
           void queryClient.setQueryData(["ticket", ticketId], { ticket: next });
           void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+          void queryClient.invalidateQueries({ queryKey: ["tickets"] });
         }}
       />
 

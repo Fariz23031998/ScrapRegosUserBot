@@ -157,6 +157,20 @@ function migrateSchema(db) {
   ensureRegosChannelSettingsTable(db);
   const { ensureTicketRecordingsTable } = require('./ticket-recordings');
   ensureTicketRecordingsTable(db);
+  const { ensureAppSettingsTable } = require('./app-settings');
+  ensureAppSettingsTable(db);
+  const { ensureKnowledgeTables } = require('./knowledge-articles');
+  ensureKnowledgeTables(db);
+  const { ensureAiPromptsTable } = require('./ai-prompts');
+  ensureAiPromptsTable(db);
+  const { ensureCustomerTestTables } = require('./customer-agent-sessions');
+  ensureCustomerTestTables(db);
+  const { ensureTicketAssistTables } = require('./ticket-assist-sessions');
+  ensureTicketAssistTables(db);
+  const { ensureTicketSummariesTable } = require('./ticket-summaries');
+  ensureTicketSummariesTable(db);
+  const { ensureChatFileExtractionsTable } = require('./chat-file-extractions');
+  ensureChatFileExtractionsTable(db);
 }
 
 const {
@@ -317,8 +331,8 @@ function listOrders(
 
   const provider = String(paymentProvider || '').trim();
   if (provider && ORDER_PAYMENT_PROVIDERS.has(provider)) {
-    sql += ' AND payment_provider = ?';
-    params.push(provider);
+    sql += ` AND payment_provider = ? AND status IN (${PAID_LIST_STATUSES.map(() => '?').join(', ')})`;
+    params.push(provider, ...PAID_LIST_STATUSES);
   }
 
   const employeeTelegramId = Number(telegramId);

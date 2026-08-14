@@ -1,3 +1,4 @@
+import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { login } from "../api/auth";
@@ -5,16 +6,18 @@ import { useAuth } from "../hooks/useAuth";
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { isAuthenticated, isLoading, refreshSession } = useAuth();
+  const { isAuthenticated, isLoading, refreshSession, firstAllowedPath } = useAuth();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const landingPath = firstAllowedPath || "/";
+
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      navigate("/", { replace: true });
+      navigate(landingPath, { replace: true });
     }
-  }, [isAuthenticated, isLoading, navigate]);
+  }, [isAuthenticated, isLoading, landingPath, navigate]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -33,7 +36,7 @@ export default function LoginPage() {
   }
 
   if (isLoading) return null;
-  if (isAuthenticated) return <Navigate to="/" replace />;
+  if (isAuthenticated) return <Navigate to={landingPath} replace />;
 
   return (
     <div className="login-page">
@@ -47,16 +50,24 @@ export default function LoginPage() {
           </label>
           <label>
             Пароль
-            <input
-              name="password"
-              type={showPassword ? "text" : "password"}
-              autoComplete="current-password"
-              required
-            />
+            <div className="password-field">
+              <input
+                name="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
+                required
+              />
+              <button
+                type="button"
+                className="password-field__toggle"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                title={showPassword ? "Скрыть пароль" : "Показать пароль"}
+              >
+                {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+              </button>
+            </div>
           </label>
-          <button type="button" className="btn-secondary" onClick={() => setShowPassword((v) => !v)}>
-            {showPassword ? "Скрыть пароль" : "Показать пароль"}
-          </button>
           {error ? <p className="message error">{error}</p> : null}
           <button type="submit" className="btn-primary" disabled={busy}>
             Войти

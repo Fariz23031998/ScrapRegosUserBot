@@ -224,6 +224,64 @@ describe('ticket local enrichment', () => {
     assert.equal(byEmployee.local.unpaid_orders.count, 0);
   });
 
+  it('expands unpaid matches to all pending orders for the matched client phone', () => {
+    createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 1,
+      botUserPhone: '998995532080',
+      clientPhone: '998915200813',
+      additionalPhone: '973923303',
+      amount: 1000,
+      currency: 'UZS',
+      paymentProvider: 'payme',
+    });
+    createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 1,
+      botUserPhone: '998995532080',
+      clientPhone: '998915200813',
+      additionalPhone: '995532080',
+      amount: 1000,
+      currency: 'UZS',
+      paymentProvider: 'payme',
+    });
+    createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 1,
+      botUserPhone: '998995532080',
+      clientPhone: '998915200813',
+      additionalPhone: '995532080',
+      amount: 1000,
+      currency: 'UZS',
+      paymentProvider: 'payme',
+    });
+    // Different client — must not be pulled in via shared additional/employee phone.
+    createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 2,
+      botUserPhone: '998973923303',
+      clientPhone: '998910001900',
+      additionalPhone: '995532080',
+      amount: 1000,
+      currency: 'UZS',
+      paymentProvider: 'payme',
+    });
+
+    const [enriched] = enrichTicketsWithLocalData(db, [
+      {
+        id: 11809,
+        client_id: null,
+        client: { id: null, name: 'Fariz Bakhriy', phone: '998973923303' },
+      },
+    ]);
+
+    assert.equal(enriched.local.unpaid_orders.count, 3);
+    assert.equal(enriched.local.unpaid_orders.total_amount, 3000);
+    assert.ok(
+      enriched.local.unpaid_orders.orders.every((order) => order.client_phone === '998915200813')
+    );
+  });
+
   it('returns none TS status when phone has no subscription', () => {
     const status = getTechnicalSupportStatusByPhone(db, '998911111111');
     assert.equal(status.status, 'none');

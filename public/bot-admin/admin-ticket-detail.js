@@ -907,11 +907,9 @@ function renderChatFiles(message) {
         </a>`;
       }
       if (isChatAudio(file)) {
-        const mimeType = chatFileMimeType(file);
-        const typeAttr = mimeType ? ` type="${escapeHtml(mimeType)}"` : '';
         return `<div class="ticket-chat__media ticket-chat__media--audio">
-          <audio class="ticket-chat__audio" controls preload="metadata">
-            <source src="${escapeHtml(url)}"${typeAttr}>
+          <audio class="ticket-chat__audio" controls preload="metadata" src="${escapeHtml(url)}">
+            Ваш браузер не поддерживает воспроизведение аудио.
           </audio>
           <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
             name
@@ -919,11 +917,9 @@ function renderChatFiles(message) {
         </div>`;
       }
       if (isChatVideo(file)) {
-        const mimeType = chatFileMimeType(file);
-        const typeAttr = mimeType ? ` type="${escapeHtml(mimeType)}"` : '';
         return `<div class="ticket-chat__media ticket-chat__media--video">
-          <video class="ticket-chat__video" controls preload="metadata" playsinline>
-            <source src="${escapeHtml(url)}"${typeAttr}>
+          <video class="ticket-chat__video" controls preload="metadata" playsinline src="${escapeHtml(url)}">
+            Ваш браузер не поддерживает воспроизведение видео.
           </video>
           <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
             name
@@ -1169,7 +1165,7 @@ async function loadChatMessages(ticketId, { silent = false } = {}) {
     }
 
     chatMessages = data.messages || [];
-    chatOffset = data.offset || 0;
+    chatOffset = data.next_offset ?? (data.offset || 0) + chatMessages.length;
     chatTotal = data.total || chatMessages.length;
     chatHasOlder = Boolean(data.has_older);
     setChatComposerEnabled(true);
@@ -1203,13 +1199,12 @@ async function loadOlderChatMessages(ticketId) {
   setChatStatus('Загрузка предыдущих сообщений…', { loading: true });
 
   try {
-    const nextOffset = Math.max(0, chatOffset - CHAT_PAGE_LIMIT);
-    const limit = chatOffset - nextOffset;
-    const data = await fetchChatPage(ticketId, { limit, offset: nextOffset });
+    const data = await fetchChatPage(ticketId, { limit: CHAT_PAGE_LIMIT, offset: chatOffset });
     if (requestId !== chatRequestId) return;
 
-    chatMessages = mergeMessages(chatMessages, data.messages || [], { prepend: true });
-    chatOffset = data.offset ?? nextOffset;
+    const page = data.messages || [];
+    chatMessages = mergeMessages(chatMessages, page, { prepend: true });
+    chatOffset = data.next_offset ?? chatOffset + page.length;
     chatTotal = data.total ?? chatTotal;
     chatHasOlder = Boolean(data.has_older);
     renderChatMessages();
@@ -1233,8 +1228,8 @@ async function refreshChatTail(ticketId) {
 
   const incoming = data.messages || [];
   const knownIds = new Set(chatMessages.map((m) => String(m.id)));
-  const hasNew = incoming.some((m) => m?.id && !knownIds.has(String(m.id)));
-  if (!hasNew && incoming.length <= chatMessages.length) {
+  const newCount = incoming.filter((m) => m?.id && !knownIds.has(String(m.id))).length;
+  if (!newCount && incoming.length <= chatMessages.length) {
     chatTotal = data.total ?? chatTotal;
     return;
   }
@@ -1242,10 +1237,8 @@ async function refreshChatTail(ticketId) {
   // Keep older messages that were already loaded; merge the latest page.
   chatMessages = mergeMessages(chatMessages, incoming);
   chatTotal = data.total ?? chatTotal;
-  if (typeof data.offset === 'number' && data.offset < chatOffset) {
-    chatOffset = data.offset;
-    chatHasOlder = Boolean(data.has_older);
-  }
+  chatOffset += newCount;
+  chatHasOlder = chatTotal > 0 ? chatOffset < chatTotal : chatHasOlder;
   renderChatMessages({ stickToBottom: true });
   setChatStatus(chatTotal > 0 ? `Сообщений: ${chatMessages.length} из ${chatTotal}` : '');
 }

@@ -1,7 +1,10 @@
 import {
+  Bot,
   ClipboardList,
+  FilePen,
   FileText,
   Headphones,
+  BookOpen,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -26,13 +29,16 @@ import { DATETIME_FORMAT_OPTIONS } from "../lib/ui-preferences";
 import { loadNavVisible, saveNavVisible } from "../lib/utils";
 
 const NAV_ICONS: Record<string, LucideIcon> = {
-  "/": Users,
+  "/users": Users,
   "/orders": Receipt,
   "/order-logs": ClipboardList,
   "/logs": FileText,
   "/tickets": Ticket,
   "/technical-support": Headphones,
   "/prices": LayoutDashboard,
+  "/knowledge": BookOpen,
+  "/customer-agent": Bot,
+  "/prompts": FilePen,
   "/settings": Settings,
 };
 
@@ -176,7 +182,6 @@ export default function BotAdminLayout() {
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={item.to === "/"}
                 className={({ isActive }) =>
                   `admin-sidebar__link${isActive ? " admin-sidebar__link--active" : ""}`
                 }

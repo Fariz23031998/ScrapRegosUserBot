@@ -11,9 +11,12 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/orders", label: "Заказы", permission: "orders_read" },
   { to: "/order-logs", label: "Журнал заказов", permission: "order_logs_read" },
   { to: "/logs", label: "Журнал", permission: "logs_read" },
-  { to: "/", label: "Пользователи", permission: "users_read" },
+  { to: "/users", label: "Пользователи", permission: "users_read" },
   { to: "/technical-support", label: "Техподдержка", permission: "technical_support_read" },
   { to: "/prices", label: "Прайс", permission: "prices_read" },
+  { to: "/knowledge", label: "База знаний", permission: "knowledge_read" },
+  { to: "/customer-agent", label: "Агент поддержки", permission: "ai_customer_test" },
+  { to: "/prompts", label: "Промпты", permission: "settings_read" },
   { to: "/settings", label: "Настройки", permission: "settings_read" },
 ];
 

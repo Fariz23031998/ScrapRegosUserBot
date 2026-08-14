@@ -10,6 +10,8 @@ import type {
   RegosTicketUser,
   FirmSearchResult,
   TicketFirmLink,
+  TicketAiPrompt,
+  TicketChatSummary,
 } from "../lib/types";
 
 export function listTickets(params: Record<string, string>) {
@@ -27,6 +29,29 @@ export function listTickets(params: Record<string, string>) {
 
 export function getTicket(id: number) {
   return apiFetch<{ ticket: TicketDetail }>(`/bot-admin/api/tickets/${id}`);
+}
+
+export function getTicketAiPrompt(id: number, params?: { message_id?: number | string }) {
+  const search = new URLSearchParams();
+  if (params?.message_id != null && String(params.message_id).trim()) {
+    search.set("message_id", String(params.message_id));
+  }
+  const query = search.toString();
+  return apiFetch<TicketAiPrompt>(`/bot-admin/api/tickets/${id}/ai-prompt${query ? `?${query}` : ""}`);
+}
+
+export function saveTicketSummary(
+  id: number,
+  payload: { summary: string; client_id?: number | null; chat_id?: string | null },
+) {
+  return apiFetch<{ summary: TicketChatSummary }>(`/bot-admin/api/tickets/${id}/summary`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteTicketSummary(id: number) {
+  return apiFetch<{ ok: boolean }>(`/bot-admin/api/tickets/${id}/summary`, { method: "DELETE" });
 }
 
 export function createTicket(payload: Record<string, unknown>) {

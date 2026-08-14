@@ -1,6 +1,6 @@
 # Bot Admin UI (React)
 
-React/TypeScript rebuild of the Bot Admin panel. The legacy vanilla UI in `public/bot-admin/` remains untouched.
+React/TypeScript admin panel served at `/bot-admin/`. This is the production UI; the legacy vanilla files in `public/bot-admin/` remain only as an emergency fallback.
 
 ## Development
 
@@ -22,29 +22,23 @@ npm run server
 npm run bot-admin-ui:dev
 ```
 
-Open http://localhost:5301/bot-admin/ (trailing slash) with the backend running. On a phone on the same Wi-Fi, open http://10.148.213.195:5301/bot-admin/. The browser calls same-origin `/bot-admin/api/*`; Vite proxies those to `VITE_API_BASE_URL`. Deep links such as `/bot-admin/prices` should be opened under that base path.
+Open http://localhost:5301/bot-admin/ (trailing slash) with the backend running. On a phone on the same Wi-Fi, open http://10.148.213.195:5301/bot-admin/. The browser calls same-origin `/bot-admin/api/*`; Vite proxies those to `VITE_API_BASE_URL`. Deep links such as `/bot-admin/tickets` should be opened under that base path.
 
-## Production cutover
+## Production
 
-1. Build the SPA:
+Build the SPA (leave `VITE_API_BASE_URL` empty for same-origin):
 
 ```bash
 npm run bot-admin-ui:build
 ```
 
-Leave `VITE_API_BASE_URL` empty for a same-origin production build. Dev-only `.env` values are not used by `vite build` unless you also set them in `.env.production`.
+Restart `npm run server`. When `bot-admin-ui/dist/index.html` exists, `/bot-admin/*` serves the React SPA automatically. No extra env flag is required.
 
-2. Enable the React UI on the server:
+Dev-only `.env` values are not used by `vite build` unless you also set them in `.env.production`.
 
-```env
-BOT_ADMIN_USE_REACT_UI=1
-```
+## Emergency rollback
 
-3. Restart the server. `/bot-admin/*` will serve the built SPA from `bot-admin-ui/dist/`.
-
-## Rollback
-
-Remove or set `BOT_ADMIN_USE_REACT_UI=0` and restart. The server falls back to `public/bot-admin/` HTML pages.
+Set `BOT_ADMIN_USE_LEGACY_UI=1` and restart to force `public/bot-admin/` HTML pages. Remove the flag (and keep a fresh `bot-admin-ui:build`) to return to the React UI.
 
 ## Stack
 

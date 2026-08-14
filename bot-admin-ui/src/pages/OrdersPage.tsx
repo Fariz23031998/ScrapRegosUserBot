@@ -105,10 +105,19 @@ function resolveOrderSummary(
   return summary;
 }
 
-function orderStatusLabel(order: Order): string {
+function isOrderPaid(order: Order): boolean {
   const status = String(order.status || "");
-  if (status === "paid" || status === "paid_cash") return "Оплачен";
-  return order.status_label || status || "—";
+  return status === "paid" || status === "paid_cash";
+}
+
+function orderStatusLabel(order: Order): string {
+  if (isOrderPaid(order)) return "Оплачен";
+  return order.status_label || String(order.status || "") || "—";
+}
+
+function orderPaymentLabel(order: Order): string {
+  if (!isOrderPaid(order)) return "";
+  return order.payment_provider_label || order.payment_provider || "";
 }
 
 function OrderFilterFields({
@@ -332,7 +341,7 @@ export default function OrdersPage() {
       {
         id: "payment",
         header: "Оплата",
-        accessorFn: (row) => row.payment_provider_label || row.payment_provider || "—",
+        accessorFn: (row) => orderPaymentLabel(row),
       },
       {
         id: "ticket",
@@ -440,7 +449,7 @@ export default function OrdersPage() {
               { label: "Сотрудник", value: order.employee_name || "—" },
               {
                 label: "Оплата",
-                value: order.payment_provider_label || order.payment_provider || "—",
+                value: orderPaymentLabel(order),
               },
               {
                 label: "Тикет",

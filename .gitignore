@@ -8,4 +8,5 @@ auth-state.json
 auth-state-easytrade.json
 data/auth/
 .env
+.cursor/mcp.json
 logs/

@@ -10,6 +10,10 @@ const {
   editTicket,
   setTicketStatus,
   setTicketResponsible,
+  setTicketParticipants,
+  normalizeParticipantUserIds,
+  participantUserIdsEqual,
+  findTicketByChatId,
 } = require('../src/integrations/regos-crm');
 
 describe('REGOS ticket mutations', () => {
@@ -99,6 +103,34 @@ describe('REGOS ticket mutations', () => {
     });
   });
 
+  it('replaces ticket participants via SetParticipants', async () => {
+    responses.push({ ok: true, result: { row_affected: 1, ids: [610] } });
+    const result = await setTicketParticipants(610, ['18', 31, 31, 0, 'x'], { replaceMode: true });
+    assert.deepEqual(result, { row_affected: 1, ids: [610] });
+    assert.equal(calls[0].url.split('/v1/')[1], 'Ticket/SetParticipants');
+    assert.deepEqual(calls[0].body, {
+      id: 610,
+      participant_user_ids: [18, 31],
+      replace_mode: true,
+    });
+  });
+
+  it('appends a single participant when replace_mode is false', async () => {
+    responses.push({ ok: true, result: { row_affected: 1, ids: [610] } });
+    await setTicketParticipants(610, [44], { replaceMode: false });
+    assert.deepEqual(calls[0].body, {
+      id: 610,
+      participant_user_ids: [44],
+      replace_mode: false,
+    });
+  });
+
+  it('normalizes and compares participant id lists', () => {
+    assert.deepEqual(normalizeParticipantUserIds(['3', 1, 1, 0, null]), [3, 1]);
+    assert.equal(participantUserIdsEqual([1, 2], ['2', '1']), true);
+    assert.equal(participantUserIdsEqual([1], [1, 2]), false);
+  });
+
   it('does not call REGOS for an empty scalar edit', async () => {
     assert.deepEqual(await editTicket(610, {}), { changed: false, result: null });
     assert.equal(calls.length, 0);
@@ -179,5 +211,62 @@ describe('REGOS ticket mutations', () => {
         error.status === 502 &&
         /PermissionDenied/.test(error.message)
     );
+  });
+
+  it('resolves a ticket via Chat/Get entity_id instead of Ticket/Get chat_id', async () => {
+    responses.push(
+      {
+        ok: true,
+        result: [
+          {
+            id: 'afdfd72d-a166-4c80-b2b1-d7466d44f37b',
+            entity_type: 'Ticket',
+            entity_id: 610,
+          },
+        ],
+        total: 1,
+        next_offset: 0,
+      },
+      {
+        ok: true,
+        result: [{ id: 610, chat_id: 'afdfd72d-a166-4c80-b2b1-d7466d44f37b', status: 'Open' }],
+        total: 1,
+        next_offset: 0,
+      }
+    );
+
+    const ticket = await findTicketByChatId('afdfd72d-a166-4c80-b2b1-d7466d44f37b');
+    assert.equal(ticket.id, 610);
+    assert.deepEqual(
+      calls.map((call) => call.url.split('/v1/')[1]),
+      ['Chat/Get', 'Ticket/Get']
+    );
+    assert.deepEqual(calls[0].body, {
+      filters: [
+        { Field: 'id', Operator: 'equal', Value: 'afdfd72d-a166-4c80-b2b1-d7466d44f37b' },
+      ],
+      limit: 1,
+      offset: 0,
+    });
+    assert.deepEqual(calls[1].body, {
+      filters: [{ Field: 'id', Operator: 'equal', Value: '610' }],
+      limit: 1,
+      offset: 0,
+    });
+  });
+
+  it('returns null when chat is missing or not linked to a ticket', async () => {
+    responses.push({ ok: true, result: [], total: 0, next_offset: 0 });
+    assert.equal(await findTicketByChatId('missing-chat'), null);
+
+    responses.push({
+      ok: true,
+      result: [{ id: 'chat-lead', entity_type: 'Lead', entity_id: 12 }],
+      total: 1,
+      next_offset: 0,
+    });
+    assert.equal(await findTicketByChatId('chat-lead'), null);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every((call) => String(call.url).endsWith('/Chat/Get')));
   });
 });

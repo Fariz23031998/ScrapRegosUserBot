@@ -48,6 +48,185 @@ export type BotUser = {
   rights?: Permissions;
   linked_at?: string;
   role?: string;
+  job_title?: string | null;
+  description?: string | null;
+};
+
+export type AiGroupTopic = {
+  key: string;
+  id: number | string;
+  name: string;
+  when?: string;
+};
+
+export type AiPromptSlug = "customer" | "customer_assist" | "kb" | "ticket_summary";
+
+export type AiAgentTool = {
+  name: string;
+  title: string;
+  description: string;
+  agents: AiPromptSlug[];
+  enabled: boolean;
+};
+
+export type AiSettings = {
+  enabled: boolean;
+  test_mode: boolean;
+  provider: string;
+  model: string;
+  agent_models?: Partial<Record<AiPromptSlug, string>>;
+  transcribe_model?: string;
+  reasoning_effort?: string;
+  history_limit: number;
+  group_chat_id?: string;
+  group_topics?: AiGroupTopic[];
+  disabled_tools?: string[];
+  agent_tools?: AiAgentTool[];
+  providers?: string[];
+  models?: string[];
+  transcribe_models?: string[];
+  reasoning_efforts?: string[];
+  agent_model_slugs?: AiPromptSlug[];
+  history_limit_min?: number;
+  history_limit_max?: number;
+  group_topics_max?: number;
+};
+
+export type AiPrompt = {
+  id: number | null;
+  type: AiPromptSlug;
+  name: string;
+  body: string;
+  is_default: boolean;
+  is_active: boolean;
+  updated_at?: string | null;
+  updated_by?: number | null;
+};
+
+export type AiPromptType = {
+  slug: AiPromptSlug;
+  title: string;
+  active_id: number | null;
+  prompts: AiPrompt[];
+};
+
+export type TicketAiPromptMessageContent =
+  | string
+  | Array<{
+      type?: string;
+      text?: string;
+      image_url?: {
+        url?: string;
+        file_id?: number | string | null;
+        name?: string;
+        placeholder?: boolean;
+      };
+    }>;
+
+export type TicketAiPromptMessage = {
+  role: string;
+  content: TicketAiPromptMessageContent;
+};
+
+export type TicketAiPromptTool = {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+};
+
+export type TicketChatSummary = {
+  ticket_id: number;
+  client_id?: number | null;
+  chat_id?: string | null;
+  summary: string;
+  model?: string | null;
+  provider?: string | null;
+  message_count?: number;
+  period_start?: number | null;
+  period_end?: number | null;
+  status: string;
+  error?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type TicketAiPrompt = {
+  system: string;
+  messages: TicketAiPromptMessage[];
+  tools: TicketAiPromptTool[];
+  gate: { handle: boolean; reason?: string | null };
+  settings: {
+    enabled: boolean;
+    test_mode: boolean;
+    provider?: string | null;
+    model?: string | null;
+    history_limit?: number;
+  };
+  trigger_message_id?: number | string | null;
+  chat_id?: string | null;
+  ticket_id?: number | string | null;
+  summary?: TicketChatSummary | null;
+  prior_summaries?: TicketChatSummary[];
+};
+
+export type KnowledgeArticle = {
+  id: number;
+  title: string;
+  body: string;
+  tags?: string;
+  locked?: boolean;
+  updated_by?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AgentChatFile = {
+  name: string;
+  extension?: string;
+  mime_type?: string | null;
+  kind?: "image" | "audio" | "video" | "file";
+  size?: number | null;
+  data_url?: string | null;
+};
+
+export type KnowledgeChatMessage = {
+  id: number;
+  session_id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at?: string;
+  files?: AgentChatFile[];
+};
+
+export type CustomerTestTicket = {
+  id?: number | null;
+  status?: string | null;
+  subject?: string | null;
+  chat_id?: string | null;
+  client_id?: number | null;
+  client?: {
+    id?: number | null;
+    name?: string | null;
+    phone?: string | null;
+  } | null;
+};
+
+export type CustomerTestSession = {
+  session_id: number;
+  ticket_id?: number | null;
+  client_phone?: string | null;
+  ticket?: CustomerTestTicket | null;
+  messages: KnowledgeChatMessage[];
+  reply?: string;
+};
+
+export type TicketAiAssistSession = {
+  session_id: number;
+  ticket_id: number;
+  messages: KnowledgeChatMessage[];
+  reply?: string;
+  replied_to_customer?: boolean;
+  customer_reply?: string | null;
 };
 
 export type RegosUser = {
@@ -124,6 +303,7 @@ export type TicketClient = {
   email?: string;
   external_id?: string;
   description?: string;
+  photo_url?: string | null;
 };
 
 export type TicketFirmLink = {
@@ -254,6 +434,7 @@ export type ChatMessage = {
   author_entity_type?: string;
   author_entity_id?: number | string;
   author_entity_name?: string;
+  author_entity_photo?: string | null;
   author_role?: string;
   author_name?: string;
   is_staff?: boolean;

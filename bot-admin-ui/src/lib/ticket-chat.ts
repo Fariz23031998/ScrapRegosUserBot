@@ -57,25 +57,31 @@ export function isChatVideo(file: ChatFile | File): boolean {
 }
 
 export function chatFileMimeType(file: ChatFile | File): string {
-  const mime = chatFileMime(file);
-  if (mime) return mime;
+  const mime = chatFileMime(file).split(";")[0].trim();
+  const generic = !mime || mime === "application/octet-stream" || mime === "binary/octet-stream";
+  if (mime && !generic && (mime.startsWith("audio/") || mime.startsWith("video/") || mime.startsWith("image/"))) {
+    return mime;
+  }
   const ext = chatFileExtension(file);
   if (isChatAudio(file)) {
     if (ext === "mp3") return "audio/mpeg";
-    if (ext === "ogg" || ext === "oga") return "audio/ogg";
+    if (ext === "ogg" || ext === "oga" || ext === "opus") return "audio/ogg";
     if (ext === "wav") return "audio/wav";
     if (ext === "m4a") return "audio/mp4";
     if (ext === "aac") return "audio/aac";
-    if (ext === "opus") return "audio/opus";
-    return "audio/*";
+    if (ext === "weba") return "audio/webm";
+    if (mime.startsWith("audio/")) return mime;
+    return "";
   }
   if (isChatVideo(file)) {
     if (ext === "mp4" || ext === "m4v") return "video/mp4";
     if (ext === "webm") return "video/webm";
     if (ext === "mov") return "video/quicktime";
     if (ext === "ogv") return "video/ogg";
-    return "video/*";
+    if (mime.startsWith("video/")) return mime;
+    return "";
   }
+  if (!generic && mime.startsWith("image/")) return mime;
   return "";
 }
 
@@ -97,6 +103,12 @@ export function fileToBase64(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error || new Error("Не удалось прочитать файл."));
     reader.readAsDataURL(file);
   });
+}
+
+export function isFileDrag(event: { dataTransfer?: DataTransfer | null }): boolean {
+  const types = event.dataTransfer?.types;
+  if (!types) return false;
+  return [...types].includes("Files");
 }
 
 export function filesFromDataTransfer(dataTransfer: DataTransfer | null): File[] {
@@ -155,6 +167,42 @@ export function chatMessageClass(message: ChatMessage): string {
   return "ticket-chat__msg";
 }
 
+export function chatMessageSearchText(message: ChatMessage): string {
+  return String(message.display_text || message.text || "").trim();
+}
+
+export function findChatMessageMatchIds(messages: ChatMessage[], query: string): string[] {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return [];
+  const ids: string[] = [];
+  for (const message of messages) {
+    if (message?.id == null || message.id === "") continue;
+    const haystack = chatMessageSearchText(message).toLowerCase();
+    if (!haystack.includes(needle)) continue;
+    ids.push(String(message.id));
+  }
+  return ids;
+}
+
+export function escapeRegExp(value: string): string {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Split text into plain / match segments for search highlighting. */
+export function splitSearchHighlight(text: string, query: string): Array<{ text: string; match: boolean }> {
+  const source = String(text || "");
+  const needle = String(query || "").trim();
+  if (!source || !needle) return source ? [{ text: source, match: false }] : [];
+  const pattern = new RegExp(`(${escapeRegExp(needle)})`, "gi");
+  const parts = source.split(pattern);
+  const segments: Array<{ text: string; match: boolean }> = [];
+  for (const part of parts) {
+    if (!part) continue;
+    segments.push({ text: part, match: part.toLowerCase() === needle.toLowerCase() });
+  }
+  return segments.length ? segments : [{ text: source, match: false }];
+}
+
 export function mergeMessages(
   existing: ChatMessage[],
   incoming: ChatMessage[],
@@ -172,6 +220,18 @@ export function mergeMessages(
     if (dateA !== dateB) return dateA - dateB;
     return String(a.id).localeCompare(String(b.id));
   });
+}
+
+export function nextOlderMessagesOffset(
+  page: { next_offset?: number; offset?: number; messages?: unknown[] },
+  fallback = 0,
+): number {
+  const next = Number(page.next_offset);
+  if (Number.isInteger(next) && next >= 0) return next;
+  const offset = Number(page.offset);
+  const count = Array.isArray(page.messages) ? page.messages.length : 0;
+  const inferred = (Number.isInteger(offset) && offset >= 0 ? offset : 0) + count;
+  return inferred > 0 ? inferred : fallback;
 }
 
 export function chatFileDisplayName(file: ChatFile): string {

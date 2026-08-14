@@ -89,6 +89,10 @@ const RIGHTS = {
     column: 'tickets_edit_closed',
     label: 'Админ: тикеты — изменение закрытых',
   },
+  tickets_ai_prompt: {
+    column: 'tickets_ai_prompt',
+    label: 'Админ: тикеты — просмотр промпта ИИ',
+  },
   clients_edit: {
     column: 'clients_edit',
     label: 'Админ: клиенты — изменение',
@@ -137,6 +141,26 @@ const RIGHTS = {
     column: 'settings_edit',
     label: 'Админ: настройки — изменение',
   },
+  knowledge_read: {
+    column: 'knowledge_read',
+    label: 'Админ: база знаний — просмотр',
+  },
+  knowledge_edit: {
+    column: 'knowledge_edit',
+    label: 'Админ: база знаний — изменение',
+  },
+  knowledge_lock: {
+    column: 'knowledge_lock',
+    label: 'Админ: база знаний — блокировка',
+  },
+  knowledge_unlock: {
+    column: 'knowledge_unlock',
+    label: 'Админ: база знаний — разблокировка',
+  },
+  ai_customer_test: {
+    column: 'ai_customer_test',
+    label: 'Админ: тест агента поддержки',
+  },
 };
 
 /** Admin UI section permission keys returned by /api/session. */
@@ -156,6 +180,7 @@ const ADMIN_PERMISSION_KEYS = [
   'tickets_create',
   'tickets_edit',
   'tickets_edit_closed',
+  'tickets_ai_prompt',
   'clients_edit',
   'clients_link_firm',
   'technical_support_read',
@@ -168,6 +193,11 @@ const ADMIN_PERMISSION_KEYS = [
   'prices_delete',
   'settings_read',
   'settings_edit',
+  'knowledge_read',
+  'knowledge_edit',
+  'knowledge_lock',
+  'knowledge_unlock',
+  'ai_customer_test',
 ];
 
 function hasRight(db, telegramId, rightKey) {

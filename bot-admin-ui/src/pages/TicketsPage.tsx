@@ -1,6 +1,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Menu, Pencil, Plus, RefreshCw } from "lucide-react";
+import { Check, Menu, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { createOrder } from "../api/admin";
@@ -19,12 +19,14 @@ import {
   updateClient,
 } from "../api/tickets";
 import filterFunnelIcon from "../assets/filter-funnel.png";
+import EntityAvatar from "../components/EntityAvatar";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import Modal from "../components/Modal";
 import SearchField from "../components/SearchField";
 import SimpleTable from "../components/SimpleTable";
 import SummaryBar from "../components/SummaryBar";
 import TicketCards from "../components/TicketCards";
+import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
 import { PeriodFilterButton, TicketPeriodModal } from "../components/TicketPeriodModal";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -56,6 +58,7 @@ import {
 } from "../lib/ticket-display";
 import type { DurationSummary } from "../lib/ticket-display";
 import type { FirmSearchResult, Ticket, TicketFirmLink } from "../lib/types";
+import { sanitizeTelegramHtml } from "../lib/utils";
 
 const FILTERS_STORAGE_KEY = "bot-admin.tickets.filters";
 
@@ -336,7 +339,12 @@ export default function TicketsPage() {
 
   const [recordingTicket, setRecordingTicket] = useState<Ticket | null>(null);
   const [clientEditId, setClientEditId] = useState<number | null>(null);
-  const [firmDetail, setFirmDetail] = useState<{ type: string; recordId: string; title: string } | null>(null);
+  const [firmDetail, setFirmDetail] = useState<{
+    type: string;
+    recordId: string;
+    title: string;
+    message?: string | null;
+  } | null>(null);
   const [orderOpen, setOrderOpen] = useState(false);
   const [periodOpen, setPeriodOpen] = useState(false);
 
@@ -437,24 +445,31 @@ export default function TicketsPage() {
         id: "client",
         header: "Клиент",
         cell: ({ row }) => {
-          const name = row.original.client?.name || "—";
+          const client = row.original.client;
+          const name = client?.name || "—";
           const clientId = getTicketClientId(row.original);
+          const hasClient = Boolean(clientId || client?.name);
           const canOpenClient = Boolean(clientId && (canEditClients || canLinkClientFirms));
+          const avatar = <EntityAvatar src={client?.photo_url} name={client?.name || name} size="sm" />;
           return (
             <span className="ticket-client-cell">
-              {canOpenClient ? (
-                <button
-                  type="button"
-                  className="ticket-client-edit"
-                  aria-label={`Редактировать клиента ${name}`}
-                  title="Редактировать клиента"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setClientEditId(clientId);
-                  }}
-                >
-                  <Pencil size={14} aria-hidden="true" />
-                </button>
+              {hasClient ? (
+                canOpenClient ? (
+                  <button
+                    type="button"
+                    className="ticket-client-avatar-btn"
+                    aria-label={`Редактировать клиента ${name}`}
+                    title="Редактировать клиента"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setClientEditId(clientId);
+                    }}
+                  >
+                    {avatar}
+                  </button>
+                ) : (
+                  <span className="ticket-client-avatar-static">{avatar}</span>
+                )
               ) : null}
               <span className="ticket-client-name">{name}</span>
             </span>
@@ -525,6 +540,7 @@ export default function TicketsPage() {
                       type: firm.firm_type,
                       recordId: String(firm.firm_record_id),
                       title: firmButtonLabel(firm),
+                      message: firm.firm_message || null,
                     });
                   }}
                 >
@@ -787,6 +803,7 @@ export default function TicketsPage() {
                 type: firm.firm_type,
                 recordId: String(firm.firm_record_id),
                 title: firmButtonLabel(firm),
+                message: firm.firm_message || null,
               })
             }
             onOpenRecording={setRecordingTicket}
@@ -854,6 +871,7 @@ export default function TicketsPage() {
           firmType={firmDetail.type}
           recordId={firmDetail.recordId}
           title={firmDetail.title}
+          cachedMessage={firmDetail.message}
           onClose={() => setFirmDetail(null)}
         />
       ) : null}
@@ -1006,26 +1024,39 @@ function FirmDetailModal({
   firmType,
   recordId,
   title,
+  cachedMessage,
   onClose,
 }: {
   firmType: string;
   recordId: string;
   title: string;
+  cachedMessage?: string | null;
   onClose: () => void;
 }) {
   const firmQuery = useQuery({
     queryKey: ["firm-detail", firmType, recordId],
     queryFn: () => getFirm(firmType, recordId),
     enabled: Boolean(firmType && recordId),
+    retry: false,
   });
 
   const firm = firmQuery.data?.firm as { clientName?: string; message?: string } | undefined;
+  const message = firm?.message || cachedMessage || null;
+  const showError = Boolean(firmQuery.error) && !message;
 
   return (
     <Modal title={firm?.clientName || title} open onClose={onClose} size="wide">
-      {firmQuery.isLoading ? <p>Загрузка…</p> : null}
-      {firmQuery.error ? <p className="message error">{(firmQuery.error as Error).message}</p> : null}
-      {firm ? <pre className="firm-detail-message">{firm.message || "Нет данных."}</pre> : null}
+      {firmQuery.isLoading && !message ? <p>Загрузка…</p> : null}
+      {showError ? <p className="message error">{(firmQuery.error as Error).message}</p> : null}
+      {message ? (
+        <div
+          className="firm-detail-message"
+          dangerouslySetInnerHTML={{ __html: sanitizeTelegramHtml(message) }}
+        />
+      ) : null}
+      {!firmQuery.isLoading && !message && !showError ? (
+        <p className="firm-search-status">Нет данных.</p>
+      ) : null}
       <div className="form-actions">
         <button type="button" className="btn-secondary" onClick={onClose}>
           Закрыть
@@ -1231,7 +1262,10 @@ function CreateOrderModal({
 }) {
   const [error, setError] = useState("");
   const [firmQuery, setFirmQuery] = useState("");
+  const [searchQ, setSearchQ] = useState("");
   const [selectedFirm, setSelectedFirm] = useState<FirmSearchResult | null>(null);
+  const [autoSelectFirm, setAutoSelectFirm] = useState(true);
+  const [phoneLookupDone, setPhoneLookupDone] = useState(false);
   const defaultPhone = ticket.client?.phone || "";
 
   const clientId = getTicketClientId(ticket);
@@ -1241,14 +1275,41 @@ function CreateOrderModal({
     enabled: open && clientId != null,
   });
 
+  const linkedFirmsReady = clientId == null || linkedClientQuery.isFetched;
+  const hasLinkedFirm = Boolean(linkedClientQuery.data?.firms?.length);
+  const phoneLookupQuery = useQuery({
+    queryKey: ["order-firm-phone-lookup", defaultPhone.trim()],
+    queryFn: () => searchFirms(defaultPhone.trim()),
+    enabled:
+      open &&
+      autoSelectFirm &&
+      !selectedFirm &&
+      !phoneLookupDone &&
+      linkedFirmsReady &&
+      !hasLinkedFirm &&
+      defaultPhone.trim().length >= 7,
+  });
+
   const firmSearchQuery = useQuery({
-    queryKey: ["order-firm-search", firmQuery],
-    queryFn: () => searchFirms(firmQuery),
-    enabled: open && firmQuery.trim().length > 0,
+    queryKey: ["order-firm-search", searchQ],
+    queryFn: () => searchFirms(searchQ),
+    enabled: open && searchQ.trim().length > 0,
   });
 
   useEffect(() => {
-    if (!open || selectedFirm) return;
+    if (!open) {
+      setFirmQuery("");
+      setSearchQ("");
+      setSelectedFirm(null);
+      setAutoSelectFirm(true);
+      setPhoneLookupDone(false);
+      setError("");
+      return;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !autoSelectFirm || selectedFirm) return;
     const link = linkedClientQuery.data?.firms?.[0];
     if (!link) return;
     setSelectedFirm({
@@ -1258,7 +1319,31 @@ function CreateOrderModal({
       phone: link.firm_phone,
       message: link.firm_message,
     });
-  }, [linkedClientQuery.data?.firms, open, selectedFirm]);
+    setPhoneLookupDone(true);
+  }, [autoSelectFirm, linkedClientQuery.data?.firms, open, selectedFirm]);
+
+  useEffect(() => {
+    if (!open || !autoSelectFirm || selectedFirm || !phoneLookupQuery.isFetched) return;
+    const firm = phoneLookupQuery.data?.results?.[0] || null;
+    if (firm) {
+      setSelectedFirm(firm);
+      setFirmQuery(defaultPhone.trim());
+    }
+    setPhoneLookupDone(true);
+  }, [
+    autoSelectFirm,
+    defaultPhone,
+    open,
+    phoneLookupQuery.data?.results,
+    phoneLookupQuery.isFetched,
+    selectedFirm,
+  ]);
+
+  function clearSelectedFirm() {
+    setSelectedFirm(null);
+    setAutoSelectFirm(false);
+    setPhoneLookupDone(true);
+  }
 
   const orderMutation = useMutation({
     mutationFn: createOrder,
@@ -1307,12 +1392,30 @@ function CreateOrderModal({
             <input
               value={firmQuery}
               onChange={(e) => setFirmQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  setSearchQ(firmQuery.trim());
+                }
+              }}
               placeholder="Имя, компания, телефон, лицензия…"
             />
-            <button type="button" className="btn-secondary btn-sm" onClick={() => void firmSearchQuery.refetch()}>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => setSearchQ(firmQuery.trim())}
+              disabled={firmSearchQuery.isFetching}
+            >
               Найти
             </button>
           </div>
+          {phoneLookupQuery.isFetching ? (
+            <p className="firm-search-status">Подбор фирмы по телефону…</p>
+          ) : null}
+          {firmSearchQuery.isFetching ? <p className="firm-search-status">Поиск…</p> : null}
+          {!firmSearchQuery.isFetching && searchQ && !(firmSearchQuery.data?.results || []).length ? (
+            <p className="firm-search-status">Ничего не найдено.</p>
+          ) : null}
           {(firmSearchQuery.data?.results || []).map((firm, index) => (
             <button
               key={`${firm.type}-${firm.recordId}-${index}`}
@@ -1335,10 +1438,10 @@ function CreateOrderModal({
                   {selectedFirm.phone ? ` · ${selectedFirm.phone}` : ""}
                 </span>
               </div>
-              <button type="button" className="btn-secondary btn-sm" onClick={() => setSelectedFirm(null)}>
+              <button type="button" className="btn-secondary btn-sm" onClick={clearSelectedFirm}>
                 Сбросить
               </button>
-            </div>
+              </div>
           ) : null}
         </div>
         <label>
@@ -1401,6 +1504,13 @@ function CreateTicketModal({
   pending: boolean;
   onSubmit: (payload: Record<string, unknown>) => void;
 }) {
+  const [participantIds, setParticipantIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    setParticipantIds(actorRegosUserId ? [actorRegosUserId] : []);
+  }, [open, actorRegosUserId]);
+
   return (
     <Modal title="Новый тикет" open={open} onClose={onClose} size="wide">
       <form
@@ -1418,6 +1528,7 @@ function CreateTicketModal({
             direction: form.get("direction"),
             subject: form.get("subject"),
             description: form.get("description"),
+            participant_user_ids: participantIds,
           });
         }}
       >
@@ -1485,6 +1596,12 @@ function CreateTicketModal({
             ))}
           </select>
         </label>
+        <TicketParticipantsPicker
+          users={users}
+          value={participantIds}
+          onChange={setParticipantIds}
+          disabled={pending}
+        />
         <label>
           Направление
           <select name="direction" defaultValue="Inbound">
