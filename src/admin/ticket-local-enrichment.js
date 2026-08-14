@@ -75,37 +75,9 @@ function orderMatchesAnyPhone(order, phones) {
   );
 }
 
-/**
- * Seed matches are by ticket/firm phones. Expand to every unpaid order that shares
- * a matched order's client_phone so the badge count matches the Orders link filter.
- */
 function collectUnpaidOrdersForTicket(pendingOrders, ticketPhones) {
   if (!ticketPhones.length) return [];
-  const seedMatches = pendingOrders.filter((order) => orderMatchesAnyPhone(order, ticketPhones));
-  if (!seedMatches.length) return [];
-
-  const clientPhones = [];
-  const seenClient = new Set();
-  for (const order of seedMatches) {
-    const phone = String(order.client_phone || '').trim();
-    if (!phone) continue;
-    const key = phone.replace(/\D/g, '');
-    if (!key || seenClient.has(key)) continue;
-    seenClient.add(key);
-    clientPhones.push(phone);
-  }
-  if (!clientPhones.length) return seedMatches;
-
-  const byId = new Map();
-  for (const order of pendingOrders) {
-    if (!clientPhones.some((phone) => phonesMatch(order.client_phone, phone))) continue;
-    byId.set(order.id, order);
-  }
-  // Keep any seed match that somehow lacks client_phone.
-  for (const order of seedMatches) {
-    byId.set(order.id, order);
-  }
-  return Array.from(byId.values());
+  return pendingOrders.filter((order) => orderMatchesAnyPhone(order, ticketPhones));
 }
 
 const TS_RANK = { active: 2, expired: 1, none: 0 };

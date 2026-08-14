@@ -143,7 +143,6 @@ export function hasTicketRecording(ticket: Ticket): boolean {
 }
 
 export function collectUnpaidClientPhones(ticket: Ticket): string[] {
-  const unpaid = ticket.local?.unpaid_orders;
   const phones: string[] = [];
   const seen = new Set<string>();
 
@@ -156,13 +155,13 @@ export function collectUnpaidClientPhones(ticket: Ticket): string[] {
     phones.push(phone);
   }
 
-  for (const order of unpaid?.orders || []) {
-    pushPhone(order.client_phone);
+  pushPhone(ticket.client?.phone);
+  for (const firm of ticket.local?.firms || []) {
+    pushPhone(firm.firm_phone);
   }
   if (!phones.length) {
-    pushPhone(ticket.client?.phone);
-    for (const firm of ticket.local?.firms || []) {
-      pushPhone(firm.firm_phone);
+    for (const order of ticket.local?.unpaid_orders?.orders || []) {
+      pushPhone(order.client_phone);
     }
   }
   return phones;

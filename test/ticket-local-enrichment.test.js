@@ -224,7 +224,7 @@ describe('ticket local enrichment', () => {
     assert.equal(byEmployee.local.unpaid_orders.count, 0);
   });
 
-  it('expands unpaid matches to all pending orders for the matched client phone', () => {
+  it('counts only unpaid orders that match the ticket phone, not every order for that client', () => {
     createOrder(db, {
       id: crypto.randomUUID(),
       telegramId: 1,
@@ -275,11 +275,9 @@ describe('ticket local enrichment', () => {
       },
     ]);
 
-    assert.equal(enriched.local.unpaid_orders.count, 3);
-    assert.equal(enriched.local.unpaid_orders.total_amount, 3000);
-    assert.ok(
-      enriched.local.unpaid_orders.orders.every((order) => order.client_phone === '998915200813')
-    );
+    assert.equal(enriched.local.unpaid_orders.count, 1);
+    assert.equal(enriched.local.unpaid_orders.total_amount, 1000);
+    assert.equal(enriched.local.unpaid_orders.orders[0].client_phone, '998915200813');
   });
 
   it('returns none TS status when phone has no subscription', () => {
