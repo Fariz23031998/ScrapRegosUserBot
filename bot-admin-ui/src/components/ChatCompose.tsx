@@ -5,6 +5,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type ClipboardEvent,
   type DragEvent,
   type FormEvent,
   type KeyboardEvent,
@@ -57,6 +58,7 @@ export type ChatComposeProps = {
   children?: ReactNode;
   footer?: ReactNode;
   onFileError?: (message: string) => void;
+  onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   ref?: Ref<ChatComposeHandle>;
 };
 
@@ -74,6 +76,7 @@ export default function ChatCompose({
   children,
   footer,
   onFileError,
+  onPaste,
   ref,
 }: ChatComposeProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -285,6 +288,8 @@ export default function ChatCompose({
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={(event) => {
+              onPaste?.(event);
+              if (event.defaultPrevented) return;
               if (!allowFiles || !enabled) return;
               const files = [...(event.clipboardData?.files || [])].filter((file) => isChatImage(file));
               if (!files.length) return;
