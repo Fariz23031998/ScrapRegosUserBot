@@ -5,6 +5,8 @@ import type {
   AiPromptSlug,
   AiPromptType,
   AiSettings,
+  AiToolSchema,
+  AiToolTestResult,
   CustomerTestSession,
   KnowledgeArticle,
   KnowledgeChatMessage,
@@ -42,6 +44,21 @@ export function testAiGroupTopic(payload: { topic_key: string; message: string }
       body: JSON.stringify(payload),
     },
   );
+}
+
+export function listAiTools() {
+  return apiFetch<{ tools: AiToolSchema[] }>("/bot-admin/api/settings/ai/tools");
+}
+
+export function testAiTool(payload: {
+  tool_name: string;
+  arguments?: Record<string, unknown>;
+  ticket_id?: number | string | null;
+}) {
+  return apiFetch<AiToolTestResult>("/bot-admin/api/settings/ai/tools/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getAiPrompts() {

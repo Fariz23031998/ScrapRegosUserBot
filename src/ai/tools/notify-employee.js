@@ -1,16 +1,37 @@
 const { getBotUserById } = require('../../db/bot-users-db');
 
-function buildEmployeeNotifyText({ message, ticketId }) {
-  const lines = [String(message || '').trim()];
+function formatClientNotifyLines(client) {
+  if (!client || typeof client !== 'object') return [];
+  const lines = [];
+  const name = String(client.name || '').trim();
+  const phone = String(client.phone || '').trim();
+  const id = client.id != null && String(client.id).trim() !== '' ? String(client.id).trim() : '';
+  const email = String(client.email || '').trim();
+  if (name) lines.push(`Клиент: ${name}`);
+  if (phone) lines.push(`Телефон: ${phone}`);
+  if (id) lines.push(`ID клиента: ${id}`);
+  if (email) lines.push(`Email: ${email}`);
+  return lines;
+}
+
+function buildEmployeeNotifyText({ message, ticketId, client } = {}) {
+  const parts = [];
+  const body = String(message || '').trim();
+  if (body) parts.push(body);
+
+  const clientLines = formatClientNotifyLines(client);
+  if (clientLines.length) parts.push(clientLines.join('\n'));
+
   if (ticketId) {
     const base = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
     const link = base ? `${base}/bot-admin/tickets/${ticketId}` : `тикет #${ticketId}`;
-    lines.push('', `Тикет: ${link}`);
+    parts.push(`Тикет: ${link}`);
   }
-  return lines.filter((line, index) => line || index === 0).join('\n').trim();
+
+  return parts.join('\n\n').trim();
 }
 
-async function notifyEmployee(db, { employeeId, message, ticketId, sendTelegram } = {}) {
+async function notifyEmployee(db, { employeeId, message, ticketId, client, sendTelegram } = {}) {
   const user = getBotUserById(db, employeeId);
   if (!user || user.role !== 'employee') {
     return { ok: false, error: 'employee_not_found' };
@@ -18,7 +39,7 @@ async function notifyEmployee(db, { employeeId, message, ticketId, sendTelegram 
   if (user.telegram_id == null) {
     return { ok: false, error: 'no_telegram' };
   }
-  const text = buildEmployeeNotifyText({ message, ticketId });
+  const text = buildEmployeeNotifyText({ message, ticketId, client });
   if (!text) return { ok: false, error: 'empty_message' };
 
   const send =
@@ -43,6 +64,7 @@ async function notifyEmployee(db, { employeeId, message, ticketId, sendTelegram 
 }
 
 module.exports = {
+  formatClientNotifyLines,
   buildEmployeeNotifyText,
   notifyEmployee,
 };

@@ -245,7 +245,7 @@ function createCustomerTools({
     {
       name: 'notify_employee',
       description:
-        'Send a Telegram message to an employee, for example to forward a customer request to a sales manager. Use get_employee first.',
+        'Send a Telegram message to an employee, for example to forward a customer request to a sales manager. Use get_employee first. Client name/phone and the ticket link are appended automatically.',
       parameters: {
         type: 'object',
         properties: {
@@ -259,6 +259,7 @@ function createCustomerTools({
           employeeId: employee_id,
           message,
           ticketId: ticket?.id ?? null,
+          client: ticket?.client || null,
         }),
     },
     {
@@ -271,7 +272,7 @@ function createCustomerTools({
     {
       name: 'send_group_topic_message',
       description:
-        'Post a message to an internal staff Telegram group topic (urgent help, KKM, new clients, field visits). Do not use this instead of answering the client. Call list_group_topics first if you are unsure which topic_key to use.',
+        'Post a message to an internal staff Telegram group topic (urgent help, KKM, new clients, field visits). Do not use this instead of answering the client. Call list_group_topics first if you are unsure which topic_key to use. Client name/phone and the ticket link are appended automatically.',
       parameters: {
         type: 'object',
         properties: {
@@ -285,6 +286,7 @@ function createCustomerTools({
           topicKey: topic_key,
           message,
           ticketId: ticket?.id ?? null,
+          client: ticket?.client || null,
         }),
     },
     {

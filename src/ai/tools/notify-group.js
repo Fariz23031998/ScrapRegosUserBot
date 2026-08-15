@@ -36,13 +36,13 @@ function resolveGroupTopic(config, topicKey) {
   return config.topics.find((topic) => topic.key === needle) || null;
 }
 
-async function notifyGroupTopic(db, { topicKey, message, ticketId, sendTelegram } = {}) {
+async function notifyGroupTopic(db, { topicKey, message, ticketId, client, sendTelegram } = {}) {
   const config = loadAgentGroupConfig(db);
   if (!config) return { ok: false, error: 'not_configured' };
   const topic = resolveGroupTopic(config, topicKey);
   if (!topic) return { ok: false, error: 'unknown_topic' };
 
-  const text = truncateTelegramText(buildEmployeeNotifyText({ message, ticketId }));
+  const text = truncateTelegramText(buildEmployeeNotifyText({ message, ticketId, client }));
   if (!text) return { ok: false, error: 'empty_message' };
 
   const send =
@@ -70,4 +70,5 @@ module.exports = {
   loadAgentGroupConfig,
   listAgentGroupTopics,
   notifyGroupTopic,
+  truncateTelegramText,
 };

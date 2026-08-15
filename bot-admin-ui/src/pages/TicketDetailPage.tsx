@@ -28,6 +28,7 @@ import {
 } from "../api/tickets";
 import ChatCompose from "../components/ChatCompose";
 import ChatHistorySearch from "../components/ChatHistorySearch";
+import ChatImagePreview from "../components/ChatImagePreview";
 import EntityAvatar from "../components/EntityAvatar";
 import LoadingState from "../components/LoadingState";
 import Modal from "../components/Modal";
@@ -218,14 +219,7 @@ function ProbeMedia({ url, name }: { url: string; name: string }) {
   }
   return (
     <div className="ticket-chat__media ticket-chat__media--probe">
-      <img
-        className="ticket-chat__image ticket-chat__media-probe"
-        src={url}
-        alt={name}
-        loading="lazy"
-        crossOrigin="use-credentials"
-        onError={() => setMode("video")}
-      />
+      <ChatImagePreview url={url} name={name} imgClassName="ticket-chat__media-probe" onError={() => setMode("video")} />
     </div>
   );
 }
@@ -237,11 +231,7 @@ function ChatFileAttachment({ ticketId, file }: { ticketId: number; file: ChatFi
   const url = ticketFileUrl(ticketId, Number(id));
 
   if (isChatImage(file)) {
-    return (
-      <a className="ticket-chat__image-link" href={url} target="_blank" rel="noopener noreferrer">
-        <img className="ticket-chat__image" src={url} alt={name} loading="lazy" crossOrigin="use-credentials" />
-      </a>
-    );
+    return <ChatImagePreview url={url} name={name} />;
   }
   if (isChatAudio(file)) {
     return (

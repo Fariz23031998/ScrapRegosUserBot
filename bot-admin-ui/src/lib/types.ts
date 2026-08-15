@@ -69,6 +69,24 @@ export type AiAgentTool = {
   enabled: boolean;
 };
 
+export type AiToolSchema = {
+  name: string;
+  title: string;
+  description: string;
+  agents: AiPromptSlug[];
+  parameters?: Record<string, unknown>;
+  requires_ticket: boolean;
+};
+
+export type AiToolTestResult = {
+  ok: boolean;
+  tool?: string;
+  result?: unknown;
+  duration_ms?: number;
+  error?: string;
+  message?: string;
+};
+
 export type AiSettings = {
   enabled: boolean;
   test_mode: boolean;

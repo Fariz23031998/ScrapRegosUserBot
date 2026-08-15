@@ -276,6 +276,7 @@ module.exports = {
   CUSTOMER_ASSIST_PROMPT_SUFFIX,
   buildCustomerAssistSystemPrompt,
   buildCustomerAssistContextContent,
+  createReplyToCustomerTool,
   formatTicketChatSnapshot,
   loadTicketAssistSession,
   runTicketAssistAgent,

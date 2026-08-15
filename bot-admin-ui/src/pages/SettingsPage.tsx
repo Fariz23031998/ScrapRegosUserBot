@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getAiSettings, saveAiSettings } from "../api/ai";
+import { getAiSettings, listAiTools, saveAiSettings } from "../api/ai";
 import { getChannelSettings, saveChannelSettings } from "../api/tickets";
 import EntityCards from "../components/EntityCards";
 import GroupTopicTestModal from "../components/GroupTopicTestModal";
 import LoadingState from "../components/LoadingState";
+import ToolTestModal from "../components/ToolTestModal";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
-import type { AiGroupTopic, AiPromptSlug, AiSettings, ChannelSetting } from "../lib/types";
+import type { AiGroupTopic, AiPromptSlug, AiSettings, AiToolSchema, ChannelSetting } from "../lib/types";
 
 const CUSTOM_MODEL = "__custom__";
 const DEFAULT_AGENT_MODEL = "__default__";
@@ -27,6 +28,14 @@ const AGENT_TITLES: Record<AiPromptSlug, string> = {
   kb: "База знаний",
   ticket_summary: "Сводка обращения",
 };
+
+const TICKET_REQUIRED_TOOLS = new Set([
+  "search_chat_history",
+  "read_chat_image",
+  "transcribe_chat_audio",
+  "assign_responsible",
+  "reply_to_customer",
+]);
 
 function emptyTopic(): AiGroupTopic {
   return { key: "", id: "", name: "", when: "" };
@@ -58,6 +67,7 @@ export default function SettingsPage() {
   const [customAgentModels, setCustomAgentModels] = useState<Partial<Record<AiPromptSlug, string>>>({});
   const [customTranscribe, setCustomTranscribe] = useState("");
   const [groupTestOpen, setGroupTestOpen] = useState(false);
+  const [toolTestName, setToolTestName] = useState<string | null>(null);
 
   function applyLoadedSettings(data: AiSettings) {
     setAiDraft(data);
@@ -90,6 +100,12 @@ export default function SettingsPage() {
       applyLoadedSettings(data);
       return data;
     },
+  });
+
+  const toolsSchemaQuery = useQuery({
+    queryKey: ["ai-tool-schemas"],
+    queryFn: listAiTools,
+    enabled: tab === "tools",
   });
 
   const saveMutation = useMutation({
@@ -158,6 +174,26 @@ export default function SettingsPage() {
     ai && transcribeModels.includes(ai.transcribe_model || "") ? ai.transcribe_model || "" : CUSTOM_MODEL;
   const agentTools = ai?.agent_tools || [];
   const disabledTools = new Set(ai?.disabled_tools || []);
+  const toolSchemasByName = new Map(
+    (toolsSchemaQuery.data?.tools || []).map((tool) => [tool.name, tool] as const),
+  );
+  let toolUnderTest: AiToolSchema | null = null;
+  if (toolTestName) {
+    toolUnderTest = toolSchemasByName.get(toolTestName) || null;
+    if (!toolUnderTest) {
+      const row = agentTools.find((tool) => tool.name === toolTestName);
+      if (row) {
+        toolUnderTest = {
+          name: row.name,
+          title: row.title,
+          description: row.description,
+          agents: row.agents,
+          parameters: { type: "object", properties: {} },
+          requires_ticket: TICKET_REQUIRED_TOOLS.has(row.name),
+        };
+      }
+    }
+  }
   const showAiSave = tab === "ai" || tab === "tools";
 
   function updateMode(channelId: number, value: ChannelSetting["interaction_mode"]) {
@@ -594,9 +630,26 @@ export default function SettingsPage() {
           ) : (
             <div className="settings-tools">
               <div className="settings-tools__header">
-                <p className="muted-copy">
-                  Отключённые инструменты не передаются агентам и недоступны для вызова.
-                </p>
+                <div className="settings-tools__intro">
+                  <p className="muted-copy">
+                    Отключённые инструменты не передаются агентам. Проверка ниже вызывает инструмент напрямую
+                    (в том числе отключённые).
+                  </p>
+                  <p className="settings-tools__sandboxes muted-copy">
+                    Песочницы агентов:{" "}
+                    {hasPermission("ai_customer_test") ? (
+                      <>
+                        <Link to="/customer-agent">Агент поддержки</Link>
+                        {" · "}
+                      </>
+                    ) : null}
+                    {hasPermission("knowledge_read") ? (
+                      <Link to="/knowledge">База знаний</Link>
+                    ) : (
+                      <span>нет доступа к базе знаний</span>
+                    )}
+                  </p>
+                </div>
                 {canEdit && agentTools.length ? (
                   <div className="settings-tools__actions">
                     <button
@@ -623,22 +676,33 @@ export default function SettingsPage() {
                   {agentTools.map((tool) => {
                     const enabled = !disabledTools.has(tool.name);
                     return (
-                      <label key={tool.name} className="settings-tool-row field-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={enabled}
-                          disabled={!canEdit}
-                          onChange={(event) => setToolEnabled(tool.name, event.target.checked)}
-                        />
-                        <span className="settings-tool-row__body">
-                          <strong>{tool.title}</strong>
-                          <small className="settings-tool-row__name">{tool.name}</small>
-                          <span className="muted-copy">{tool.description}</span>
-                          <span className="settings-tool-row__agents">
-                            {formatAgentLabels(tool.agents)}
+                      <div key={tool.name} className="settings-tool-row">
+                        <label className="settings-tool-row__toggle field-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            disabled={!canEdit}
+                            onChange={(event) => setToolEnabled(tool.name, event.target.checked)}
+                          />
+                          <span className="settings-tool-row__body">
+                            <strong>{tool.title}</strong>
+                            <small className="settings-tool-row__name">{tool.name}</small>
+                            <span className="muted-copy">{tool.description}</span>
+                            <span className="settings-tool-row__agents">
+                              {formatAgentLabels(tool.agents)}
+                            </span>
                           </span>
-                        </span>
-                      </label>
+                        </label>
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm settings-tool-row__test"
+                            onClick={() => setToolTestName(tool.name)}
+                          >
+                            Проверить
+                          </button>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -708,6 +772,11 @@ export default function SettingsPage() {
         open={groupTestOpen}
         topics={savedTopics}
         onClose={() => setGroupTestOpen(false)}
+      />
+      <ToolTestModal
+        open={Boolean(toolTestName)}
+        tool={toolUnderTest}
+        onClose={() => setToolTestName(null)}
       />
     </>
   );

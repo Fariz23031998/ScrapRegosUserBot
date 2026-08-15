@@ -7,6 +7,7 @@ export type ModalProps = {
   children: ReactNode;
   size?: "default" | "wide" | "confirm" | "sheet" | "workspace";
   className?: string;
+  closeOnOverlayClick?: boolean;
 };
 
 const openModalStack: Array<() => void> = [];
@@ -18,6 +19,7 @@ export default function Modal({
   children,
   size = "default",
   className = "",
+  closeOnOverlayClick = false,
 }: ModalProps) {
   useEffect(() => {
     if (!open) return;
@@ -47,6 +49,13 @@ export default function Modal({
       className={`modal-overlay${sheet ? " modal-overlay--sheet" : ""}${
         workspace ? " modal-overlay--workspace" : ""
       }`}
+      onClick={
+        closeOnOverlayClick
+          ? (event) => {
+              if (event.target === event.currentTarget) onClose();
+            }
+          : undefined
+      }
     >
       <div
         className={`modal modal--${size}${className ? ` ${className}` : ""}`}

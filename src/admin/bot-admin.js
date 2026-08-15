@@ -133,6 +133,7 @@ const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
 const { loadAiSettings, saveAiSettings, serializeAiSettings } = require('../ai/settings');
 const { notifyGroupTopic } = require('../ai/tools/notify-group');
+const { listToolSchemas, runAgentToolTest } = require('../ai/tools/test-runner');
 const { runKbAgent } = require('../ai/kb-agent');
 const { previewCustomerAgentPrompt } = require('../ai/customer-agent');
 const { loadCustomerTestSession, runCustomerTestAgent } = require('../ai/customer-test-agent');
@@ -1811,6 +1812,72 @@ function createBotAdminRouter(db) {
     } catch (error) {
       console.error('Test AI group topic error:', error);
       return res.status(500).json({ message: 'Не удалось отправить тестовое сообщение.' });
+    }
+  });
+
+  router.get('/api/settings/ai/tools', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ tools: listToolSchemas({ db }) });
+    } catch (error) {
+      console.error('List AI tools error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить инструменты.' });
+    }
+  });
+
+  router.post('/api/settings/ai/tools/test', requireRight(db, 'settings_edit'), express.json(), async (req, res) => {
+    const toolName = String(req.body?.tool_name || req.body?.toolName || '').trim();
+    const ticketId = req.body?.ticket_id ?? req.body?.ticketId ?? null;
+    let args = req.body?.arguments ?? req.body?.args ?? {};
+    if (typeof args === 'string') {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        return res.status(400).json({ ok: false, error: 'invalid_arguments', message: 'Аргументы должны быть JSON-объектом.' });
+      }
+    }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      return res.status(400).json({ ok: false, error: 'invalid_arguments', message: 'Аргументы должны быть JSON-объектом.' });
+    }
+
+    try {
+      const result = await runAgentToolTest({
+        db,
+        toolName,
+        args,
+        ticketId,
+        deps: {
+          findTicketById,
+          getChatFilesByIds,
+        },
+      });
+      if (!result.ok) {
+        const status =
+          result.error === 'unknown_tool' ||
+          result.error === 'ticket_required' ||
+          result.error === 'invalid_arguments'
+            ? 400
+            : result.error === 'ticket_not_found'
+              ? 404
+              : result.error === 'execute_failed'
+                ? 500
+                : 400;
+        return res.status(status).json(result);
+      }
+      auditAdminChange(db, req, {
+        entityType: 'ai_tool',
+        entityId: toolName,
+        action: 'test',
+        summary: `Тест инструмента ${toolName}`,
+        details: buildAuditDetails({
+          tool_name: toolName,
+          ticket_id: ticketId,
+          duration_ms: result.duration_ms,
+        }),
+      });
+      return res.json(result);
+    } catch (error) {
+      console.error('Test AI tool error:', error);
+      return res.status(500).json({ ok: false, error: 'execute_failed', message: 'Не удалось выполнить инструмент.' });
     }
   });
 
