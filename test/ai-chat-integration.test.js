@@ -578,6 +578,15 @@ describe('customer message gate', () => {
       }).reason,
       'closed'
     );
+    assert.equal(
+      evaluateCustomerMessageGate({
+        settings: { enabled: true },
+        message: clientMessage,
+        ticket: { id: 1, status: 'Open' },
+        aiStopped: true,
+      }).reason,
+      'stopped'
+    );
   });
 
   it('in test mode only allows employee phone numbers', () => {

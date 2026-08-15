@@ -63,6 +63,7 @@ const {
   getTicketRecordingsByIds,
   upsertTicketRecording,
 } = require('../db/ticket-recordings');
+const { setTicketAiStopped, isTicketAiStopped } = require('../db/ticket-ai-state');
 const {
   getServicePricesCatalog,
   replaceServicePricesCatalog,
@@ -2419,7 +2420,8 @@ function createBotAdminRouter(db) {
           recordingUrl: recordingUrl.href,
         });
       }
-      return res.json({ ticket });
+      const [enriched] = enrichTicketsWithLocalData(db, [ticket]);
+      return res.json({ ticket: enriched || ticket });
     } catch (error) {
       if (error instanceof RegosCrmError) {
         return res.status(error.status).json({ message: error.message });
@@ -2428,6 +2430,59 @@ function createBotAdminRouter(db) {
       return res.status(500).json({ message: 'Не удалось загрузить тикет.' });
     }
   });
+
+  router.put(
+    '/api/tickets/:id/ai-state',
+    requireRight(db, 'tickets_edit'),
+    express.json(),
+    async (req, res) => {
+      try {
+        const ticket = await findTicketById(req.params.id);
+        if (!ticket) {
+          return res.status(404).json({ message: 'Тикет не найден.' });
+        }
+        const raw =
+          req.body?.ai_stopped ?? req.body?.aiStopped ?? req.body?.stopped;
+        if (raw == null) {
+          return res.status(400).json({ message: 'Укажите ai_stopped.' });
+        }
+        const stopped =
+          raw === true ||
+          raw === 1 ||
+          raw === '1' ||
+          String(raw).trim().toLowerCase() === 'true';
+        const before = isTicketAiStopped(db, ticket.id);
+        const state = setTicketAiStopped(db, ticket.id, stopped);
+        auditAdminChange(db, req, {
+          entityType: 'ticket_ai_state',
+          entityId: ticket.id,
+          action: stopped ? 'stop' : 'resume',
+          summary: stopped
+            ? `Остановлены автоответы клиенту для тикета #${ticket.id}`
+            : `Возобновлены автоответы клиенту для тикета #${ticket.id}`,
+          details: buildAuditDetails({
+            before: { ai_stopped: before },
+            after: { ai_stopped: Boolean(state?.ai_stopped) },
+          }),
+        });
+        return res.json({
+          ok: true,
+          ticket_id: ticket.id,
+          ai_stopped: Boolean(state?.ai_stopped),
+          updated_at: state?.updated_at || null,
+        });
+      } catch (error) {
+        if (error?.code === 'INVALID_TICKET_ID') {
+          return res.status(400).json({ message: 'Некорректный ID тикета.' });
+        }
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        console.error('Update ticket AI state error:', error);
+        return res.status(500).json({ message: 'Не удалось обновить состояние ИИ тикета.' });
+      }
+    }
+  );
 
   router.get('/api/tickets/:id/ai-prompt', requireRight(db, 'tickets_ai_prompt'), async (req, res) => {
     try {

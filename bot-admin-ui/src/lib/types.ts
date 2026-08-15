@@ -397,6 +397,7 @@ export type TicketLocalData = {
     url?: string | null;
     duration_seconds?: number | null;
   };
+  ai_stopped?: boolean;
 };
 
 export type TicketField = {

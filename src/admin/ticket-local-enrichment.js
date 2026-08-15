@@ -2,6 +2,7 @@ const { getAllUnpaidOrders } = require('../db/partners-db');
 const { getTechnicalSupportStatusByPhone } = require('../db/technical-support');
 const { listLinksByClient } = require('../db/client-firm-links');
 const { getTicketRecordingsByIds } = require('../db/ticket-recordings');
+const { getTicketAiStoppedByIds } = require('../db/ticket-ai-state');
 const { phonesMatch } = require('../bot/search-user');
 const {
   getTicketRecordingUrl,
@@ -133,6 +134,10 @@ function enrichTicketsWithLocalData(db, tickets) {
     db,
     rows.map((ticket) => ticket?.id)
   );
+  const aiStoppedById = getTicketAiStoppedByIds(
+    db,
+    rows.map((ticket) => ticket?.id)
+  );
 
   function tsForPhone(phone) {
     if (!phone) return { status: 'none', ends_at: null, starts_at: null };
@@ -168,6 +173,8 @@ function enrichTicketsWithLocalData(db, tickets) {
     const ticketId = Number(ticket?.id);
     const recordingRow =
       Number.isInteger(ticketId) && ticketId > 0 ? recordingsById.get(ticketId) : null;
+    const aiStopped =
+      Number.isInteger(ticketId) && ticketId > 0 ? Boolean(aiStoppedById.get(ticketId)) : false;
 
     return {
       ...ticket,
@@ -176,6 +183,7 @@ function enrichTicketsWithLocalData(db, tickets) {
         technical_support: technicalSupport,
         firms,
         recording: mapLocalRecording(recordingRow, ticket),
+        ai_stopped: aiStopped,
       },
     };
   });

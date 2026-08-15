@@ -3047,6 +3047,14 @@ body.is-column-resizing * {
   align-self: stretch;
   padding: 0;
 }
+.ticket-chat__ai-stopped {
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: 0.85rem;
+}
 
 .ticket-chat__compose--drop,
 .ticket-chat__messages--drop {

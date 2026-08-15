@@ -31,6 +31,16 @@ export function getTicket(id: number) {
   return apiFetch<{ ticket: TicketDetail }>(`/bot-admin/api/tickets/${id}`);
 }
 
+export function setTicketAiStopped(id: number, aiStopped: boolean) {
+  return apiFetch<{ ok: boolean; ticket_id: number; ai_stopped: boolean; updated_at?: string | null }>(
+    `/bot-admin/api/tickets/${id}/ai-state`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ ai_stopped: aiStopped }),
+    },
+  );
+}
+
 export function getTicketAiPrompt(id: number, params?: { message_id?: number | string }) {
   const search = new URLSearchParams();
   if (params?.message_id != null && String(params.message_id).trim()) {

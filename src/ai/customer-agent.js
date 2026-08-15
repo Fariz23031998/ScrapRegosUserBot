@@ -140,8 +140,10 @@ function resolveCustomerTrigger(messages, messageId, payload) {
   return trigger;
 }
 
-function evaluateCustomerMessageGate({ settings, message, ticket, isEmployeePhone = false } = {}) {
+function evaluateCustomerMessageGate({ settings, message, ticket, isEmployeePhone = false, aiStopped = false } = {}) {
   if (!settings?.enabled) return { handle: false, reason: 'disabled' };
+  // Per-ticket stop: blocks automatic customer replies only (not employee assist).
+  if (aiStopped) return { handle: false, reason: 'stopped' };
   if (String(message?.message_type || 'Regular') !== 'Regular') {
     return { handle: false, reason: 'not-regular' };
   }
@@ -160,11 +162,13 @@ function evaluateCustomerMessageGate({ settings, message, ticket, isEmployeePhon
 }
 
 function evaluateCustomerMessageGateWithDb(db, { settings, message, ticket } = {}) {
+  const { isTicketAiStopped } = require('../db/ticket-ai-state');
   return evaluateCustomerMessageGate({
     settings,
     message,
     ticket,
     isEmployeePhone: isEmployeeClientPhone(db, ticket?.client?.phone),
+    aiStopped: isTicketAiStopped(db, ticket?.id),
   });
 }
 

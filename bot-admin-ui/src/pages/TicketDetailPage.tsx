@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Bot, FileText, MessageSquare, Paperclip } from "lucide-react";
+import { ArrowLeft, Bot, BotOff, FileText, MessageSquare, Paperclip } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -22,6 +22,7 @@ import {
   saveTicketSummary,
   searchFirms,
   sendTicketMessage,
+  setTicketAiStopped,
   ticketFileUrl,
   ticketRecordingUrl,
   updateTicket,
@@ -384,6 +385,7 @@ function ChatMessageItem({
 
 const AI_GATE_LABELS: Record<string, string> = {
   disabled: "ИИ выключен",
+  stopped: "автоответы клиенту остановлены",
   "not-regular": "не обычное сообщение",
   bot: "сообщение бота",
   "not-client": "не клиент",
@@ -1315,6 +1317,39 @@ export default function TicketDetailPage() {
   const canViewAiPrompt = hasPermission("tickets_ai_prompt");
   const canShowEdit =
     canEditTickets && !(ticket && String(ticket.status || "") === "Closed" && !canEditClosedTickets);
+  const aiStopped = Boolean(ticket?.local?.ai_stopped);
+
+  const stopAiMutation = useMutation({
+    mutationFn: (stopped: boolean) => setTicketAiStopped(ticketId, stopped),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["ticket", ticketId], (prev: { ticket?: typeof ticket } | undefined) => {
+        if (!prev?.ticket) return prev;
+        return {
+          ...prev,
+          ticket: {
+            ...prev.ticket,
+            local: {
+              ...(prev.ticket.local || {}),
+              ai_stopped: Boolean(data.ai_stopped),
+            },
+          },
+        };
+      });
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      void queryClient.invalidateQueries({ queryKey: ["ticket-ai-prompt", ticketId] });
+      setSuccess(
+        data.ai_stopped
+          ? "Автоответы клиенту отключены. Ассистент сотрудника по-прежнему доступен."
+          : "Автоответы клиенту снова включены для этого тикета.",
+      );
+      setError("");
+    },
+    onError: (err: Error) => {
+      setError(err.message || "Не удалось изменить состояние ИИ.");
+      setSuccess("");
+    },
+  });
 
   const clearPendingFiles = useCallback(() => {
     setPendingFiles((prev) => {
@@ -1866,6 +1901,11 @@ export default function TicketDetailPage() {
               )}
               {typingLabel ? <p className="ticket-chat__typing">{typingLabel}</p> : null}
             </div>
+            {aiStopped ? (
+              <p className="ticket-chat__ai-stopped" role="status">
+                Автоответы клиенту отключены. Ассистент сотрудника (кнопка бота) работает как обычно.
+              </p>
+            ) : null}
 
             {loadingOlder ? (
               <div className="ticket-chat__load-older" aria-hidden="true">
@@ -1913,6 +1953,24 @@ export default function TicketDetailPage() {
               }}
               extraActions={
                 <>
+                  {canEditTickets ? (
+                    <button
+                      type="button"
+                      className={`btn-icon ticket-chat__action-btn${
+                        aiStopped ? " btn-secondary" : " btn-danger"
+                      }`}
+                      aria-label={aiStopped ? "Включить автоответы клиенту" : "Остановить автоответы клиенту"}
+                      title={
+                        aiStopped
+                          ? "Включить автоответы клиенту (ассистент сотрудника не затрагивается)"
+                          : "Остановить автоответы клиенту (ассистент сотрудника не затрагивается)"
+                      }
+                      disabled={stopAiMutation.isPending}
+                      onClick={() => stopAiMutation.mutate(!aiStopped)}
+                    >
+                      <BotOff size={18} aria-hidden="true" />
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="btn-secondary btn-icon ticket-chat__action-btn"
