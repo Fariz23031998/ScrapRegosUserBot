@@ -1,6 +1,6 @@
 import { apiUrl } from "./api-url";
 import type { Ticket, TicketFirmLink, TicketLocalData } from "./types";
-import { formatDateObject } from "./ui-preferences";
+import { formatDateObject, loadTicketPeriodDays, normalizeTicketPeriodDays } from "./ui-preferences";
 
 export const STATUS_LABELS: Record<string, string> = {
   Open: "Открыт",
@@ -96,8 +96,14 @@ export function toDatetimeLocalValue(date: Date): string {
 }
 
 export function getTodayPeriodDefaults(): { from: string; to: string } {
+  return getTicketPeriodDefaults(1);
+}
+
+/** Inclusive calendar-day range ending today, always 00:00–23:59 local time. */
+export function getTicketPeriodDefaults(days?: number): { from: string; to: string } {
+  const periodDays = normalizeTicketPeriodDays(days ?? loadTicketPeriodDays());
   const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (periodDays - 1), 0, 0, 0);
   const to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 0);
   return { from: toDatetimeLocalValue(from), to: toDatetimeLocalValue(to) };
 }

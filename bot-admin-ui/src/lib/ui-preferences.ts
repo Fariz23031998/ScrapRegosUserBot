@@ -4,6 +4,11 @@ export type DateTimeFormatId = "ru-short" | "ru-long" | "iso" | "us";
 
 export const THEME_STORAGE_KEY = "bot_admin_theme";
 export const DATETIME_FORMAT_STORAGE_KEY = "bot_admin_datetime_format";
+export const TICKET_PERIOD_DAYS_STORAGE_KEY = "bot_admin_ticket_period_days";
+
+export const MIN_TICKET_PERIOD_DAYS = 1;
+export const MAX_TICKET_PERIOD_DAYS = 30;
+export const DEFAULT_TICKET_PERIOD_DAYS = 1;
 
 export const DATETIME_FORMAT_OPTIONS: Array<{ id: DateTimeFormatId; label: string; example: string }> = [
   { id: "ru-short", label: "ДД.ММ.ГГГГ ЧЧ:ММ", example: "12.08.2026 20:15" },
@@ -43,6 +48,31 @@ export function loadDateTimeFormat(): DateTimeFormatId {
 export function saveDateTimeFormat(format: DateTimeFormatId): void {
   try {
     localStorage.setItem(DATETIME_FORMAT_STORAGE_KEY, format);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function normalizeTicketPeriodDays(value: unknown): number {
+  const days = Math.round(Number(value));
+  if (!Number.isFinite(days)) return DEFAULT_TICKET_PERIOD_DAYS;
+  return Math.min(MAX_TICKET_PERIOD_DAYS, Math.max(MIN_TICKET_PERIOD_DAYS, days));
+}
+
+export function loadTicketPeriodDays(): number {
+  try {
+    const raw = localStorage.getItem(TICKET_PERIOD_DAYS_STORAGE_KEY);
+    if (raw == null || raw === "") return DEFAULT_TICKET_PERIOD_DAYS;
+    return normalizeTicketPeriodDays(raw);
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_TICKET_PERIOD_DAYS;
+}
+
+export function saveTicketPeriodDays(days: number): void {
+  try {
+    localStorage.setItem(TICKET_PERIOD_DAYS_STORAGE_KEY, String(normalizeTicketPeriodDays(days)));
   } catch {
     /* ignore */
   }

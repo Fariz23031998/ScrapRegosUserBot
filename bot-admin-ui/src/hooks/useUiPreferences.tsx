@@ -4,16 +4,21 @@ import {
   type ThemePreference,
   loadDateTimeFormat,
   loadThemePreference,
+  loadTicketPeriodDays,
+  normalizeTicketPeriodDays,
   saveDateTimeFormat,
   saveThemePreference,
+  saveTicketPeriodDays,
 } from "../lib/ui-preferences";
 import { applyTheme } from "../lib/utils";
 
 type UiPreferencesContextValue = {
   theme: ThemePreference;
   dateTimeFormat: DateTimeFormatId;
+  ticketPeriodDays: number;
   setTheme: (theme: ThemePreference) => void;
   setDateTimeFormat: (format: DateTimeFormatId) => void;
+  setTicketPeriodDays: (days: number) => void;
 };
 
 const UiPreferencesContext = createContext<UiPreferencesContextValue | null>(null);
@@ -21,6 +26,7 @@ const UiPreferencesContext = createContext<UiPreferencesContextValue | null>(nul
 export function UiPreferencesProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemePreference>(loadThemePreference);
   const [dateTimeFormat, setDateTimeFormatState] = useState<DateTimeFormatId>(loadDateTimeFormat);
+  const [ticketPeriodDays, setTicketPeriodDaysState] = useState<number>(loadTicketPeriodDays);
 
   useEffect(() => {
     applyTheme(theme);
@@ -30,6 +36,10 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     saveDateTimeFormat(dateTimeFormat);
   }, [dateTimeFormat]);
+
+  useEffect(() => {
+    saveTicketPeriodDays(ticketPeriodDays);
+  }, [ticketPeriodDays]);
 
   useEffect(() => {
     if (theme !== "system") return;
@@ -47,9 +57,13 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
     setDateTimeFormatState(next);
   }, []);
 
+  const setTicketPeriodDays = useCallback((next: number) => {
+    setTicketPeriodDaysState(normalizeTicketPeriodDays(next));
+  }, []);
+
   const value = useMemo(
-    () => ({ theme, dateTimeFormat, setTheme, setDateTimeFormat }),
-    [theme, dateTimeFormat, setTheme, setDateTimeFormat],
+    () => ({ theme, dateTimeFormat, ticketPeriodDays, setTheme, setDateTimeFormat, setTicketPeriodDays }),
+    [theme, dateTimeFormat, ticketPeriodDays, setTheme, setDateTimeFormat, setTicketPeriodDays],
   );
 
   return <UiPreferencesContext.Provider value={value}>{children}</UiPreferencesContext.Provider>;

@@ -46,7 +46,7 @@ import {
   formatUnix,
   getCachedRecordingDuration,
   getTicketClientId,
-  getTodayPeriodDefaults,
+  getTicketPeriodDefaults,
   hasLookupPhone,
   hasTicketRecording,
   statusBadgeClass,
@@ -74,15 +74,15 @@ type TicketFilters = {
   duplicateInterval: string;
 };
 
-function defaultFilters(): TicketFilters {
-  const today = getTodayPeriodDefaults();
+function defaultFilters(periodDays?: number): TicketFilters {
+  const period = getTicketPeriodDefaults(periodDays);
   return {
     search: "",
     status: "",
     user: "",
     channel: "",
-    dateFrom: today.from,
-    dateTo: today.to,
+    dateFrom: period.from,
+    dateTo: period.to,
     minDuration: "",
     withoutDuplicates: false,
     duplicateInterval: "10",
@@ -94,15 +94,15 @@ type LoadedFilters = {
   fromStorage: boolean;
 };
 
-function loadFilters(): LoadedFilters {
+function loadFilters(periodDays?: number): LoadedFilters {
   try {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
-    if (!raw) return { filters: defaultFilters(), fromStorage: false };
+    if (!raw) return { filters: defaultFilters(periodDays), fromStorage: false };
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object") {
-      return { filters: defaultFilters(), fromStorage: false };
+      return { filters: defaultFilters(periodDays), fromStorage: false };
     }
-    const base = defaultFilters();
+    const base = defaultFilters(periodDays);
     return {
       fromStorage: true,
       filters: {
@@ -133,7 +133,7 @@ function loadFilters(): LoadedFilters {
       },
     };
   } catch {
-    return { filters: defaultFilters(), fromStorage: false };
+    return { filters: defaultFilters(periodDays), fromStorage: false };
   }
 }
 
@@ -179,8 +179,8 @@ function regosUserLabel(user: { full_name?: string | null; login?: string | null
   return user.full_name || user.login || `Пользователь #${user.id}`;
 }
 
-function filtersHaveAdvancedValues(filters: TicketFilters) {
-  const defaults = defaultFilters();
+function filtersHaveAdvancedValues(filters: TicketFilters, periodDays?: number) {
+  const defaults = defaultFilters(periodDays);
   return (
     Boolean(filters.status) ||
     Boolean(filters.user) ||
@@ -317,9 +317,9 @@ export default function TicketsPage() {
   const stickyHeadRef = useRef<HTMLDivElement>(null);
   useStickyOffsetVar(stickyHeadRef);
   const { hasPermission, actor } = useAuth();
-  const { dateTimeFormat } = useUiPreferences();
+  const { dateTimeFormat, ticketPeriodDays } = useUiPreferences();
   const queryClient = useQueryClient();
-  const [filterBootstrap] = useState(loadFilters);
+  const [filterBootstrap] = useState(() => loadFilters(ticketPeriodDays));
   const [filters, setFilters] = useState(filterBootstrap.filters);
   const [appliedFilters, setAppliedFilters] = useState(filterBootstrap.filters);
   // Only auto-default Ответственный when nothing was persisted yet (matches legacy admin UI).
@@ -633,7 +633,7 @@ export default function TicketsPage() {
 
   const users = usersQuery.data?.users || [];
   const channels = channelsQuery.data?.channels || [];
-  const filtersActive = filtersHaveAdvancedValues(appliedFilters);
+  const filtersActive = filtersHaveAdvancedValues(appliedFilters, ticketPeriodDays);
 
   return (
     <section className="card tickets-page">
@@ -755,7 +755,7 @@ export default function TicketsPage() {
               type="button"
               className="btn-secondary"
               onClick={() => {
-                const next = defaultFilters();
+                const next = defaultFilters(ticketPeriodDays);
                 setFilters((current) => ({ ...next, search: current.search, user: current.user }));
               }}
             >

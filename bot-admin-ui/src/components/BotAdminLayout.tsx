@@ -25,7 +25,11 @@ import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import type { AdminShellContextValue } from "../lib/admin-shell";
 import { AdminShellProvider } from "../lib/admin-shell";
 import { navItemsForPermissions } from "../lib/permissions";
-import { DATETIME_FORMAT_OPTIONS } from "../lib/ui-preferences";
+import {
+  DATETIME_FORMAT_OPTIONS,
+  MAX_TICKET_PERIOD_DAYS,
+  MIN_TICKET_PERIOD_DAYS,
+} from "../lib/ui-preferences";
 import { loadNavVisible, saveNavVisible } from "../lib/utils";
 
 const NAV_ICONS: Record<string, LucideIcon> = {
@@ -51,7 +55,8 @@ function initials(profile: { displayName?: string | null; phone?: string; userna
 
 export default function BotAdminLayout() {
   const { actor, profile, permissions, clearSession, refreshSession } = useAuth();
-  const { theme, dateTimeFormat, setTheme, setDateTimeFormat } = useUiPreferences();
+  const { theme, dateTimeFormat, ticketPeriodDays, setTheme, setDateTimeFormat, setTicketPeriodDays } =
+    useUiPreferences();
   const navigate = useNavigate();
   const location = useLocation();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
@@ -302,6 +307,20 @@ export default function BotAdminLayout() {
                     </label>
                     <p className="account-menu__hint">
                       Пример: {DATETIME_FORMAT_OPTIONS.find((option) => option.id === dateTimeFormat)?.example}
+                    </p>
+                    <label>
+                      Период тикетов по умолчанию (дни)
+                      <input
+                        type="number"
+                        min={MIN_TICKET_PERIOD_DAYS}
+                        max={MAX_TICKET_PERIOD_DAYS}
+                        step={1}
+                        value={ticketPeriodDays}
+                        onChange={(event) => setTicketPeriodDays(Number(event.target.value))}
+                      />
+                    </label>
+                    <p className="account-menu__hint">
+                      От 1 до 30. Например, 7 — последние 7 дней (00:00–23:59).
                     </p>
                   </section>
 
