@@ -320,7 +320,7 @@ describe('knowledge MCP HTTP', () => {
 
   it('rejects create when readonly', async () => {
     process.env.MCP_KNOWLEDGE_READONLY = '1';
-    const beforeCount = listKnowledgeArticles(db, { limit: 200 }).length;
+    const beforeCount = listKnowledgeArticles(db, { limit: 200 }).total;
     const create = await callMcp(
       mcpRpc(1, 'tools/call', {
         name: 'knowledge_create',
@@ -335,7 +335,7 @@ describe('knowledge MCP HTTP', () => {
     const payload = parseToolPayload(create);
     assert.equal(payload.isError, true);
     assert.match(String(payload.data.error || ''), /read-only/i);
-    assert.equal(listKnowledgeArticles(db, { limit: 200 }).length, beforeCount);
+    assert.equal(listKnowledgeArticles(db, { limit: 200 }).total, beforeCount);
   });
 
   it('accepts X-MCP-Token and ping', async () => {

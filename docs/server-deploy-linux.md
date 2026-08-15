@@ -22,31 +22,36 @@ Routes proxied to port `3000`:
 - `/api/orders/` — payment API (including Payme status check)
 - `/api/prices` — public service prices JSON
 - `/prices` — public prices page (bot `/prices`)
-- `/click/`, `/pay`, `/bot-admin/` (React SPA + APIs), `/health`
+- `/click/`, `/pay`, `/health`
+- `/bot-admin/api/`, `/bot-admin/auth/`, `/bot-admin/rights-meta`, `/bot-admin/mcp` — admin APIs only
 - `/css/`, `/js/`, `/images/`, `/brand-logo.png` — public static assets
 - order UUID pages (`/{uuid}`)
 - `/sms-gateway/` — WebSocket SMS gateway for Android app (requires upgrade headers)
 
+**Bot admin UI** (`/bot-admin/` SPA + `/bot-admin/assets/`) is served by nginx directly from `/srv/ScrapRegosUserBot/bot-admin-ui/dist/` — not by Node. Deep links fall back to `index.html`.
+
 Existing webhook routes on the same host are unchanged (`/webhook`, `/api/v1/telegram/webhook/`).
 
-Before (re)starting the Node server after a UI change, build the admin SPA:
+### Deploy / update the React admin UI
+
+Build the SPA, then reload nginx (no Node restart needed for UI-only changes):
 
 ```bash
 cd /srv/ScrapRegosUserBot
 npm ci --prefix bot-admin-ui
 npm run bot-admin-ui:build
-sudo systemctl restart scrapregos-server
-```
-
-The server serves `bot-admin-ui/dist` at `/bot-admin/` automatically when that build exists. Emergency rollback: set `BOT_ADMIN_USE_LEGACY_UI=1` in `.env` (legacy `public/bot-admin/` HTML).
-
-Copy nginx config to the server and reload:
-
-```bash
 sudo cp /srv/ScrapRegosUserBot/deploy/aserver.tech /etc/nginx/sites-available/aserver.tech
 sudo ln -sf /etc/nginx/sites-available/aserver.tech /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+Restart `scrapregos-server` only when backend/API code or `.env` changes:
+
+```bash
+sudo systemctl restart scrapregos-server
+```
+
+**Emergency rollback:** restore a full `/bot-admin/` `proxy_pass` to `127.0.0.1:3000` in nginx (so Express serves the UI again), reload nginx, and optionally set `BOT_ADMIN_USE_LEGACY_UI=1` in `.env` for legacy `public/bot-admin/` HTML.
 
 Also update `no-thing.uz` if it still had payment routes (Partner Bot only):
 
@@ -128,7 +133,7 @@ Set in `.env`:
 - `CLICK_SERVER_PORT`
 - `PUBLIC_BASE_URL=https://aserver.tech` (payment page links like `https://aserver.tech/{order_id}`)
 - `PAYME_MERCHANT_ID`, `PAYME_SECRET_KEY`, `PAYME_TEST_KEY`, `PAYME_TEST_MODE`, `PAYME_RETURN_URL` (optional Payme)
-- `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (web admin at `/bot-admin/` — React SPA from `bot-admin-ui/dist`)
+- `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (web admin at `/bot-admin/` — React SPA served by nginx from `bot-admin-ui/dist`)
 - `REDIS_URL`, `SMS_GATEWAY_TOKEN` (SMS gateway; see [SMS gateway](sms-gateway.md)). Same `REDIS_URL` also backs short-TTL live portal search cache (`PORTAL_CACHE_*`; see `.env.example`).
 
 Both `npm run server` and `npm run bot` need `REDIS_URL` in `.env`.
@@ -149,11 +154,11 @@ Optional portal cache knobs (defaults apply when unset): `PORTAL_CACHE_ENABLED=0
 
 ## 6) Bot admin and employees
 
-Build the React admin UI if `bot-admin-ui/dist` is missing, then open `https://aserver.tech/bot-admin/` and sign in with `BOT_ADMIN_LOGIN` / `BOT_ADMIN_PASSWORD`.
+Build the React admin UI if `bot-admin-ui/dist` is missing, reload nginx, then open `https://aserver.tech/bot-admin/` and sign in with `BOT_ADMIN_LOGIN` / `BOT_ADMIN_PASSWORD`.
 
 ```bash
 npm run bot-admin-ui:build
-sudo systemctl restart scrapregos-server
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 1. Add employee phone and rights in the admin panel.

@@ -2009,7 +2009,20 @@ function createBotAdminRouter(db) {
   router.get('/api/knowledge/articles', requireRight(db, 'knowledge_read'), (req, res) => {
     try {
       const query = String(req.query.q || '').trim();
-      return res.json({ articles: listKnowledgeArticles(db, { query }) });
+      let { page, limit, offset } = parsePaginationQuery(req);
+      let result = listKnowledgeArticles(db, { query, offset, limit });
+      const totalPages = Math.max(1, Math.ceil(result.total / limit) || 1);
+      if (page > totalPages) {
+        page = totalPages;
+        offset = (page - 1) * limit;
+        result = listKnowledgeArticles(db, { query, offset, limit });
+      }
+      return res.json({
+        articles: result.articles,
+        total: result.total,
+        page,
+        limit,
+      });
     } catch (error) {
       console.error('List knowledge articles error:', error);
       return res.status(500).json({ message: 'Не удалось загрузить базу знаний.' });

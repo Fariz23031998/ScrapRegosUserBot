@@ -92,9 +92,15 @@ export function deleteAiPrompt(id: number) {
   });
 }
 
-export function listKnowledgeArticles(q?: string) {
-  const search = q ? `?q=${encodeURIComponent(q)}` : "";
-  return apiFetch<{ articles: KnowledgeArticle[] }>(`/bot-admin/api/knowledge/articles${search}`);
+export function listKnowledgeArticles(params: { page: number; limit: number; q?: string }) {
+  const search = new URLSearchParams({
+    page: String(params.page),
+    limit: String(params.limit),
+  });
+  if (params.q) search.set("q", params.q);
+  return apiFetch<{ articles: KnowledgeArticle[]; total: number; page: number; limit: number }>(
+    `/bot-admin/api/knowledge/articles?${search}`,
+  );
 }
 
 export function createKnowledgeArticle(payload: { title: string; body: string; tags?: string }) {

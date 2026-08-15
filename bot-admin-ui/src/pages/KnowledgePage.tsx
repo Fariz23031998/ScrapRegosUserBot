@@ -13,12 +13,14 @@ import {
 } from "../api/ai";
 import AgentChatFiles from "../components/AgentChatFiles";
 import ChatCompose, { type ChatComposeHandle } from "../components/ChatCompose";
+import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import LoadingState from "../components/LoadingState";
 import Modal from "../components/Modal";
 import SearchField from "../components/SearchField";
 import { useAuth } from "../hooks/useAuth";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { filesFromDataTransfer, isFileDrag } from "../lib/ticket-chat";
 import type { KnowledgeArticle } from "../lib/types";
 
@@ -42,9 +44,12 @@ export default function KnowledgePage() {
   const listRef = useRef<HTMLDivElement>(null);
   const composeRef = useRef<ChatComposeHandle>(null);
 
-  const articlesQuery = useQuery({
+  const articlesQuery = usePagedInfiniteQuery({
     queryKey: ["knowledge-articles", query],
-    queryFn: () => listKnowledgeArticles(query),
+    queryFn: (page, pageSize) =>
+      listKnowledgeArticles({ page, limit: pageSize, q: query || undefined }),
+    getItems: (data) => data.articles || [],
+    getItemId: (article) => article.id,
   });
 
   const sessionQuery = useQuery({
@@ -107,6 +112,8 @@ export default function KnowledgePage() {
     },
   });
 
+  const articles = articlesQuery.items;
+  const total = articlesQuery.total;
   const messages = sessionQuery.data?.messages || [];
   useEffect(() => {
     const node = listRef.current;
@@ -235,55 +242,64 @@ export default function KnowledgePage() {
           placeholder="Найти в базе знаний"
           className="knowledge-search"
         />
-        {articlesQuery.isLoading ? (
-          <LoadingState />
-        ) : !(articlesQuery.data?.articles || []).length ? (
-          <p className="empty-state">Статей нет.</p>
-        ) : (
-          <ul className="knowledge-list">
-            {(articlesQuery.data?.articles || []).map((article) => {
-              const locked = Boolean(article.locked);
-              const showActions = (canEdit && !locked) || (canLock && !locked) || (canUnlock && locked);
-              return (
-                <li key={article.id} className="knowledge-list__item">
-                  <div className="knowledge-list__title">
-                    <strong>{article.title}</strong>
-                    {locked ? <span className="badge badge--warn">Заблокирована</span> : null}
-                  </div>
-                  {article.tags ? <small>{article.tags}</small> : null}
-                  <p>
-                    {article.body.slice(0, 180)}
-                    {article.body.length > 180 ? "…" : ""}
-                  </p>
-                  {showActions ? (
-                    <div className="cell-actions">
-                      {canEdit && !locked ? (
-                        <button type="button" className="btn-secondary btn-sm" onClick={() => setEditor(article)}>
-                          Изменить
-                        </button>
-                      ) : null}
-                      {canLock && !locked ? (
-                        <button type="button" className="btn-secondary btn-sm" onClick={() => void handleLock(article)}>
-                          Заблокировать
-                        </button>
-                      ) : null}
-                      {canUnlock && locked ? (
-                        <button type="button" className="btn-secondary btn-sm" onClick={() => void handleUnlock(article)}>
-                          Разблокировать
-                        </button>
-                      ) : null}
-                      {canEdit && !locked ? (
-                        <button type="button" className="btn-danger btn-sm" onClick={() => void handleDelete(article)}>
-                          Удалить
-                        </button>
-                      ) : null}
+        <div className="knowledge-list-scroll">
+          {articlesQuery.isPending ? (
+            <LoadingState />
+          ) : !articles.length ? (
+            <p className="empty-state">{query ? "Ничего не найдено." : "Статей нет."}</p>
+          ) : (
+            <ul className="knowledge-list">
+              {articles.map((article) => {
+                const locked = Boolean(article.locked);
+                const showActions = (canEdit && !locked) || (canLock && !locked) || (canUnlock && locked);
+                return (
+                  <li key={article.id} className="knowledge-list__item">
+                    <div className="knowledge-list__title">
+                      <strong>{article.title}</strong>
+                      {locked ? <span className="badge badge--warn">Заблокирована</span> : null}
                     </div>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                    {article.tags ? <small>{article.tags}</small> : null}
+                    <p>
+                      {article.body.slice(0, 180)}
+                      {article.body.length > 180 ? "…" : ""}
+                    </p>
+                    {showActions ? (
+                      <div className="cell-actions">
+                        {canEdit && !locked ? (
+                          <button type="button" className="btn-secondary btn-sm" onClick={() => setEditor(article)}>
+                            Изменить
+                          </button>
+                        ) : null}
+                        {canLock && !locked ? (
+                          <button type="button" className="btn-secondary btn-sm" onClick={() => void handleLock(article)}>
+                            Заблокировать
+                          </button>
+                        ) : null}
+                        {canUnlock && locked ? (
+                          <button type="button" className="btn-secondary btn-sm" onClick={() => void handleUnlock(article)}>
+                            Разблокировать
+                          </button>
+                        ) : null}
+                        {canEdit && !locked ? (
+                          <button type="button" className="btn-danger btn-sm" onClick={() => void handleDelete(article)}>
+                            Удалить
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <InfiniteScrollSentinel
+            loaded={articles.length}
+            total={total}
+            hasNextPage={Boolean(articlesQuery.hasNextPage)}
+            isFetchingNextPage={articlesQuery.isFetchingNextPage}
+            fetchNextPage={articlesQuery.fetchNextPage}
+          />
+        </div>
       </section>
 
       <section

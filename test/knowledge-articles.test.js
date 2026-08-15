@@ -18,6 +18,7 @@ const {
   getKnowledgeArticle,
   getOrCreateKbSession,
   listKbSessionMessages,
+  listKnowledgeArticles,
   setKnowledgeArticleLocked,
   updateKnowledgeArticle,
 } = require('../src/db/knowledge-articles');
@@ -315,5 +316,41 @@ describe('knowledge article lock API', () => {
     assert.equal(body.session_id, session.id);
     assert.deepEqual(body.messages, []);
     assert.equal(listKbSessionMessages(db, session.id).length, 0);
+  });
+
+  it('paginates knowledge articles for the admin list', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      createKnowledgeArticle(db, {
+        title: `Paged article ${i}`,
+        body: `Body for article ${i}`,
+        tags: 'paged',
+      });
+    }
+    const reader = await loginEmployee({});
+    const page1 = await request(server, 'GET', '/bot-admin/api/knowledge/articles?page=1&limit=10', {
+      headers: { Cookie: reader.cookie },
+    });
+    assert.equal(page1.statusCode, 200);
+    const first = JSON.parse(page1.body);
+    assert.equal(first.page, 1);
+    assert.equal(first.limit, 10);
+    assert.ok(first.total >= 5);
+    assert.ok(first.articles.length <= 10);
+    assert.equal(first.articles.length, Math.min(10, first.total));
+
+    const dbPage = listKnowledgeArticles(db, { limit: 2, offset: 2 });
+    assert.equal(dbPage.articles.length, 2);
+    assert.ok(dbPage.total >= 5);
+
+    const searched = await request(
+      server,
+      'GET',
+      '/bot-admin/api/knowledge/articles?page=1&limit=10&q=Paged%20article%201',
+      { headers: { Cookie: reader.cookie } }
+    );
+    assert.equal(searched.statusCode, 200);
+    const searchBody = JSON.parse(searched.body);
+    assert.ok(searchBody.articles.some((article) => article.title === 'Paged article 1'));
+    assert.ok(searchBody.total >= 1);
   });
 });

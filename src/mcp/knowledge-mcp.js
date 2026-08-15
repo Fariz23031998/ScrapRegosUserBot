@@ -179,7 +179,7 @@ function callTool(db, name, args = {}) {
 
   switch (name) {
     case 'knowledge_search': {
-      const articles = listKnowledgeArticles(db, {
+      const { articles } = listKnowledgeArticles(db, {
         query: args.query,
         limit: args.limit,
       });

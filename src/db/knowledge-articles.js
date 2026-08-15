@@ -138,51 +138,70 @@ function assertArticleWritable(article) {
   if (article?.locked) throw new Error('ARTICLE_LOCKED');
 }
 
-function listKnowledgeArticles(db, { query, limit = 100 } = {}) {
+function listKnowledgeArticles(db, { query, limit = 100, offset = 0 } = {}) {
   ensureKnowledgeTables(db);
   const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
+  const safeOffset = Math.max(0, Number(offset) || 0);
   const trimmed = String(query || '').trim();
   if (!trimmed) {
-    return db
+    const total = db.prepare('SELECT COUNT(*) AS count FROM knowledge_articles').get().count;
+    const articles = db
       .prepare(
         `SELECT ${ARTICLE_COLUMNS}
          FROM knowledge_articles
          ORDER BY datetime(updated_at) DESC, id DESC
-         LIMIT ?`
+         LIMIT ? OFFSET ?`
       )
-      .all(safeLimit)
+      .all(safeLimit, safeOffset)
       .map(mapArticle);
+    return { articles, total };
   }
 
   if (tableExists(db, 'knowledge_articles_fts')) {
     try {
-      return db
+      const total = db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM knowledge_articles_fts
+           WHERE knowledge_articles_fts MATCH ?`
+        )
+        .get(trimmed).count;
+      const articles = db
         .prepare(
           `SELECT a.id, a.title, a.body, a.tags, a.locked, a.updated_by, a.created_at, a.updated_at
            FROM knowledge_articles_fts f
            JOIN knowledge_articles a ON a.id = f.rowid
            WHERE knowledge_articles_fts MATCH ?
            ORDER BY rank
-           LIMIT ?`
+           LIMIT ? OFFSET ?`
         )
-        .all(trimmed, safeLimit)
+        .all(trimmed, safeLimit, safeOffset)
         .map(mapArticle);
+      return { articles, total };
     } catch {
       // Invalid FTS query — fall through to LIKE.
     }
   }
 
   const like = `%${trimmed.replace(/%/g, '\\%')}%`;
-  return db
+  const total = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM knowledge_articles
+       WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' OR IFNULL(tags, '') LIKE ? ESCAPE '\\'`
+    )
+    .get(like, like, like).count;
+  const articles = db
     .prepare(
       `SELECT ${ARTICLE_COLUMNS}
        FROM knowledge_articles
        WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' OR IFNULL(tags, '') LIKE ? ESCAPE '\\'
        ORDER BY datetime(updated_at) DESC, id DESC
-       LIMIT ?`
+       LIMIT ? OFFSET ?`
     )
-    .all(like, like, like, safeLimit)
+    .all(like, like, like, safeLimit, safeOffset)
     .map(mapArticle);
+  return { articles, total };
 }
 
 function getKnowledgeArticle(db, id) {

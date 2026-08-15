@@ -20,7 +20,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
         required: ['query'],
       },
       execute: async ({ query }) => {
-        const articles = listKnowledgeArticles(db, { query, limit: 8 });
+        const { articles } = listKnowledgeArticles(db, { query, limit: 8 });
         return {
           articles: articles.map((article) => ({
             id: article.id,

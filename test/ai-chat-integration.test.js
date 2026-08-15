@@ -1928,14 +1928,14 @@ describe('knowledge base', () => {
   it('seeds articles, searches, updates, and deletes', async () => {
     const database = createDb();
     const seeded = listKnowledgeArticles(database);
-    assert.ok(seeded.length >= 2);
+    assert.ok(seeded.articles.length >= 2);
     const created = createKnowledgeArticle(database, {
       title: 'Тестовая статья',
       body: 'Как передать менеджеру по продажам заявку на тариф.',
       tags: 'продажи',
     });
     const found = listKnowledgeArticles(database, { query: 'менеджеру по продажам' });
-    assert.ok(found.some((article) => article.id === created.id));
+    assert.ok(found.articles.some((article) => article.id === created.id));
 
     const tools = createKnowledgeTools({ db: database, write: true });
     const search = tools.find((tool) => tool.name === 'search_knowledge');
