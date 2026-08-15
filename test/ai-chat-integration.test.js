@@ -694,6 +694,90 @@ describe('customer agent handler', () => {
     assert.deepEqual(participants, [{ ticketId: 42, userId: aiAuthorId }]);
   });
 
+  it('closes the ticket only after the reply is posted', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false, model: 'gpt-4o-mini' });
+    const order = [];
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            { id: '9', author_entity_type: 'Client', message_type: 'Regular', text: 'Спасибо, всё понятно' },
+          ],
+        }),
+        addTicketMessage: async () => {
+          order.push('send');
+          return { ok: true, id: '10' };
+        },
+        setTicketStatus: async (ticketId, status) => {
+          order.push(`close:${ticketId}:${status}`);
+          return { ok: true };
+        },
+        runAgent: async ({ tools }) => {
+          const close = tools.find((tool) => tool.name === 'close_ticket');
+          const closeResult = await close.execute();
+          assert.equal(closeResult.ok, true);
+          assert.equal(closeResult.status, 'Closed');
+          assert.deepEqual(order, []);
+          return { content: 'Рад помочь. Обращение закрываю.', steps: 1 };
+        },
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      }),
+    });
+    assert.equal(result.handled, true);
+    assert.equal(result.closed, true);
+    assert.deepEqual(order, ['send', 'close:42:Closed']);
+  });
+
+  it('does not close the ticket when the reply fails to send', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false, model: 'gpt-4o-mini' });
+    let closed = false;
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            { id: '9', author_entity_type: 'Client', message_type: 'Regular', text: 'Спасибо' },
+          ],
+        }),
+        addTicketMessage: async () => {
+          throw new Error('send failed');
+        },
+        setTicketStatus: async () => {
+          closed = true;
+          return { ok: true };
+        },
+        runAgent: async ({ tools }) => {
+          const closeResult = await tools.find((tool) => tool.name === 'close_ticket').execute();
+          assert.equal(closeResult.ok, true);
+          return { content: 'Готово.', steps: 1 };
+        },
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      }),
+    });
+    assert.equal(result.handled, false);
+    assert.equal(result.reason, 'send-failed');
+    assert.equal(closed, false);
+  });
+
   it('passes the stored customer system prompt into runAgent', async () => {
     const database = createDb();
     saveAiSettings(database, { enabled: true, testMode: false, model: 'gpt-4o-mini' });
@@ -1773,6 +1857,42 @@ describe('read_chat_image tool', () => {
   });
 });
 
+describe('close_ticket tool', () => {
+  it('rejects a missing ticket, closes an open ticket, and no-ops when already closed', async () => {
+    const database = createDb();
+    const missing = createCustomerTools({ db: database }).find((tool) => tool.name === 'close_ticket');
+    assert.deepEqual(await missing.execute(), { ok: false, error: 'missing_ticket' });
+
+    let closed = null;
+    const closer = createCustomerTools({
+      db: database,
+      ticket: { id: 42, status: 'Open' },
+      deps: {
+        setTicketStatus: async (ticketId, status) => {
+          closed = { ticketId, status };
+          return { ok: true };
+        },
+      },
+    }).find((tool) => tool.name === 'close_ticket');
+    assert.deepEqual(await closer.execute(), { ok: true, status: 'Closed' });
+    assert.deepEqual(closed, { ticketId: 42, status: 'Closed' });
+
+    closed = 'unchanged';
+    const already = createCustomerTools({
+      db: database,
+      ticket: { id: 42, status: 'Closed' },
+      deps: {
+        setTicketStatus: async () => {
+          closed = 'called';
+          return { ok: true };
+        },
+      },
+    }).find((tool) => tool.name === 'close_ticket');
+    assert.deepEqual(await already.execute(), { ok: true, already_closed: true });
+    assert.equal(closed, 'unchanged');
+  });
+});
+
 describe('transcribe_chat_audio tool', () => {
   it('rejects images and returns transcript text for audio', async () => {
     const database = createDb();
@@ -2345,6 +2465,7 @@ describe('customer test agent', () => {
     saveAiSettings(database, { enabled: false, model: 'gpt-4o-mini' });
     let notified = false;
     let assigned = false;
+    let closed = false;
     const result = await runCustomerTestAgent({
       db: database,
       userId: 1,
@@ -2369,13 +2490,20 @@ describe('customer test agent', () => {
           assigned = true;
           return { ok: true };
         },
+        setTicketStatus: async () => {
+          closed = true;
+          return { ok: true };
+        },
         runAgent: async ({ tools, messages }) => {
           const notify = tools.find((tool) => tool.name === 'notify_employee');
           const assign = tools.find((tool) => tool.name === 'assign_responsible');
+          const close = tools.find((tool) => tool.name === 'close_ticket');
           const notifyResult = await notify.execute({ employee_id: 7, message: 'Нужен менеджер' });
           const assignResult = await assign.execute({ regos_user_id: 31 });
+          const closeResult = await close.execute();
           assert.equal(notifyResult.ok, true);
           assert.equal(assignResult.ok, true);
+          assert.equal(closeResult.ok, true);
           assert.equal(messages.at(-1).content, 'Сколько стоит техподдержка?');
           return {
             content: 'Сейчас посмотрю прайс.',
@@ -2406,6 +2534,7 @@ describe('customer test agent', () => {
 
     assert.equal(notified, false);
     assert.equal(assigned, false);
+    assert.equal(closed, false);
     assert.equal(result.reply, 'Сейчас посмотрю прайс.');
     assert.equal(result.ticket_id, 42);
     assert.equal(result.client_phone, '+998901112233');

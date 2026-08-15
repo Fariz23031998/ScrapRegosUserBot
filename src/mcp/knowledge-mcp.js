@@ -6,6 +6,11 @@ const {
   createKnowledgeArticle,
   updateKnowledgeArticle,
   deleteKnowledgeArticle,
+  formatKnowledgeCategoriesForTools,
+  getKnowledgeCategory,
+  createKnowledgeCategory,
+  updateKnowledgeCategory,
+  deleteKnowledgeCategory,
 } = require('../db/knowledge-articles');
 const { logAdminAudit, buildAuditDetails } = require('../db/admin-audit-logs');
 
@@ -17,8 +22,10 @@ const INVALID_ARTICLE_CODES = new Set([
   'INVALID_ARTICLE_TITLE',
   'INVALID_ARTICLE_BODY',
   'INVALID_ARTICLE_TAGS',
+  'INVALID_ARTICLE_CATEGORY',
   'ARTICLE_LOCKED',
 ]);
+const INVALID_CATEGORY_CODES = new Set(['INVALID_CATEGORY_NAME', 'INVALID_CATEGORY_TAGS']);
 
 function getMcpToken() {
   return String(process.env.MCP_TOKEN || '').trim();
@@ -130,6 +137,10 @@ const WRITE_TOOLS = [
         title: { type: 'string', description: 'Article title (required, max 200).' },
         body: { type: 'string', description: 'Article body (required, max 20000).' },
         tags: { type: 'string', description: 'Comma-separated tags.' },
+        category_id: {
+          type: ['integer', 'number', 'null'],
+          description: 'Optional category id. Omit or null for no category.',
+        },
       },
       required: ['title', 'body'],
     },
@@ -144,6 +155,10 @@ const WRITE_TOOLS = [
         title: { type: 'string' },
         body: { type: 'string' },
         tags: { type: 'string' },
+        category_id: {
+          type: ['integer', 'number', 'null'],
+          description: 'Optional category id. Pass null to clear the category.',
+        },
       },
       required: ['id'],
     },
@@ -159,12 +174,72 @@ const WRITE_TOOLS = [
       required: ['id'],
     },
   },
+  {
+    name: 'knowledge_create_category',
+    description: 'Create a knowledge-base category.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Category name (required, max 100).' },
+        tags: { type: 'string', description: 'Comma-separated tags.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'knowledge_update_category',
+    description: 'Update a knowledge-base category. Omit fields you do not want to change.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: ['integer', 'number', 'string'], description: 'Category id' },
+        name: { type: 'string' },
+        tags: { type: 'string' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'knowledge_delete_category',
+    description: 'Delete a knowledge-base category. Articles in it become uncategorized.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: ['integer', 'number', 'string'], description: 'Category id' },
+      },
+      required: ['id'],
+    },
+  },
 ];
 
 const WRITE_TOOL_NAMES = new Set(WRITE_TOOLS.map((tool) => tool.name));
+const CATEGORY_DESC_TOOLS = new Set(['knowledge_create', 'knowledge_update']);
 
-function listMcpTools() {
-  return isKnowledgeReadonly() ? [...READ_TOOLS] : [...READ_TOOLS, ...WRITE_TOOLS];
+function withLiveCategoryLine(tool, categoryLine) {
+  const properties = { ...tool.inputSchema.properties };
+  if (properties.category_id) {
+    properties.category_id = {
+      ...properties.category_id,
+      description: `${properties.category_id.description} ${categoryLine}`.trim(),
+    };
+  }
+  return {
+    ...tool,
+    description: `${tool.description} ${categoryLine}`.trim(),
+    inputSchema: {
+      ...tool.inputSchema,
+      properties,
+    },
+  };
+}
+
+function listMcpTools(db) {
+  const tools = isKnowledgeReadonly() ? [...READ_TOOLS] : [...READ_TOOLS, ...WRITE_TOOLS];
+  if (!db || isKnowledgeReadonly()) return tools;
+  const categoryLine = formatKnowledgeCategoriesForTools(db);
+  return tools.map((tool) =>
+    CATEGORY_DESC_TOOLS.has(tool.name) ? withLiveCategoryLine(tool, categoryLine) : tool
+  );
 }
 
 function auditKnowledgeWrite(db, entry) {
@@ -193,6 +268,8 @@ function callTool(db, name, args = {}) {
           id: article.id,
           title: article.title,
           tags: article.tags,
+          category_id: article.category_id ?? null,
+          category: article.category?.name || null,
           excerpt: String(article.body || '').slice(0, 400),
           locked: Boolean(article.locked),
           updated_at: article.updated_at,
@@ -210,6 +287,7 @@ function callTool(db, name, args = {}) {
           title: args.title,
           body: args.body,
           tags: args.tags,
+          category_id: args.category_id,
         });
         auditKnowledgeWrite(db, {
           entityType: 'knowledge_article',
@@ -229,11 +307,13 @@ function callTool(db, name, args = {}) {
     case 'knowledge_update': {
       try {
         const before = getKnowledgeArticle(db, args.id);
-        const article = updateKnowledgeArticle(db, args.id, {
+        const patch = {
           title: args.title,
           body: args.body,
           tags: args.tags,
-        });
+        };
+        if (args.category_id !== undefined) patch.category_id = args.category_id;
+        const article = updateKnowledgeArticle(db, args.id, patch);
         auditKnowledgeWrite(db, {
           entityType: 'knowledge_article',
           entityId: article.id,
@@ -274,6 +354,59 @@ function callTool(db, name, args = {}) {
         }
         throw error;
       }
+    }
+    case 'knowledge_create_category': {
+      try {
+        const category = createKnowledgeCategory(db, { name: args.name, tags: args.tags });
+        auditKnowledgeWrite(db, {
+          entityType: 'knowledge_category',
+          entityId: category.id,
+          action: 'create',
+          summary: `Создана категория «${category.name}»`,
+          details: buildAuditDetails({ before: null, after: category }),
+        });
+        return textResult({ category });
+      } catch (error) {
+        if (INVALID_CATEGORY_CODES.has(error.message)) {
+          return errorResult('Invalid category data.', { code: error.message });
+        }
+        throw error;
+      }
+    }
+    case 'knowledge_update_category': {
+      try {
+        const before = getKnowledgeCategory(db, args.id);
+        const category = updateKnowledgeCategory(db, args.id, { name: args.name, tags: args.tags });
+        auditKnowledgeWrite(db, {
+          entityType: 'knowledge_category',
+          entityId: category.id,
+          action: 'update',
+          summary: `Изменена категория #${category.id}`,
+          details: buildAuditDetails({ before, after: category }),
+        });
+        return textResult({ category });
+      } catch (error) {
+        if (error.message === 'NOT_FOUND') {
+          return errorResult('Category not found.', { id: args.id });
+        }
+        if (INVALID_CATEGORY_CODES.has(error.message)) {
+          return errorResult('Invalid category data.', { code: error.message });
+        }
+        throw error;
+      }
+    }
+    case 'knowledge_delete_category': {
+      const before = getKnowledgeCategory(db, args.id);
+      const deleted = deleteKnowledgeCategory(db, args.id);
+      if (!deleted) return errorResult('Category not found.', { id: args.id });
+      auditKnowledgeWrite(db, {
+        entityType: 'knowledge_category',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалена категория #${before.id}`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return textResult({ ok: true, id: before.id });
     }
     default:
       return errorResult(`Unknown tool: ${name}`);
@@ -325,7 +458,7 @@ function handleJsonRpc(db, body) {
   }
 
   if (method === 'tools/list') {
-    return { status: 200, payload: jsonRpcResult(id, { tools: listMcpTools() }) };
+    return { status: 200, payload: jsonRpcResult(id, { tools: listMcpTools(db) }) };
   }
 
   if (method === 'tools/call') {

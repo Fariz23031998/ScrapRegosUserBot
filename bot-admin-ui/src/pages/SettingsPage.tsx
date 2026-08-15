@@ -39,6 +39,7 @@ const TICKET_REQUIRED_TOOLS = new Set([
   "read_chat_image",
   "transcribe_chat_audio",
   "assign_responsible",
+  "close_ticket",
   "reply_to_customer",
 ]);
 

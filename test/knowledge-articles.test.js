@@ -14,13 +14,17 @@ const {
   addKbSessionMessage,
   clearKbSessionHistory,
   createKnowledgeArticle,
+  createKnowledgeCategory,
   deleteKnowledgeArticle,
+  deleteKnowledgeCategory,
   getKnowledgeArticle,
   getOrCreateKbSession,
   listKbSessionMessages,
   listKnowledgeArticles,
+  listKnowledgeCategories,
   setKnowledgeArticleLocked,
   updateKnowledgeArticle,
+  updateKnowledgeCategory,
 } = require('../src/db/knowledge-articles');
 
 function makeTempDbPath() {
@@ -352,6 +356,233 @@ describe('knowledge article lock API', () => {
     const searchBody = JSON.parse(searched.body);
     assert.ok(searchBody.articles.some((article) => article.title === 'Paged article 1'));
     assert.ok(searchBody.total >= 1);
+  });
+});
+
+describe('knowledge categories', () => {
+  let dbPath;
+  let db;
+
+  beforeEach(() => {
+    if (db) {
+      db.close();
+      db = null;
+    }
+    if (dbPath) removeDbFiles(dbPath);
+    dbPath = makeTempDbPath();
+    db = openDb(dbPath);
+  });
+
+  after(() => {
+    if (db) {
+      db.close();
+      db = null;
+    }
+    if (dbPath) removeDbFiles(dbPath);
+  });
+
+  it('creates, updates, and lists categories', () => {
+    const created = createKnowledgeCategory(db, { name: 'Прайс', tags: 'цены, услуги' });
+    assert.equal(created.name, 'Прайс');
+    assert.equal(created.tags, 'цены, услуги');
+
+    const updated = updateKnowledgeCategory(db, created.id, { name: 'Цены', tags: 'прайс' });
+    assert.equal(updated.name, 'Цены');
+    assert.equal(updated.tags, 'прайс');
+
+    const listed = listKnowledgeCategories(db);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].id, created.id);
+    assert.equal(listed[0].name, 'Цены');
+  });
+
+  it('rejects invalid category names and unknown article categories', () => {
+    assert.throws(() => createKnowledgeCategory(db, { name: '  ' }), { message: 'INVALID_CATEGORY_NAME' });
+    const created = createKnowledgeArticle(db, {
+      title: 'Uncategorized',
+      body: 'No category yet',
+      tags: '',
+    });
+    assert.equal(created.category_id, null);
+    assert.equal(created.category, null);
+    assert.throws(
+      () =>
+        updateKnowledgeArticle(db, created.id, {
+          title: created.title,
+          body: created.body,
+          category_id: 999,
+        }),
+      { message: 'INVALID_ARTICLE_CATEGORY' }
+    );
+  });
+
+  it('assigns a category, filters the list, and unsets it when the category is deleted', () => {
+    const prices = createKnowledgeCategory(db, { name: 'Прайс', tags: 'цены' });
+    const support = createKnowledgeCategory(db, { name: 'Поддержка', tags: 'support' });
+    const priced = createKnowledgeArticle(db, {
+      title: 'Price article',
+      body: 'About prices',
+      tags: 'price',
+      category_id: prices.id,
+    });
+    const other = createKnowledgeArticle(db, {
+      title: 'Support article',
+      body: 'About support',
+      tags: 'help',
+      category_id: support.id,
+    });
+    const loose = createKnowledgeArticle(db, {
+      title: 'Loose article',
+      body: 'No category',
+      tags: '',
+    });
+
+    assert.equal(priced.category_id, prices.id);
+    assert.equal(priced.category?.name, 'Прайс');
+    assert.equal(priced.category?.tags, 'цены');
+
+    const inPrices = listKnowledgeArticles(db, { categoryId: prices.id, limit: 50 });
+    assert.equal(inPrices.total, 1);
+    assert.equal(inPrices.articles[0].id, priced.id);
+
+    const uncategorized = listKnowledgeArticles(db, { categoryId: null, limit: 50 });
+    assert.ok(uncategorized.articles.some((article) => article.id === loose.id));
+    assert.equal(
+      uncategorized.articles.some((article) => article.id === priced.id),
+      false
+    );
+
+    assert.equal(deleteKnowledgeCategory(db, prices.id), true);
+    const afterDelete = getKnowledgeArticle(db, priced.id);
+    assert.equal(afterDelete.category_id, null);
+    assert.equal(afterDelete.category, null);
+    assert.equal(getKnowledgeArticle(db, other.id).category_id, support.id);
+  });
+});
+
+describe('knowledge category API', () => {
+  let dbPath;
+  let db;
+  let server;
+  let previousEnv;
+
+  before(() => {
+    previousEnv = {
+      BOT_ADMIN_LOGIN: process.env.BOT_ADMIN_LOGIN,
+      BOT_ADMIN_PASSWORD: process.env.BOT_ADMIN_PASSWORD,
+    };
+    process.env.BOT_ADMIN_LOGIN = 'admin';
+    process.env.BOT_ADMIN_PASSWORD = 'test-password';
+  });
+
+  after(() => {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  beforeEach(async () => {
+    if (server) {
+      await new Promise((resolve) => server.close(resolve));
+      server = null;
+    }
+    if (db) {
+      db.close();
+      db = null;
+    }
+    if (dbPath) removeDbFiles(dbPath);
+
+    dbPath = makeTempDbPath();
+    db = openDb(dbPath);
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    server = await new Promise((resolve) => {
+      const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
+    });
+  });
+
+  after(async () => {
+    if (server) {
+      await new Promise((resolve) => server.close(resolve));
+      server = null;
+    }
+    if (db) {
+      db.close();
+      db = null;
+    }
+    if (dbPath) removeDbFiles(dbPath);
+  });
+
+  async function loginEmployee(rights) {
+    const suffix = `${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(-8);
+    const login = `kb-${suffix}`;
+    const password = 'kb-pass';
+    createEmployeeUser(db, {
+      phone: `+99890${suffix}`,
+      displayName: 'Knowledge Tester',
+      adminLogin: login,
+      password,
+      rights: { open_admin_dashboard: 1, knowledge_read: 1, ...rights },
+    });
+    const res = await request(server, 'POST', '/bot-admin/api/login', {
+      body: { login, password },
+    });
+    assert.equal(res.statusCode, 200);
+    const cookie = cookieFromSetCookie(res.headers['set-cookie']);
+    assert.ok(cookie);
+    return { cookie };
+  }
+
+  it('creates a category, assigns it to an article, filters, and rejects unknown ids', async () => {
+    const editor = await loginEmployee({ knowledge_edit: 1 });
+
+    const createdCategory = await request(server, 'POST', '/bot-admin/api/knowledge/categories', {
+      headers: { Cookie: editor.cookie },
+      body: { name: 'Офис', tags: 'адрес, контакты' },
+    });
+    assert.equal(createdCategory.statusCode, 201);
+    const category = JSON.parse(createdCategory.body).category;
+    assert.equal(category.name, 'Офис');
+
+    const createdArticle = await request(server, 'POST', '/bot-admin/api/knowledge/articles', {
+      headers: { Cookie: editor.cookie },
+      body: {
+        title: 'Office hours',
+        body: 'We are open 9-18.',
+        tags: 'office',
+        category_id: category.id,
+      },
+    });
+    assert.equal(createdArticle.statusCode, 201);
+    const article = JSON.parse(createdArticle.body).article;
+    assert.equal(article.category_id, category.id);
+    assert.equal(article.category.name, 'Офис');
+
+    const filtered = await request(
+      server,
+      'GET',
+      `/bot-admin/api/knowledge/articles?page=1&limit=20&category_id=${category.id}`,
+      { headers: { Cookie: editor.cookie } }
+    );
+    assert.equal(filtered.statusCode, 200);
+    const filteredBody = JSON.parse(filtered.body);
+    assert.equal(filteredBody.total, 1);
+    assert.equal(filteredBody.articles[0].id, article.id);
+
+    const unknown = await request(server, 'POST', '/bot-admin/api/knowledge/articles', {
+      headers: { Cookie: editor.cookie },
+      body: { title: 'Bad', body: 'Bad', tags: '', category_id: 9999 },
+    });
+    assert.equal(unknown.statusCode, 400);
+    assert.match(JSON.parse(unknown.body).message, /категор/i);
+
+    const deleted = await request(server, 'DELETE', `/bot-admin/api/knowledge/categories/${category.id}`, {
+      headers: { Cookie: editor.cookie },
+    });
+    assert.equal(deleted.statusCode, 200);
+    const after = getKnowledgeArticle(db, article.id);
+    assert.equal(after.category_id, null);
   });
 });
 

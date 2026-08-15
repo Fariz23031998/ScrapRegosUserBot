@@ -98,6 +98,12 @@ const AGENT_TOOL_CATALOG = [
     agents: ['customer', 'customer_assist'],
   },
   {
+    name: 'close_ticket',
+    title: 'Закрыть обращение',
+    description: 'Закрыть текущее обращение клиента, когда запрос полностью решён.',
+    agents: ['customer'],
+  },
+  {
     name: 'read_chat_image',
     title: 'Читать изображение',
     description: 'Загрузить изображение из чата по file_id для анализа.',

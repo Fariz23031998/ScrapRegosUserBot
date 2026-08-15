@@ -195,11 +195,21 @@ export type TicketAiPrompt = {
   prior_summaries?: TicketChatSummary[];
 };
 
+export type KnowledgeCategory = {
+  id: number;
+  name: string;
+  tags?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type KnowledgeArticle = {
   id: number;
   title: string;
   body: string;
   tags?: string;
+  category_id?: number | null;
+  category?: Pick<KnowledgeCategory, "id" | "name" | "tags"> | null;
   locked?: boolean;
   updated_by?: number | null;
   created_at?: string;

@@ -4,8 +4,16 @@ const {
   createKnowledgeArticle,
   updateKnowledgeArticle,
   deleteKnowledgeArticle,
+  formatKnowledgeCategoriesForTools,
 } = require('../../db/knowledge-articles');
 const { createBrowseTools } = require('./browse');
+
+function mapArticleCategory(article) {
+  return {
+    category_id: article.category_id ?? null,
+    category: article.category?.name || null,
+  };
+}
 
 function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = {}) {
   const tools = [
@@ -32,6 +40,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
             id: article.id,
             title: article.title,
             tags: article.tags,
+            ...mapArticleCategory(article),
             locked: Boolean(article.locked),
             excerpt: String(article.body || '').slice(0, 400),
           })),
@@ -64,29 +73,38 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     } catch (error) {
       if (error.message === 'ARTICLE_LOCKED') return { ok: false, error: 'locked' };
       if (error.message === 'NOT_FOUND') return { ok: false, error: 'not_found' };
+      if (error.message === 'INVALID_ARTICLE_CATEGORY') return { ok: false, error: 'invalid_category' };
       throw error;
     }
   }
 
+  const categoryLine = formatKnowledgeCategoriesForTools(db);
+
   tools.push(
     {
       name: 'create_article',
-      description: 'Create a new knowledge-base article.',
+      description: `Create a new knowledge-base article. ${categoryLine}`,
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string' },
           body: { type: 'string' },
           tags: { type: 'string', description: 'Comma-separated tags' },
+          category_id: {
+            type: ['number', 'null'],
+            description: `Optional category id. Omit or null for no category. ${categoryLine}`,
+          },
         },
         required: ['title', 'body'],
       },
-      execute: async ({ title, body, tags }) =>
-        createKnowledgeArticle(db, { title, body, tags }, { updatedBy: userId }),
+      execute: async ({ title, body, tags, category_id }) =>
+        runWritable(() =>
+          createKnowledgeArticle(db, { title, body, tags, category_id }, { updatedBy: userId })
+        ),
     },
     {
       name: 'update_article',
-      description: 'Update an existing knowledge-base article. Omit fields you do not want to change. Locked articles cannot be updated.',
+      description: `Update an existing knowledge-base article. Omit fields you do not want to change. Locked articles cannot be updated. ${categoryLine}`,
       parameters: {
         type: 'object',
         properties: {
@@ -94,11 +112,19 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
           title: { type: 'string' },
           body: { type: 'string' },
           tags: { type: 'string' },
+          category_id: {
+            type: ['number', 'null'],
+            description: `Optional category id. Pass null to clear the category. ${categoryLine}`,
+          },
         },
         required: ['id'],
       },
-      execute: async ({ id, title, body, tags }) =>
-        runWritable(() => updateKnowledgeArticle(db, id, { title, body, tags }, { updatedBy: userId })),
+      execute: async ({ id, title, body, tags, category_id }) =>
+        runWritable(() => {
+          const patch = { title, body, tags };
+          if (category_id !== undefined) patch.category_id = category_id;
+          return updateKnowledgeArticle(db, id, patch, { updatedBy: userId });
+        }),
     },
     {
       name: 'delete_article',

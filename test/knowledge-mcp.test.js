@@ -216,6 +216,9 @@ describe('knowledge MCP HTTP', () => {
       'knowledge_create',
       'knowledge_update',
       'knowledge_delete',
+      'knowledge_create_category',
+      'knowledge_update_category',
+      'knowledge_delete_category',
     ]);
   });
 
@@ -280,6 +283,53 @@ describe('knowledge MCP HTTP', () => {
     );
     const roundTrip = parseToolPayload(roundTripSearch);
     assert.ok(roundTrip.data.articles.some((article) => article.id === created.data.article.id));
+  });
+
+  it('creates a category and assigns it on article create/update', async () => {
+    const createCategory = await callMcp(
+      mcpRpc(1, 'tools/call', {
+        name: 'knowledge_create_category',
+        arguments: { name: 'MCP category', tags: 'mcp, category' },
+      })
+    );
+    const categoryPayload = parseToolPayload(createCategory);
+    assert.equal(categoryPayload.isError, false);
+    const categoryId = categoryPayload.data.category.id;
+    assert.equal(categoryPayload.data.category.name, 'MCP category');
+    assert.equal(categoryPayload.data.category.tags, 'mcp, category');
+
+    const listed = await callMcp(mcpRpc(2, 'tools/list', {}));
+    const createTool = parseJson(listed).result.tools.find((tool) => tool.name === 'knowledge_create');
+    assert.ok(createTool);
+    assert.match(createTool.description, new RegExp(`${categoryId}\\s+MCP category`));
+    assert.match(createTool.inputSchema.properties.category_id.description, new RegExp(`${categoryId}\\s+MCP category`));
+
+    const create = await callMcp(
+      mcpRpc(3, 'tools/call', {
+        name: 'knowledge_create',
+        arguments: {
+          title: 'MCP categorized article',
+          body: 'Assigned via MCP.',
+          tags: 'mcp',
+          category_id: categoryId,
+        },
+      })
+    );
+    const created = parseToolPayload(create);
+    assert.equal(created.isError, false);
+    assert.equal(created.data.article.category_id, categoryId);
+    assert.equal(created.data.article.category?.name, 'MCP category');
+
+    const updated = await callMcp(
+      mcpRpc(4, 'tools/call', {
+        name: 'knowledge_update',
+        arguments: { id: created.data.article.id, category_id: null },
+      })
+    );
+    const updatedPayload = parseToolPayload(updated);
+    assert.equal(updatedPayload.isError, false);
+    assert.equal(updatedPayload.data.article.category_id, null);
+    assert.equal(updatedPayload.data.article.category, null);
   });
 
   it('rejects update and delete of locked articles', async () => {

@@ -10,6 +10,7 @@ const {
 describe('ai tool test-runner', () => {
   it('marks ticket-scoped tools', () => {
     assert.equal(toolRequiresTicket('search_chat_history'), true);
+    assert.equal(toolRequiresTicket('close_ticket'), true);
     assert.equal(toolRequiresTicket('web_search'), false);
   });
 
@@ -25,6 +26,9 @@ describe('ai tool test-runner', () => {
     const reply = tools.find((tool) => tool.name === 'reply_to_customer');
     assert.ok(reply);
     assert.equal(reply.requires_ticket, true);
+    const close = tools.find((tool) => tool.name === 'close_ticket');
+    assert.ok(close);
+    assert.equal(close.requires_ticket, true);
   });
 
   it('rejects unknown tools', async () => {

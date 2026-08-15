@@ -635,6 +635,10 @@ async function handleCustomerChatMessage({
     });
     if (!history.length) return { handled: false, reason: 'empty-history' };
 
+    let closeRequested = false;
+    const setTicketStatus =
+      deps.setTicketStatus || require('../integrations/regos-crm').setTicketStatus;
+
     const result = await run({
       provider,
       providerName: settings.provider,
@@ -648,7 +652,13 @@ async function handleCustomerChatMessage({
           ticket,
           chatId: id,
           filesById,
-          deps: { ...deps, transcribeModel: settings.transcribeModel },
+          deps: {
+            ...deps,
+            transcribeModel: settings.transcribeModel,
+            onTicketClose: () => {
+              closeRequested = true;
+            },
+          },
         }),
         settings.disabledTools,
       ),
@@ -678,14 +688,32 @@ async function handleCustomerChatMessage({
       return { handled: false, reason: 'send-failed' };
     }
 
+    let closed = false;
+    if (closeRequested) {
+      try {
+        await setTicketStatus(ticket.id, 'Closed');
+        closed = true;
+      } catch (error) {
+        console.error(`[ai] failed to close ticket ${ticket.id}:`, error);
+        auditAiEvent(db, {
+          ticketId: ticket.id,
+          action: 'ai_skip',
+          summary: `AI не смог закрыть тикет #${ticket.id}`,
+          details: { reason: 'close-failed', model },
+        });
+      }
+    }
+
     markCustomerMessageProcessed(id, trigger.id);
     auditAiEvent(db, {
       ticketId: ticket.id,
       action: 'ai_reply',
-      summary: `AI ответил в тикет #${ticket.id}`,
-      details: { model, provider: settings.provider, steps: result.steps },
+      summary: closed
+        ? `AI ответил и закрыл тикет #${ticket.id}`
+        : `AI ответил в тикет #${ticket.id}`,
+      details: { model, provider: settings.provider, steps: result.steps, closed },
     });
-    return { handled: true, reason: null, reply };
+    return { handled: true, reason: null, reply, closed };
   } finally {
     inflightChats.delete(id);
     const pending = pendingCustomerChats.get(id);

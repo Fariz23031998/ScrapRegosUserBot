@@ -168,6 +168,11 @@ const {
   getOrCreateKbSession,
   listKbSessionMessages,
   clearKbSessionHistory,
+  listKnowledgeCategories,
+  getKnowledgeCategory,
+  createKnowledgeCategory,
+  updateKnowledgeCategory,
+  deleteKnowledgeCategory,
 } = require('../db/knowledge-articles');
 const {
   listPromptTypes,
@@ -2032,6 +2037,27 @@ function createBotAdminRouter(db) {
     return 'Статья заблокирована. Изменение и удаление недоступны.';
   }
 
+  function parseCategoryIdFilter(value) {
+    if (value == null || value === '') return undefined;
+    const raw = String(value).trim().toLowerCase();
+    if (raw === 'none' || raw === 'uncategorized' || raw === '0') return null;
+    const id = Number(value);
+    if (!Number.isFinite(id) || id <= 0) return undefined;
+    return id;
+  }
+
+  function articleFieldsFromBody(body = {}) {
+    const input = {
+      title: body.title,
+      body: body.body,
+      tags: body.tags,
+    };
+    if (Object.prototype.hasOwnProperty.call(body, 'category_id')) {
+      input.category_id = body.category_id;
+    }
+    return input;
+  }
+
   function respondKnowledgeWriteError(res, error, fallbackMessage) {
     if (error.message === 'NOT_FOUND') {
       return res.status(404).json({ message: 'Статья не найдена.' });
@@ -2039,23 +2065,110 @@ function createBotAdminRouter(db) {
     if (error.message === 'ARTICLE_LOCKED') {
       return res.status(409).json({ message: knowledgeArticleLockMessage() });
     }
-    if (['INVALID_ARTICLE_TITLE', 'INVALID_ARTICLE_BODY', 'INVALID_ARTICLE_TAGS'].includes(error.message)) {
-      return res.status(400).json({ message: 'Некорректные данные статьи.' });
+    if (
+      [
+        'INVALID_ARTICLE_TITLE',
+        'INVALID_ARTICLE_BODY',
+        'INVALID_ARTICLE_TAGS',
+        'INVALID_ARTICLE_CATEGORY',
+      ].includes(error.message)
+    ) {
+      return res.status(400).json({
+        message:
+          error.message === 'INVALID_ARTICLE_CATEGORY'
+            ? 'Некорректная категория статьи.'
+            : 'Некорректные данные статьи.',
+      });
     }
     console.error(fallbackMessage, error);
     return res.status(500).json({ message: fallbackMessage });
   }
 
+  function respondKnowledgeCategoryWriteError(res, error, fallbackMessage) {
+    if (error.message === 'NOT_FOUND') {
+      return res.status(404).json({ message: 'Категория не найдена.' });
+    }
+    if (['INVALID_CATEGORY_NAME', 'INVALID_CATEGORY_TAGS'].includes(error.message)) {
+      return res.status(400).json({ message: 'Некорректные данные категории.' });
+    }
+    console.error(fallbackMessage, error);
+    return res.status(500).json({ message: fallbackMessage });
+  }
+
+  router.get('/api/knowledge/categories', requireRight(db, 'knowledge_read'), (_req, res) => {
+    try {
+      return res.json({ categories: listKnowledgeCategories(db) });
+    } catch (error) {
+      console.error('List knowledge categories error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить категории.' });
+    }
+  });
+
+  router.post('/api/knowledge/categories', requireRight(db, 'knowledge_edit'), express.json(), (req, res) => {
+    try {
+      const category = createKnowledgeCategory(db, { name: req.body?.name, tags: req.body?.tags });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_category',
+        entityId: category.id,
+        action: 'create',
+        summary: `Создана категория «${category.name}»`,
+        details: buildAuditDetails({ before: null, after: category }),
+      });
+      return res.status(201).json({ category });
+    } catch (error) {
+      return respondKnowledgeCategoryWriteError(res, error, 'Не удалось создать категорию.');
+    }
+  });
+
+  router.put('/api/knowledge/categories/:id', requireRight(db, 'knowledge_edit'), express.json(), (req, res) => {
+    try {
+      const before = getKnowledgeCategory(db, req.params.id);
+      const category = updateKnowledgeCategory(db, req.params.id, {
+        name: req.body?.name,
+        tags: req.body?.tags,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_category',
+        entityId: category.id,
+        action: 'update',
+        summary: `Изменена категория #${category.id}`,
+        details: buildAuditDetails({ before, after: category }),
+      });
+      return res.json({ category });
+    } catch (error) {
+      return respondKnowledgeCategoryWriteError(res, error, 'Не удалось обновить категорию.');
+    }
+  });
+
+  router.delete('/api/knowledge/categories/:id', requireRight(db, 'knowledge_edit'), (req, res) => {
+    try {
+      const before = getKnowledgeCategory(db, req.params.id);
+      const deleted = deleteKnowledgeCategory(db, req.params.id);
+      if (!deleted) return res.status(404).json({ message: 'Категория не найдена.' });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_category',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалена категория #${before.id}`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondKnowledgeCategoryWriteError(res, error, 'Не удалось удалить категорию.');
+    }
+  });
+
   router.get('/api/knowledge/articles', requireRight(db, 'knowledge_read'), (req, res) => {
     try {
       const query = String(req.query.q || '').trim();
+      const categoryId = parseCategoryIdFilter(req.query.category_id);
       let { page, limit, offset } = parsePaginationQuery(req);
-      let result = listKnowledgeArticles(db, { query, offset, limit });
+      let result = listKnowledgeArticles(db, { query, offset, limit, categoryId });
       const totalPages = Math.max(1, Math.ceil(result.total / limit) || 1);
       if (page > totalPages) {
         page = totalPages;
         offset = (page - 1) * limit;
-        result = listKnowledgeArticles(db, { query, offset, limit });
+        result = listKnowledgeArticles(db, { query, offset, limit, categoryId });
       }
       return res.json({
         articles: result.articles,
@@ -2079,7 +2192,7 @@ function createBotAdminRouter(db) {
     try {
       const article = createKnowledgeArticle(
         db,
-        { title: req.body?.title, body: req.body?.body, tags: req.body?.tags },
+        articleFieldsFromBody(req.body),
         { updatedBy: resolveKnowledgeActorUserId(req) }
       );
       auditAdminChange(db, req, {
@@ -2091,8 +2204,20 @@ function createBotAdminRouter(db) {
       });
       return res.status(201).json({ article });
     } catch (error) {
-      if (['INVALID_ARTICLE_TITLE', 'INVALID_ARTICLE_BODY', 'INVALID_ARTICLE_TAGS'].includes(error.message)) {
-        return res.status(400).json({ message: 'Некорректные данные статьи.' });
+      if (
+        [
+          'INVALID_ARTICLE_TITLE',
+          'INVALID_ARTICLE_BODY',
+          'INVALID_ARTICLE_TAGS',
+          'INVALID_ARTICLE_CATEGORY',
+        ].includes(error.message)
+      ) {
+        return res.status(400).json({
+          message:
+            error.message === 'INVALID_ARTICLE_CATEGORY'
+              ? 'Некорректная категория статьи.'
+              : 'Некорректные данные статьи.',
+        });
       }
       console.error('Create knowledge article error:', error);
       return res.status(500).json({ message: 'Не удалось создать статью.' });
@@ -2105,7 +2230,7 @@ function createBotAdminRouter(db) {
       const article = updateKnowledgeArticle(
         db,
         req.params.id,
-        { title: req.body?.title, body: req.body?.body, tags: req.body?.tags },
+        articleFieldsFromBody(req.body),
         { updatedBy: resolveKnowledgeActorUserId(req) }
       );
       auditAdminChange(db, req, {

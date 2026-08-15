@@ -9,6 +9,7 @@ import type {
   AiToolTestResult,
   CustomerTestSession,
   KnowledgeArticle,
+  KnowledgeCategory,
   KnowledgeChatMessage,
   TicketAiAssistSession,
 } from "../lib/types";
@@ -95,18 +96,30 @@ export function deleteAiPrompt(id: number) {
   });
 }
 
-export function listKnowledgeArticles(params: { page: number; limit: number; q?: string }) {
+export function listKnowledgeArticles(params: {
+  page: number;
+  limit: number;
+  q?: string;
+  categoryId?: number | "none";
+}) {
   const search = new URLSearchParams({
     page: String(params.page),
     limit: String(params.limit),
   });
   if (params.q) search.set("q", params.q);
+  if (params.categoryId === "none") search.set("category_id", "none");
+  else if (params.categoryId != null) search.set("category_id", String(params.categoryId));
   return apiFetch<{ articles: KnowledgeArticle[]; total: number; page: number; limit: number }>(
     `/bot-admin/api/knowledge/articles?${search}`,
   );
 }
 
-export function createKnowledgeArticle(payload: { title: string; body: string; tags?: string }) {
+export function createKnowledgeArticle(payload: {
+  title: string;
+  body: string;
+  tags?: string;
+  category_id?: number | null;
+}) {
   return apiFetch<{ article: KnowledgeArticle }>("/bot-admin/api/knowledge/articles", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -115,7 +128,7 @@ export function createKnowledgeArticle(payload: { title: string; body: string; t
 
 export function updateKnowledgeArticle(
   id: number,
-  payload: { title: string; body: string; tags?: string },
+  payload: { title: string; body: string; tags?: string; category_id?: number | null },
 ) {
   return apiFetch<{ article: KnowledgeArticle }>(`/bot-admin/api/knowledge/articles/${id}`, {
     method: "PUT",
@@ -137,6 +150,28 @@ export function unlockKnowledgeArticle(id: number) {
   return apiFetch<{ article: KnowledgeArticle }>(`/bot-admin/api/knowledge/articles/${id}/unlock`, {
     method: "POST",
   });
+}
+
+export function listKnowledgeCategories() {
+  return apiFetch<{ categories: KnowledgeCategory[] }>("/bot-admin/api/knowledge/categories");
+}
+
+export function createKnowledgeCategory(payload: { name: string; tags?: string }) {
+  return apiFetch<{ category: KnowledgeCategory }>("/bot-admin/api/knowledge/categories", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateKnowledgeCategory(id: number, payload: { name: string; tags?: string }) {
+  return apiFetch<{ category: KnowledgeCategory }>(`/bot-admin/api/knowledge/categories/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteKnowledgeCategory(id: number) {
+  return apiFetch<{ ok: boolean }>(`/bot-admin/api/knowledge/categories/${id}`, { method: "DELETE" });
 }
 
 export function getKbSession() {

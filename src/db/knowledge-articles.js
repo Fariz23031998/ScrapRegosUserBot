@@ -3,7 +3,10 @@ const { mapSessionMessage, stringifyAttachments } = require('../ai/chat-uploads'
 const MAX_TITLE = 200;
 const MAX_BODY = 20000;
 const MAX_TAGS = 300;
-const ARTICLE_COLUMNS = 'id, title, body, tags, locked, updated_by, created_at, updated_at';
+const MAX_CATEGORY_NAME = 100;
+const ARTICLE_SELECT = `a.id, a.title, a.body, a.tags, a.locked, a.updated_by, a.created_at, a.updated_at,
+       a.category_id, c.name AS category_name, c.tags AS category_tags`;
+const ARTICLE_FROM = `knowledge_articles a LEFT JOIN knowledge_categories c ON c.id = a.category_id`;
 
 /** Tokens ignored during knowledge search (ru / uz / en). */
 const SEARCH_STOPWORDS = new Set([
@@ -188,9 +191,19 @@ function scoreArticleAgainstTokens(article, queryTokens) {
   return score + hits * 10;
 }
 
-function searchArticlesByTokens(db, { queryTokens, limit, offset }) {
+function categoryFilterClause(categoryId) {
+  if (categoryId === undefined) return { sql: '', params: [] };
+  if (categoryId === null) return { sql: ' AND a.category_id IS NULL', params: [] };
+  return { sql: ' AND a.category_id = ?', params: [Number(categoryId)] };
+}
+
+function searchArticlesByTokens(db, { queryTokens, limit, offset, categoryId }) {
   if (!queryTokens.length) return { articles: [], total: 0 };
-  const rows = db.prepare(`SELECT ${ARTICLE_COLUMNS} FROM knowledge_articles`).all().map(mapArticle);
+  const filter = categoryFilterClause(categoryId);
+  const rows = db
+    .prepare(`SELECT ${ARTICLE_SELECT} FROM ${ARTICLE_FROM} WHERE 1=1${filter.sql}`)
+    .all(...filter.params)
+    .map(mapArticle);
   const scored = [];
   for (const article of rows) {
     const score = scoreArticleAgainstTokens(article, queryTokens);
@@ -221,6 +234,14 @@ function seedKnowledgeArticles(db) {
 
 function ensureKnowledgeTables(db) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      tags TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS knowledge_articles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
@@ -250,8 +271,106 @@ function ensureKnowledgeTables(db) {
   `);
   ensureColumn(db, 'ai_kb_messages', 'attachments', 'TEXT');
   ensureColumn(db, 'knowledge_articles', 'locked', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'knowledge_articles', 'category_id', 'INTEGER');
   ensureKnowledgeFts(db);
   seedKnowledgeArticles(db);
+}
+
+function mapCategory(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    tags: row.tags || '',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function normalizeCategoryInput(input = {}) {
+  const name = String(input.name || '').trim();
+  const tags = String(input.tags || '').trim();
+  if (!name || name.length > MAX_CATEGORY_NAME) throw new Error('INVALID_CATEGORY_NAME');
+  if (tags.length > MAX_TAGS) throw new Error('INVALID_CATEGORY_TAGS');
+  return { name, tags: tags || null };
+}
+
+function listKnowledgeCategories(db) {
+  ensureKnowledgeTables(db);
+  return db
+    .prepare(
+      `SELECT id, name, tags, created_at, updated_at
+       FROM knowledge_categories
+       ORDER BY name COLLATE NOCASE ASC, id ASC`
+    )
+    .all()
+    .map(mapCategory);
+}
+
+function formatKnowledgeCategoriesForTools(db) {
+  const categories = db ? listKnowledgeCategories(db) : [];
+  if (!categories.length) return 'No categories yet. Omit category_id.';
+  const list = categories.map((category) => `${category.id} ${category.name}`).join('; ');
+  return `Categories: ${list}. Omit or null for none.`;
+}
+
+function getKnowledgeCategory(db, id) {
+  ensureKnowledgeTables(db);
+  const categoryId = Number(id);
+  if (!Number.isFinite(categoryId) || categoryId <= 0) return null;
+  return mapCategory(
+    db
+      .prepare(
+        `SELECT id, name, tags, created_at, updated_at
+         FROM knowledge_categories WHERE id = ?`
+      )
+      .get(categoryId)
+  );
+}
+
+function createKnowledgeCategory(db, input) {
+  ensureKnowledgeTables(db);
+  const category = normalizeCategoryInput(input);
+  const result = db
+    .prepare(
+      `INSERT INTO knowledge_categories (name, tags, created_at, updated_at)
+       VALUES (?, ?, datetime('now'), datetime('now'))`
+    )
+    .run(category.name, category.tags);
+  return getKnowledgeCategory(db, Number(result.lastInsertRowid));
+}
+
+function updateKnowledgeCategory(db, id, input = {}) {
+  const current = getKnowledgeCategory(db, id);
+  if (!current) throw new Error('NOT_FOUND');
+  const category = normalizeCategoryInput({
+    name: input.name != null ? input.name : current.name,
+    tags: input.tags != null ? input.tags : current.tags,
+  });
+  db.prepare(
+    `UPDATE knowledge_categories
+     SET name = ?, tags = ?, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(category.name, category.tags, current.id);
+  return getKnowledgeCategory(db, current.id);
+}
+
+function deleteKnowledgeCategory(db, id) {
+  const current = getKnowledgeCategory(db, id);
+  if (!current) return false;
+  db.prepare('UPDATE knowledge_articles SET category_id = NULL WHERE category_id = ?').run(current.id);
+  db.prepare('DELETE FROM knowledge_categories WHERE id = ?').run(current.id);
+  return true;
+}
+
+function normalizeArticleCategoryId(db, value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '' || value === 0 || value === '0') return null;
+  const categoryId = Number(value);
+  if (!Number.isFinite(categoryId) || categoryId <= 0) throw new Error('INVALID_ARTICLE_CATEGORY');
+  const category = getKnowledgeCategory(db, categoryId);
+  if (!category) throw new Error('INVALID_ARTICLE_CATEGORY');
+  return category.id;
 }
 
 function normalizeArticleInput(input = {}) {
@@ -266,11 +385,20 @@ function normalizeArticleInput(input = {}) {
 
 function mapArticle(row) {
   if (!row) return null;
+  const categoryId = row.category_id ?? null;
   return {
     id: row.id,
     title: row.title,
     body: row.body,
     tags: row.tags || '',
+    category_id: categoryId,
+    category: categoryId
+      ? {
+          id: categoryId,
+          name: row.category_name || '',
+          tags: row.category_tags || '',
+        }
+      : null,
     locked: Boolean(row.locked),
     updated_by: row.updated_by ?? null,
     created_at: row.created_at,
@@ -282,21 +410,25 @@ function assertArticleWritable(article) {
   if (article?.locked) throw new Error('ARTICLE_LOCKED');
 }
 
-function listKnowledgeArticles(db, { query, limit = 100, offset = 0 } = {}) {
+function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId } = {}) {
   ensureKnowledgeTables(db);
   const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
   const safeOffset = Math.max(0, Number(offset) || 0);
+  const filter = categoryFilterClause(categoryId);
   const trimmed = String(query || '').trim();
   if (!trimmed) {
-    const total = db.prepare('SELECT COUNT(*) AS count FROM knowledge_articles').get().count;
+    const total = db
+      .prepare(`SELECT COUNT(*) AS count FROM knowledge_articles a WHERE 1=1${filter.sql}`)
+      .get(...filter.params).count;
     const articles = db
       .prepare(
-        `SELECT ${ARTICLE_COLUMNS}
-         FROM knowledge_articles
-         ORDER BY datetime(updated_at) DESC, id DESC
+        `SELECT ${ARTICLE_SELECT}
+         FROM ${ARTICLE_FROM}
+         WHERE 1=1${filter.sql}
+         ORDER BY datetime(a.updated_at) DESC, a.id DESC
          LIMIT ? OFFSET ?`
       )
-      .all(safeLimit, safeOffset)
+      .all(...filter.params, safeLimit, safeOffset)
       .map(mapArticle);
     return { articles, total };
   }
@@ -312,21 +444,23 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0 } = {}) {
         const total = db
           .prepare(
             `SELECT COUNT(*) AS count
-             FROM knowledge_articles_fts
-             WHERE knowledge_articles_fts MATCH ?`
+             FROM knowledge_articles_fts f
+             JOIN knowledge_articles a ON a.id = f.rowid
+             WHERE knowledge_articles_fts MATCH ?${filter.sql}`
           )
-          .get(ftsQuery).count;
+          .get(ftsQuery, ...filter.params).count;
         if (total > 0) {
           const articles = db
             .prepare(
-              `SELECT a.id, a.title, a.body, a.tags, a.locked, a.updated_by, a.created_at, a.updated_at
+              `SELECT ${ARTICLE_SELECT}
                FROM knowledge_articles_fts f
                JOIN knowledge_articles a ON a.id = f.rowid
-               WHERE knowledge_articles_fts MATCH ?
+               LEFT JOIN knowledge_categories c ON c.id = a.category_id
+               WHERE knowledge_articles_fts MATCH ?${filter.sql}
                ORDER BY rank
                LIMIT ? OFFSET ?`
             )
-            .all(ftsQuery, safeLimit, safeOffset)
+            .all(ftsQuery, ...filter.params, safeLimit, safeOffset)
             .map(mapArticle);
           return { articles, total };
         }
@@ -341,6 +475,7 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0 } = {}) {
     queryTokens: queryTokens.length ? queryTokens : matchTokens,
     limit: safeLimit,
     offset: safeOffset,
+    categoryId,
   });
 }
 
@@ -351,8 +486,9 @@ function getKnowledgeArticle(db, id) {
   return mapArticle(
     db
       .prepare(
-        `SELECT ${ARTICLE_COLUMNS}
-         FROM knowledge_articles WHERE id = ?`
+        `SELECT ${ARTICLE_SELECT}
+         FROM ${ARTICLE_FROM}
+         WHERE a.id = ?`
       )
       .get(articleId)
   );
@@ -361,12 +497,13 @@ function getKnowledgeArticle(db, id) {
 function createKnowledgeArticle(db, input, { updatedBy } = {}) {
   ensureKnowledgeTables(db);
   const article = normalizeArticleInput(input);
+  const categoryId = normalizeArticleCategoryId(db, input.category_id) ?? null;
   const result = db
     .prepare(
-      `INSERT INTO knowledge_articles (title, body, tags, updated_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`
+      `INSERT INTO knowledge_articles (title, body, tags, category_id, updated_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
     )
-    .run(article.title, article.body, article.tags, updatedBy ?? null);
+    .run(article.title, article.body, article.tags, categoryId, updatedBy ?? null);
   return getKnowledgeArticle(db, Number(result.lastInsertRowid));
 }
 
@@ -379,11 +516,20 @@ function updateKnowledgeArticle(db, id, input, { updatedBy } = {}) {
     body: input.body != null ? input.body : current.body,
     tags: input.tags != null ? input.tags : current.tags,
   });
+  const nextCategoryId = normalizeArticleCategoryId(db, input.category_id);
+  const categoryId = nextCategoryId === undefined ? current.category_id : nextCategoryId;
   db.prepare(
     `UPDATE knowledge_articles
-     SET title = ?, body = ?, tags = ?, updated_by = ?, updated_at = datetime('now')
+     SET title = ?, body = ?, tags = ?, category_id = ?, updated_by = ?, updated_at = datetime('now')
      WHERE id = ?`
-  ).run(article.title, article.body, article.tags, updatedBy ?? current.updated_by, current.id);
+  ).run(
+    article.title,
+    article.body,
+    article.tags,
+    categoryId,
+    updatedBy ?? current.updated_by,
+    current.id
+  );
   return getKnowledgeArticle(db, current.id);
 }
 
@@ -480,9 +626,16 @@ function clearKbSessionHistory(db, { sessionId, userId } = {}) {
 module.exports = {
   MAX_TITLE,
   MAX_BODY,
+  MAX_CATEGORY_NAME,
   SEED_ARTICLES,
   ensureKnowledgeTables,
   tokenizeKnowledgeQuery,
+  listKnowledgeCategories,
+  formatKnowledgeCategoriesForTools,
+  getKnowledgeCategory,
+  createKnowledgeCategory,
+  updateKnowledgeCategory,
+  deleteKnowledgeCategory,
   listKnowledgeArticles,
   getKnowledgeArticle,
   createKnowledgeArticle,

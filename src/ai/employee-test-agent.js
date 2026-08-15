@@ -238,6 +238,11 @@ async function runEmployeeTestAgent({
                 ticket_id: id,
                 responsible_user_id: regosUserId,
               }),
+              setTicketStatus: async (id, status) => ({
+                ok: true,
+                ticket_id: id,
+                status,
+              }),
             },
           }),
           createSimulatedReplyToCustomerTool({

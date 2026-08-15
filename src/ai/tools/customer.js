@@ -70,6 +70,8 @@ function createCustomerTools({
   const fetchMessages = deps.fetchChatMessagesInPeriod || fetchChatMessagesInPeriod;
   const setTicketResponsible =
     deps.setTicketResponsible || require('../../integrations/regos-crm').setTicketResponsible;
+  const setTicketStatus = deps.setTicketStatus || require('../../integrations/regos-crm').setTicketStatus;
+  const onTicketClose = typeof deps.onTicketClose === 'function' ? deps.onTicketClose : null;
   const getChatFilesByIds = deps.getChatFilesByIds || require('../../integrations/regos-crm').getChatFilesByIds;
   const download = deps.downloadChatFile || downloadChatFile;
   const downloadBytes = deps.downloadChatFileBytes || downloadChatFileBytes;
@@ -311,6 +313,22 @@ function createCustomerTools({
         if (!ticket?.id) return { ok: false, error: 'missing_ticket' };
         await setTicketResponsible(ticket.id, regosUserId);
         return { ok: true, responsible_user_id: regosUserId };
+      },
+    },
+    {
+      name: 'close_ticket',
+      description:
+        'Close the current support ticket. Use when the client request is fully resolved and no follow-up is needed. Do not close if you are waiting for data, escalated to staff, or still troubleshooting.',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => {
+        if (!ticket?.id) return { ok: false, error: 'missing_ticket' };
+        if (String(ticket.status || '') === 'Closed') return { ok: true, already_closed: true };
+        if (onTicketClose) {
+          onTicketClose();
+          return { ok: true, status: 'Closed' };
+        }
+        await setTicketStatus(ticket.id, 'Closed');
+        return { ok: true, status: 'Closed' };
       },
     },
     {
