@@ -105,7 +105,7 @@ export default function KnowledgePage() {
         title,
         body,
         tags,
-        category_id: Number.isFinite(category_id) && category_id > 0 ? category_id : null,
+        category_id: category_id != null && Number.isFinite(category_id) && category_id > 0 ? category_id : null,
       };
       if (editor?.id) return updateKnowledgeArticle(editor.id, payload);
       return createKnowledgeArticle(payload);
