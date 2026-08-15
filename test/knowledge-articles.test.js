@@ -354,3 +354,59 @@ describe('knowledge article lock API', () => {
     assert.ok(searchBody.total >= 1);
   });
 });
+
+describe('knowledge article search retrieval', () => {
+  let dbPath;
+  let db;
+
+  beforeEach(() => {
+    if (db) {
+      db.close();
+      db = null;
+    }
+    if (dbPath) removeDbFiles(dbPath);
+    dbPath = makeTempDbPath();
+    db = openDb(dbPath);
+    createKnowledgeArticle(db, {
+      title: 'Как нас найти — офисы, телефон, Telegram и Instagram',
+      body:
+        'Ташкент — Rofeev Technology. Адрес: Чиланзарский район. Самарканд — ул. Гагарина. Телефон офиса +998 55 701 00 08.',
+      tags: 'офис, адрес, контакты, telegram, ташкент, самарканд',
+    });
+  });
+
+  after(() => {
+    if (db) db.close();
+    if (dbPath) removeDbFiles(dbPath);
+  });
+
+  function assertFindsOffice(query) {
+    const found = listKnowledgeArticles(db, { query, limit: 10 });
+    assert.ok(
+      found.articles.some((article) => /как нас найти/i.test(article.title)),
+      `expected office article for query: ${query}`
+    );
+  }
+
+  it('finds office article by multi-token Russian query', () => {
+    assertFindsOffice('офис адрес');
+  });
+
+  it('finds office article by uzbek/english synonyms', () => {
+    assertFindsOffice('ofis manzil');
+  });
+
+  it('finds office article despite noisy mixed-language agent query', () => {
+    assertFindsOffice('офис qayerda joylashgan manzil REGOS ROFEEV');
+  });
+
+  it('matches Cyrillic title case-insensitively', () => {
+    assertFindsOffice('как нас найти');
+  });
+
+  it('returns empty for unrelated garbage', () => {
+    const found = listKnowledgeArticles(db, { query: 'xyzzy-no-such-article-qqq', limit: 10 });
+    assert.equal(found.total, 0);
+    assert.deepEqual(found.articles, []);
+  });
+});

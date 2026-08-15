@@ -68,6 +68,11 @@ const {
   resetCustomerTestLocks,
 } = require('../src/ai/customer-test-agent');
 const {
+  loadEmployeeTestSession,
+  runEmployeeTestAgent,
+  resetEmployeeTestLocks,
+} = require('../src/ai/employee-test-agent');
+const {
   loadTicketAssistSession,
   runTicketAssistAgent,
   resetTicketAssistLocks,
@@ -103,6 +108,7 @@ function createDb() {
 afterEach(() => {
   resetCustomerAgentLocks();
   resetCustomerTestLocks();
+  resetEmployeeTestLocks();
   resetTicketAssistLocks();
   clearTranscribeCache();
   clearCaptionCache();
@@ -399,6 +405,53 @@ describe('provider registry and runAgent', () => {
     });
     assert.equal(result.content, 'pong:hi');
     assert.equal(result.steps, 2);
+    assert.equal(result.trace.length, 2);
+    assert.equal(result.trace[0].type, 'tool_round');
+    assert.equal(result.trace[0].tool_calls[0].name, 'ping');
+    assert.deepEqual(result.trace[0].tool_calls[0].arguments, { value: 'hi' });
+    assert.equal(result.trace[0].tool_calls[0].ok, true);
+    assert.deepEqual(result.trace[0].tool_calls[0].result, { echo: 'hi' });
+    assert.equal(result.trace[1].type, 'final');
+    assert.equal(result.trace[1].content, 'pong:hi');
+  });
+
+  it('marks unknown and failed tools in the execution trace', async () => {
+    let step = 0;
+    const provider = {
+      async chat() {
+        step += 1;
+        if (step === 1) {
+          return {
+            content: '',
+            toolCalls: [
+              { id: 'call-missing', name: 'missing', arguments: '{}' },
+              { id: 'call-fail', name: 'fail', arguments: '{}' },
+            ],
+          };
+        }
+        return { content: 'done', toolCalls: [] };
+      },
+    };
+    const result = await runAgent({
+      provider,
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [
+        {
+          name: 'fail',
+          description: 'Fail',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => {
+            throw new Error('boom');
+          },
+        },
+      ],
+    });
+    assert.equal(result.trace[0].tool_calls[0].ok, false);
+    assert.match(String(result.trace[0].tool_calls[0].error), /unknown_tool:missing/);
+    assert.equal(result.trace[0].tool_calls[1].ok, false);
+    assert.equal(result.trace[0].tool_calls[1].error, 'boom');
+    assert.equal(result.trace[1].type, 'final');
   });
 
   it('forwards promptCacheKey and returns usage from the last chat call', async () => {
@@ -2315,7 +2368,29 @@ describe('customer test agent', () => {
           assert.equal(notifyResult.ok, true);
           assert.equal(assignResult.ok, true);
           assert.equal(messages.at(-1).content, 'Сколько стоит техподдержка?');
-          return { content: 'Сейчас посмотрю прайс.', steps: 2 };
+          return {
+            content: 'Сейчас посмотрю прайс.',
+            steps: 2,
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+            trace: [
+              {
+                step: 1,
+                type: 'tool_round',
+                assistant_content: null,
+                tool_calls: [
+                  {
+                    id: 'c1',
+                    name: 'notify_employee',
+                    arguments: { employee_id: 7 },
+                    result: { ok: true },
+                    ok: true,
+                    error: null,
+                  },
+                ],
+              },
+              { step: 2, type: 'final', content: 'Сейчас посмотрю прайс.' },
+            ],
+          };
         },
       },
     });
@@ -2329,6 +2404,10 @@ describe('customer test agent', () => {
     assert.equal(result.messages.length, 2);
     assert.equal(result.messages[0].role, 'user');
     assert.equal(result.messages[1].role, 'assistant');
+    assert.equal(result.steps, 2);
+    assert.equal(result.trace.length, 2);
+    assert.equal(result.trace[0].tool_calls[0].name, 'notify_employee');
+    assert.deepEqual(result.usage, { prompt_tokens: 10, completion_tokens: 5 });
   });
 
   it('stubs group topic sends in the sandbox when the allowlist is configured', async () => {
@@ -2435,6 +2514,92 @@ describe('customer test agent', () => {
     assert.equal(last.content[1].type, 'image_url');
     assert.equal(result.messages[0].files[0].kind, 'image');
     assert.equal(result.reply, 'Вижу фото.');
+  });
+});
+
+describe('employee test agent', () => {
+  it('keeps employee sandbox sessions separate from customer ones', async () => {
+    const database = createDb();
+    const customer = await loadCustomerTestSession({
+      db: database,
+      userId: 3,
+      requireTicket: false,
+    });
+    const employee = await loadEmployeeTestSession({
+      db: database,
+      userId: 3,
+      requireTicket: false,
+    });
+    assert.notEqual(customer.session_id, employee.session_id);
+  });
+
+  it('simulates reply_to_customer and returns an execution trace', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: false, model: 'gpt-4o-mini' });
+    let posted = false;
+    const result = await runEmployeeTestAgent({
+      db: database,
+      userId: 4,
+      message: 'Ответь клиенту, что прайс на сайте',
+      ticketId: 77,
+      deps: {
+        findTicketById: async (id) => ({
+          id,
+          status: 'Open',
+          subject: 'Прайс',
+          chat_id: 'chat-77',
+          client: { name: 'Клиент', phone: '+99890' },
+        }),
+        getTicketMessages: async () => ({
+          result: [{ id: '1', author_entity_type: 'Client', message_type: 'Regular', text: 'Сколько стоит?' }],
+        }),
+        getChatFilesByIds: async () => [],
+        addTicketMessage: async () => {
+          posted = true;
+          return { ok: true };
+        },
+        runAgent: async ({ tools, system, promptCacheKey }) => {
+          assert.match(system, /песочница/i);
+          assert.match(promptCacheKey, /^employee_test:/);
+          const replyTool = tools.find((tool) => tool.name === 'reply_to_customer');
+          assert.ok(replyTool);
+          const sent = await replyTool.execute({ text: 'Прайс на сайте.' });
+          assert.equal(sent.ok, true);
+          assert.equal(sent.simulated, true);
+          return {
+            content: 'Отправил клиенту.',
+            steps: 2,
+            usage: { prompt_tokens: 11, completion_tokens: 4 },
+            trace: [
+              {
+                step: 1,
+                type: 'tool_round',
+                assistant_content: null,
+                tool_calls: [
+                  {
+                    id: 'r1',
+                    name: 'reply_to_customer',
+                    arguments: { text: 'Прайс на сайте.' },
+                    result: sent,
+                    ok: true,
+                    error: null,
+                  },
+                ],
+              },
+              { step: 2, type: 'final', content: 'Отправил клиенту.' },
+            ],
+          };
+        },
+      },
+    });
+
+    assert.equal(posted, false);
+    assert.equal(result.reply, 'Отправил клиенту.');
+    assert.equal(result.replied_to_customer, true);
+    assert.equal(result.customer_reply, 'Прайс на сайте.');
+    assert.equal(result.trace[0].tool_calls[0].name, 'reply_to_customer');
+    assert.equal(result.steps, 2);
+    assert.deepEqual(result.usage, { prompt_tokens: 11, completion_tokens: 4 });
   });
 });
 

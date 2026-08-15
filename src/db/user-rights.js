@@ -159,7 +159,7 @@ const RIGHTS = {
   },
   ai_customer_test: {
     column: 'ai_customer_test',
-    label: 'Админ: тест агента поддержки',
+    label: 'Админ: тест агентов',
   },
 };
 

@@ -95,11 +95,14 @@ const READ_TOOLS = [
   {
     name: 'knowledge_search',
     description:
-      'Search the project knowledge base by keywords. Empty query returns recently updated articles.',
+      'Search the project knowledge base by short keywords (2–6 terms; prefer Russian synonyms used in articles). Empty query returns recently updated articles.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search query. Empty returns recent articles.' },
+        query: {
+          type: 'string',
+          description: 'Short keyword query. Empty returns recent articles. Do not paste full sentences.',
+        },
         limit: { type: 'integer', description: 'Max results (1–200, default 100).' },
       },
     },
@@ -179,11 +182,13 @@ function callTool(db, name, args = {}) {
 
   switch (name) {
     case 'knowledge_search': {
+      const queryUsed = args.query == null ? '' : String(args.query);
       const { articles } = listKnowledgeArticles(db, {
         query: args.query,
         limit: args.limit,
       });
       return textResult({
+        query_used: queryUsed.trim(),
         articles: articles.map((article) => ({
           id: article.id,
           title: article.title,

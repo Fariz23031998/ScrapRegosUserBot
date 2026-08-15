@@ -15,7 +15,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/technical-support", label: "Техподдержка", permission: "technical_support_read" },
   { to: "/prices", label: "Прайс", permission: "prices_read" },
   { to: "/knowledge", label: "База знаний", permission: "knowledge_read" },
-  { to: "/customer-agent", label: "Агент поддержки", permission: "ai_customer_test" },
+  { to: "/test-agents", label: "Тест агентов", permission: "ai_customer_test" },
   { to: "/prompts", label: "Промпты", permission: "settings_read" },
   { to: "/settings", label: "Настройки", permission: "settings_read" },
 ];

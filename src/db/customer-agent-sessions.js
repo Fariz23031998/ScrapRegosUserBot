@@ -1,5 +1,7 @@
 const { mapSessionMessage, stringifyAttachments } = require('../ai/chat-uploads');
 
+const AGENT_KINDS = new Set(['customer', 'employee']);
+
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(name));
 }
@@ -8,6 +10,11 @@ function ensureColumn(db, table, column, ddl) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
   if (cols.some((col) => col.name === column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
+function normalizeAgentKind(value) {
+  const kind = String(value || 'customer').trim();
+  return AGENT_KINDS.has(kind) ? kind : 'customer';
 }
 
 function ensureCustomerTestTables(db) {
@@ -31,6 +38,9 @@ function ensureCustomerTestTables(db) {
       FOREIGN KEY (session_id) REFERENCES ai_customer_test_sessions(id) ON DELETE CASCADE
     );
   `);
+  if (tableExists(db, 'ai_customer_test_sessions')) {
+    ensureColumn(db, 'ai_customer_test_sessions', 'agent_kind', "TEXT NOT NULL DEFAULT 'customer'");
+  }
   if (tableExists(db, 'ai_customer_test_messages')) {
     ensureColumn(db, 'ai_customer_test_messages', 'attachments', 'TEXT');
   }
@@ -54,6 +64,7 @@ function mapSession(row) {
     user_id: row.user_id != null ? Number(row.user_id) : null,
     ticket_id: row.ticket_id != null ? Number(row.ticket_id) : null,
     client_phone: row.client_phone || null,
+    agent_kind: normalizeAgentKind(row.agent_kind),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -66,37 +77,42 @@ function getCustomerTestSession(db, sessionId) {
   return mapSession(db.prepare('SELECT * FROM ai_customer_test_sessions WHERE id = ?').get(id));
 }
 
-function createCustomerTestSession(db, { userId, ticketId, clientPhone } = {}) {
+function createCustomerTestSession(db, { userId, ticketId, clientPhone, agentKind } = {}) {
   ensureCustomerTestTables(db);
+  const kind = normalizeAgentKind(agentKind);
   const result = db
     .prepare(
-      `INSERT INTO ai_customer_test_sessions (user_id, ticket_id, client_phone, created_at, updated_at)
-       VALUES (?, ?, ?, datetime('now'), datetime('now'))`
+      `INSERT INTO ai_customer_test_sessions (user_id, ticket_id, client_phone, agent_kind, created_at, updated_at)
+       VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`
     )
-    .run(userId ?? null, normalizeOptionalTicketId(ticketId), normalizeOptionalPhone(clientPhone));
+    .run(userId ?? null, normalizeOptionalTicketId(ticketId), normalizeOptionalPhone(clientPhone), kind);
   return getCustomerTestSession(db, Number(result.lastInsertRowid));
 }
 
-function getOrCreateCustomerTestSession(db, { sessionId, userId, ticketId, clientPhone, reset = false } = {}) {
+function getOrCreateCustomerTestSession(
+  db,
+  { sessionId, userId, ticketId, clientPhone, agentKind, reset = false } = {}
+) {
   ensureCustomerTestTables(db);
+  const kind = normalizeAgentKind(agentKind);
   if (!reset && sessionId) {
     const existing = getCustomerTestSession(db, sessionId);
-    if (existing) return existing;
+    if (existing && existing.agent_kind === kind) return existing;
   }
   if (!reset && userId != null) {
     const latest = mapSession(
       db
         .prepare(
           `SELECT * FROM ai_customer_test_sessions
-           WHERE user_id = ?
+           WHERE user_id = ? AND COALESCE(agent_kind, 'customer') = ?
            ORDER BY datetime(updated_at) DESC, id DESC
            LIMIT 1`
         )
-        .get(Number(userId))
+        .get(Number(userId), kind)
     );
     if (latest) return latest;
   }
-  return createCustomerTestSession(db, { userId, ticketId, clientPhone });
+  return createCustomerTestSession(db, { userId, ticketId, clientPhone, agentKind: kind });
 }
 
 function updateCustomerTestSession(db, sessionId, { ticketId, clientPhone } = {}) {
@@ -143,6 +159,7 @@ function addCustomerTestMessage(db, sessionId, { role, content, attachments } = 
 
 module.exports = {
   ensureCustomerTestTables,
+  normalizeAgentKind,
   getCustomerTestSession,
   createCustomerTestSession,
   getOrCreateCustomerTestSession,

@@ -17,7 +17,7 @@ const TechnicalSupportPage = lazy(() => import("./pages/TechnicalSupportPage"));
 const PricesPage = lazy(() => import("./pages/PricesPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
-const CustomerAgentPage = lazy(() => import("./pages/CustomerAgentPage"));
+const TestAgentsPage = lazy(() => import("./pages/TestAgentsPage"));
 const PromptsPage = lazy(() => import("./pages/PromptsPage"));
 
 function SuspensePage({ children }: { children: React.ReactNode }) {
@@ -137,11 +137,12 @@ export default function App() {
             />
           </Route>
           <Route element={<ProtectedRoute permission="ai_customer_test" />}>
+            <Route path="customer-agent" element={<Navigate to="/test-agents" replace />} />
             <Route
-              path="customer-agent"
+              path="test-agents"
               element={
                 <SuspensePage>
-                  <CustomerAgentPage />
+                  <TestAgentsPage />
                 </SuspensePage>
               }
             />

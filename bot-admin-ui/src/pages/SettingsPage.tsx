@@ -14,6 +14,11 @@ import type { AiGroupTopic, AiPromptSlug, AiSettings, AiToolSchema, ChannelSetti
 const CUSTOM_MODEL = "__custom__";
 const DEFAULT_AGENT_MODEL = "__default__";
 
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  gemini: "Gemini",
+};
+
 type SettingsTab = "ai" | "tools" | "channels";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
@@ -55,6 +60,14 @@ function formatAgentLabels(agents: AiPromptSlug[] | undefined) {
   return agents.map((slug) => AGENT_TITLES[slug] || slug).join(", ");
 }
 
+function credentialStatusLabel(configured?: boolean, hint?: string, source?: string) {
+  if (!configured) return "не задан";
+  const masked = hint ? `••••${hint}` : "задан";
+  if (source === "database") return `${masked} (БД)`;
+  if (source === "env") return `${masked} (env)`;
+  return masked;
+}
+
 export default function SettingsPage() {
   const { hasPermission } = useAuth();
   const queryClient = useQueryClient();
@@ -66,6 +79,10 @@ export default function SettingsPage() {
   const [customModel, setCustomModel] = useState("");
   const [customAgentModels, setCustomAgentModels] = useState<Partial<Record<AiPromptSlug, string>>>({});
   const [customTranscribe, setCustomTranscribe] = useState("");
+  const [openaiApiKeyDraft, setOpenaiApiKeyDraft] = useState("");
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState("");
+  const [clearOpenaiApiKey, setClearOpenaiApiKey] = useState(false);
+  const [clearGeminiApiKey, setClearGeminiApiKey] = useState(false);
   const [groupTestOpen, setGroupTestOpen] = useState(false);
   const [toolTestName, setToolTestName] = useState<string | null>(null);
 
@@ -82,6 +99,10 @@ export default function SettingsPage() {
     const transcribeKnown = data.transcribe_models || [];
     const transcribe = data.transcribe_model || "";
     setCustomTranscribe(transcribeKnown.includes(transcribe) ? "" : transcribe);
+    setOpenaiApiKeyDraft("");
+    setGeminiApiKeyDraft("");
+    setClearOpenaiApiKey(false);
+    setClearGeminiApiKey(false);
   }
 
   const query = useQuery({
@@ -125,7 +146,10 @@ export default function SettingsPage() {
     mutationFn: () => {
       const settings = aiDraft;
       if (!settings) throw new Error("Настройки AI не загружены.");
-      const known = settings.models || [];
+      const known =
+        (settings.provider && settings.models_by_provider?.[settings.provider]) ||
+        settings.models ||
+        [];
       const model = resolveListedModel(settings.model, known, customModel);
       const transcribeKnown = settings.transcribe_models || [];
       const transcribeModel = resolveListedModel(
@@ -150,6 +174,17 @@ export default function SettingsPage() {
         group_chat_id: settings.group_chat_id || "",
         group_topics: settings.group_topics || [],
         disabled_tools: settings.disabled_tools || [],
+        openai_base_url: settings.openai_base_url || "",
+        ...(clearOpenaiApiKey
+          ? { openai_api_key: "" }
+          : openaiApiKeyDraft.trim()
+            ? { openai_api_key: openaiApiKeyDraft.trim() }
+            : {}),
+        ...(clearGeminiApiKey
+          ? { gemini_api_key: "" }
+          : geminiApiKeyDraft.trim()
+            ? { gemini_api_key: geminiApiKeyDraft.trim() }
+            : {}),
       });
     },
     onSuccess: (data) => {
@@ -166,7 +201,10 @@ export default function SettingsPage() {
   const ai = aiDraft || aiQuery.data;
   const savedTopics = (aiQuery.data?.group_topics || []).filter((topic) => String(topic.key || "").trim());
   const canTestGroup = Boolean(canEdit && aiQuery.data?.group_chat_id && savedTopics.length);
-  const suggestedModels = ai?.models || ["gpt-4.1", "gpt-4o", "gpt-4o-mini"];
+  const suggestedModels =
+    (ai?.provider && ai?.models_by_provider?.[ai.provider]) ||
+    ai?.models ||
+    ["gpt-4.1", "gpt-4o", "gpt-4o-mini"];
   const transcribeModels = ai?.transcribe_models || ["gpt-4o-transcribe", "gpt-transcribe", "whisper-1"];
   const agentSlugs = ai?.agent_model_slugs || (Object.keys(AGENT_TITLES) as AiPromptSlug[]);
   const modelValue = ai && suggestedModels.includes(ai.model) ? ai.model : CUSTOM_MODEL;
@@ -463,6 +501,117 @@ export default function SettingsPage() {
                 )}
               </div>
               <label>
+                Провайдер
+                <select
+                  value={ai.provider || "openai"}
+                  disabled={!canEdit}
+                  onChange={(event) => {
+                    const provider = event.target.value;
+                    const models = ai.models_by_provider?.[provider] || suggestedModels;
+                    setAiDraft({ ...ai, provider, models });
+                  }}
+                >
+                  {(ai.providers || ["openai", "gemini"]).map((provider) => (
+                    <option key={provider} value={provider}>
+                      {PROVIDER_LABELS[provider] || provider}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="settings-credentials">
+                <strong>API-ключи</strong>
+                <p className="muted-copy">
+                  Ключи сохраняются в базе. Если поле в БД пустое, используется значение из env. GET никогда не
+                  возвращает полный ключ.
+                </p>
+                <label>
+                  OpenAI API key
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={clearOpenaiApiKey ? "" : openaiApiKeyDraft}
+                    disabled={!canEdit || clearOpenaiApiKey}
+                    placeholder={
+                      clearOpenaiApiKey
+                        ? "Будет очищен в БД"
+                        : credentialStatusLabel(
+                            ai.openai_api_key_configured,
+                            ai.openai_api_key_hint,
+                            ai.openai_api_key_source,
+                          )
+                    }
+                    onChange={(event) => {
+                      setClearOpenaiApiKey(false);
+                      setOpenaiApiKeyDraft(event.target.value);
+                    }}
+                  />
+                </label>
+                {canEdit ? (
+                  <div className="settings-credentials__actions">
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => {
+                        setOpenaiApiKeyDraft("");
+                        setClearOpenaiApiKey(true);
+                      }}
+                    >
+                      Очистить ключ OpenAI в БД
+                    </button>
+                  </div>
+                ) : null}
+                <label>
+                  OpenAI base URL
+                  <input
+                    value={ai.openai_base_url || ""}
+                    disabled={!canEdit}
+                    placeholder="https://api.openai.com/v1 (или из env)"
+                    onChange={(event) => setAiDraft({ ...ai, openai_base_url: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Gemini API key
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={clearGeminiApiKey ? "" : geminiApiKeyDraft}
+                    disabled={!canEdit || clearGeminiApiKey}
+                    placeholder={
+                      clearGeminiApiKey
+                        ? "Будет очищен в БД"
+                        : credentialStatusLabel(
+                            ai.gemini_api_key_configured,
+                            ai.gemini_api_key_hint,
+                            ai.gemini_api_key_source,
+                          )
+                    }
+                    onChange={(event) => {
+                      setClearGeminiApiKey(false);
+                      setGeminiApiKeyDraft(event.target.value);
+                    }}
+                  />
+                </label>
+                {canEdit ? (
+                  <div className="settings-credentials__actions">
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={() => {
+                        setGeminiApiKeyDraft("");
+                        setClearGeminiApiKey(true);
+                      }}
+                    >
+                      Очистить ключ Gemini в БД
+                    </button>
+                  </div>
+                ) : null}
+                {ai.provider === "gemini" ? (
+                  <p className="muted-copy">
+                    Расшифровка голоса по-прежнему идёт через OpenAI (Whisper) — для STT нужен ключ OpenAI.
+                  </p>
+                ) : null}
+              </div>
+              <label>
                 Модель по умолчанию
                 <select
                   value={modelValue}
@@ -612,7 +761,7 @@ export default function SettingsPage() {
               </p>
               {hasPermission("ai_customer_test") ? (
                 <p className="muted-copy">
-                  <Link to="/customer-agent">Открыть тестовый чат агента поддержки</Link>
+                  <Link to="/test-agents">Открыть тест агентов</Link>
                 </p>
               ) : null}
               <p className="muted-copy">
@@ -639,7 +788,7 @@ export default function SettingsPage() {
                     Песочницы агентов:{" "}
                     {hasPermission("ai_customer_test") ? (
                       <>
-                        <Link to="/customer-agent">Агент поддержки</Link>
+                        <Link to="/test-agents">Тест агентов</Link>
                         {" · "}
                       </>
                     ) : null}

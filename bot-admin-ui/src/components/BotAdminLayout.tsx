@@ -41,7 +41,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "/technical-support": Headphones,
   "/prices": LayoutDashboard,
   "/knowledge": BookOpen,
-  "/customer-agent": Bot,
+  "/test-agents": Bot,
   "/prompts": FilePen,
   "/settings": Settings,
 };

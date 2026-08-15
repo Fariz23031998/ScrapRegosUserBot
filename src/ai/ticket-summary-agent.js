@@ -318,6 +318,7 @@ async function summarizeClosedTicket({ db, ticket, occurredAt, now, deps = {} } 
         db,
         ticketId: resolved.id,
         source: 'caption',
+        providerName: settings.provider,
         ...options,
       });
     const lines = await buildTranscriptLines(messages, {

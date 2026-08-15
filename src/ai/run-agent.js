@@ -34,6 +34,28 @@ function parseToolArguments(raw) {
   }
 }
 
+function parseToolResultContent(content) {
+  const text = String(content || '');
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function summarizeToolResult(content) {
+  const parsed = parseToolResultContent(content);
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const ok = parsed.ok !== false && !parsed.error;
+    return {
+      result: parsed,
+      ok,
+      error: ok ? null : String(parsed.error || 'tool_failed'),
+    };
+  }
+  return { result: parsed, ok: true, error: null };
+}
+
 function findTool(tools, name) {
   return (tools || []).find((tool) => tool.name === name) || null;
 }
@@ -98,6 +120,7 @@ async function runAgent({
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(limitMs) || DEFAULT_TIMEOUT_MS));
   const history = [];
+  const trace = [];
   if (system) {
     history.push({ role: 'system', content: String(system) });
   }
@@ -137,15 +160,27 @@ async function runAgent({
             function: { name: call.name, arguments: call.arguments },
           })),
         });
+        const tracedCalls = [];
         for (const call of toolCalls) {
           const tool = findTool(tools, call.name);
+          const args = parseToolArguments(call.arguments);
           const executed = tool
-            ? await executeTool(tool, parseToolArguments(call.arguments))
+            ? await executeTool(tool, args)
             : { content: JSON.stringify({ ok: false, error: `unknown_tool:${call.name}` }), visionParts: null };
+          const truncated = truncateText(executed.content, 8000);
           history.push({
             role: 'tool',
             tool_call_id: call.id,
-            content: truncateText(executed.content, 8000),
+            content: truncated,
+          });
+          const summary = summarizeToolResult(truncated);
+          tracedCalls.push({
+            id: call.id,
+            name: call.name,
+            arguments: args,
+            result: summary.result,
+            ok: summary.ok,
+            error: summary.error,
           });
           if (executed.visionParts?.length) {
             history.push({
@@ -157,23 +192,42 @@ async function runAgent({
             });
           }
         }
+        trace.push({
+          step: step + 1,
+          type: 'tool_round',
+          assistant_content: response.content || null,
+          tool_calls: tracedCalls,
+        });
         continue;
       }
 
       const content = truncateText(response.content);
+      trace.push({
+        step: step + 1,
+        type: 'final',
+        content,
+      });
       return {
         content,
         steps: step + 1,
         messages: history,
         usage: lastUsage,
+        trace,
       };
     }
+    trace.push({
+      step: maxSteps,
+      type: 'final',
+      content: '',
+      stopped: 'max_steps',
+    });
     return {
       content: '',
       steps: maxSteps,
       messages: history,
       stopped: 'max_steps',
       usage: lastUsage,
+      trace,
     };
   } finally {
     clearTimeout(timer);

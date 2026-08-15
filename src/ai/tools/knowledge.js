@@ -11,17 +11,23 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
   const tools = [
     {
       name: 'search_knowledge',
-      description: 'Search the internal knowledge base by keywords. Use this before answering questions about prices, handoff, or procedures.',
+      description:
+        'Search the internal knowledge base by keywords (2–6 short terms). Prefer Russian KB wording and synonyms (e.g. «офис адрес контакты»). Do not paste the full customer sentence.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Search query' },
+          query: {
+            type: 'string',
+            description: 'Short keyword query, not the full user message',
+          },
         },
         required: ['query'],
       },
       execute: async ({ query }) => {
-        const { articles } = listKnowledgeArticles(db, { query, limit: 8 });
+        const queryUsed = String(query || '').trim();
+        const { articles } = listKnowledgeArticles(db, { query: queryUsed, limit: 8 });
         return {
+          query_used: queryUsed,
           articles: articles.map((article) => ({
             id: article.id,
             title: article.title,

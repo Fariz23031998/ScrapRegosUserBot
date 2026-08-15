@@ -237,6 +237,7 @@ describe('knowledge MCP HTTP', () => {
     assert.equal(search.statusCode, 200);
     const searchPayload = parseToolPayload(search);
     assert.equal(searchPayload.isError, false);
+    assert.equal(searchPayload.data.query_used, 'прайс');
     assert.ok(searchPayload.data.articles.some((article) => /прайс/i.test(article.title)));
 
     const create = await callMcp(

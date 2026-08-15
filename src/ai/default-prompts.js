@@ -21,6 +21,10 @@ const CUSTOMER_ASSIST_PROMPT_SUFFIX = `Сейчас ты в закрытом ч�
 Отвечай сотруднику кратко: уточни план или задай вопрос.
 Чтобы клиент увидел ответ, вызови reply_to_customer с готовым текстом. Пока инструмент не вызван, клиент ничего не получит.`;
 
+const EMPLOYEE_TEST_PROMPT_SUFFIX = `Сейчас сотрудник тестирует агента в админ-панели.
+Это песочница: reply_to_customer и уведомления только имитируются и не уходят клиенту или в REGOS.
+Всё равно вызывай инструменты так же, как в реальной работе.`;
+
 const TICKET_SUMMARY_SYSTEM_PROMPT = `Ты готовишь краткую сводку закрытого обращения поддержки REGOS / ROFEEV.
 Пиши по-русски, 4–8 предложений. Опирайся только на переписку.
 Укажи: с чем обратился клиент, что уже проверили или сделали, чем закончилось, и что важно знать в следующем обращении.
@@ -66,6 +70,7 @@ module.exports = {
   KB_SYSTEM_PROMPT,
   CUSTOMER_TEST_PROMPT_SUFFIX,
   CUSTOMER_ASSIST_PROMPT_SUFFIX,
+  EMPLOYEE_TEST_PROMPT_SUFFIX,
   TICKET_SUMMARY_SYSTEM_PROMPT,
   PROMPT_SLOTS,
   isPromptSlug,

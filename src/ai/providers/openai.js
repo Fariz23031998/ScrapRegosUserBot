@@ -1,13 +1,12 @@
 const { isReasoningModel } = require('../settings');
+const { resolveOpenAiConfig } = require('../provider-secrets');
 
 const DEFAULT_MAX_COMPLETION_TOKENS = 4096;
 const ALLOWED_REASONING_EFFORTS = ['none', 'low', 'medium', 'high'];
 const MAX_PROMPT_CACHE_KEY_LENGTH = 64;
 
 function getOpenAiConfig() {
-  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
-  const baseURL = String(process.env.OPENAI_BASE_URL || '').trim() || undefined;
-  return { apiKey, baseURL };
+  return resolveOpenAiConfig();
 }
 
 function toOpenAiTools(tools) {

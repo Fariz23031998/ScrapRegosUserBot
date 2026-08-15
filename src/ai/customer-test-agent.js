@@ -24,12 +24,12 @@ function buildCustomerTestSystemPrompt(db) {
 ${CUSTOMER_TEST_PROMPT_SUFFIX}`;
 }
 
-function buildSyntheticTicket({ clientPhone } = {}) {
+function buildSyntheticTicket({ clientPhone, subject } = {}) {
   const phone = String(clientPhone || '').trim() || null;
   return {
     id: null,
     status: 'Open',
-    subject: 'Тестовый чат агента поддержки',
+    subject: subject || 'Тестовый чат агента поддержки',
     chat_id: null,
     client_id: null,
     client: {
@@ -81,7 +81,7 @@ function sessionMessagesAsChat(messages) {
   }));
 }
 
-async function resolveTestTicket({ ticketId, clientPhone, deps = {} } = {}) {
+async function resolveTestTicket({ ticketId, clientPhone, subject, deps = {} } = {}) {
   const id = Number(ticketId);
   if (Number.isFinite(id) && id > 0) {
     const findTicket = deps.findTicketById || require('../integrations/regos-crm').findTicketById;
@@ -91,7 +91,7 @@ async function resolveTestTicket({ ticketId, clientPhone, deps = {} } = {}) {
     }
     return applyClientPhone(ticket, clientPhone || ticket.client?.phone);
   }
-  return buildSyntheticTicket({ clientPhone });
+  return buildSyntheticTicket({ clientPhone, subject });
 }
 
 function serializeCustomerTestSession(db, session, ticket = null) {
@@ -119,6 +119,7 @@ async function loadCustomerTestSession({
     userId,
     ticketId,
     clientPhone,
+    agentKind: 'customer',
     reset,
   });
   if (ticketId !== undefined || clientPhone !== undefined) {
@@ -165,6 +166,7 @@ async function runCustomerTestAgent({
     userId,
     ticketId,
     clientPhone,
+    agentKind: 'customer',
   });
   if (ticketId !== undefined || clientPhone !== undefined) {
     session =
@@ -174,7 +176,7 @@ async function runCustomerTestAgent({
       }) || session;
   }
 
-  const lockKey = String(session.id);
+  const lockKey = `customer:${session.id}`;
   if (inflightSessions.has(lockKey)) {
     throw new Error('SESSION_BUSY');
   }
@@ -264,6 +266,10 @@ async function runCustomerTestAgent({
     return {
       ...serializeCustomerTestSession(db, session, ticket),
       reply,
+      steps: result.steps ?? null,
+      usage: result.usage ?? null,
+      stopped: result.stopped ?? null,
+      trace: Array.isArray(result.trace) ? result.trace : [],
     };
   } finally {
     inflightSessions.delete(lockKey);
@@ -278,7 +284,11 @@ module.exports = {
   CUSTOMER_TEST_SYSTEM_PROMPT,
   buildCustomerTestSystemPrompt,
   buildSyntheticTicket,
+  applyClientPhone,
   mapTestTicketContext,
+  sessionMessagesAsChat,
+  resolveTestTicket,
+  serializeCustomerTestSession,
   loadCustomerTestSession,
   runCustomerTestAgent,
   resetCustomerTestLocks,

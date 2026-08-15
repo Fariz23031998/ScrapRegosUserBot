@@ -5,6 +5,56 @@ const MAX_BODY = 20000;
 const MAX_TAGS = 300;
 const ARTICLE_COLUMNS = 'id, title, body, tags, locked, updated_by, created_at, updated_at';
 
+/** Tokens ignored during knowledge search (ru / uz / en). */
+const SEARCH_STOPWORDS = new Set([
+  'и',
+  'в',
+  'на',
+  'по',
+  'с',
+  'к',
+  'о',
+  'у',
+  'из',
+  'за',
+  'от',
+  'для',
+  'или',
+  'как',
+  'что',
+  'это',
+  'the',
+  'a',
+  'an',
+  'of',
+  'to',
+  'in',
+  'on',
+  'for',
+  'or',
+  'and',
+  'is',
+  'at',
+  'da',
+  'ham',
+  'bilan',
+  'uchun',
+  'qayerda',
+  'qayer',
+  'joylashgan',
+  'bormi',
+]);
+
+/** Synonym groups so uz/en queries hit Russian KB wording. */
+const SEARCH_SYNONYM_GROUPS = [
+  ['офис', 'офисы', 'ofis', 'ofisingiz', 'адрес', 'адреса', 'manzil', 'филиал', 'location', 'contact', 'контакты', 'контакт'],
+  ['прайс', 'цена', 'цены', 'стоимость', 'narx', 'price', 'prices'],
+  ['менеджер', 'продажи', 'sales', 'эскалация'],
+  ['заказ', 'заказы', 'оплата', 'техподдержка', 'поддержка', 'support'],
+  ['телефон', 'phone', 'telegram', 'instagram'],
+  ['ташкент', 'toshkent', 'самарканд', 'samarqand', 'samarkand'],
+];
+
 const SEED_ARTICLES = [
   {
     title: 'Прайс и стоимость услуг',
@@ -55,12 +105,106 @@ function ensureKnowledgeFts(db) {
         VALUES (new.id, new.title, new.body, COALESCE(new.tags, ''));
       END;
     `);
+    db.exec(`INSERT INTO knowledge_articles_fts(knowledge_articles_fts) VALUES('rebuild')`);
   } catch (error) {
     if (!ensureKnowledgeFts.warned) {
       ensureKnowledgeFts.warned = true;
       console.warn('[knowledge] FTS5 unavailable, falling back to LIKE search:', error.message);
     }
   }
+}
+
+function foldSearchText(value) {
+  return String(value || '').toLocaleLowerCase('ru-RU');
+}
+
+function tokenizeKnowledgeQuery(query) {
+  const parts = String(query || '')
+    .split(/[^\p{L}\p{N}_]+/u)
+    .map((part) => foldSearchText(part))
+    .filter((part) => part.length >= 3 && !SEARCH_STOPWORDS.has(part));
+  return [...new Set(parts)];
+}
+
+function synonymVariantsForToken(token) {
+  const folded = foldSearchText(token);
+  const variants = new Set([folded]);
+  for (const group of SEARCH_SYNONYM_GROUPS) {
+    const hit = group.some((member) => {
+      const m = foldSearchText(member);
+      return m === folded || (m.length >= 3 && (folded.startsWith(m) || m.startsWith(folded)));
+    });
+    if (hit) {
+      for (const member of group) variants.add(foldSearchText(member));
+    }
+  }
+  return [...variants];
+}
+
+function expandKnowledgeSearchTokens(tokens) {
+  const out = new Set();
+  for (const token of tokens) {
+    for (const variant of synonymVariantsForToken(token)) out.add(variant);
+  }
+  return [...out];
+}
+
+function escapeFtsToken(token) {
+  return String(token || '').replace(/"/g, '""');
+}
+
+function buildFtsOrQuery(tokens) {
+  return tokens
+    .map((token) => {
+      const escaped = escapeFtsToken(token);
+      if (!escaped) return null;
+      return `"${escaped}"*`;
+    })
+    .filter(Boolean)
+    .join(' OR ');
+}
+
+function scoreArticleAgainstTokens(article, queryTokens) {
+  const title = foldSearchText(article.title);
+  const body = foldSearchText(article.body);
+  const tags = foldSearchText(article.tags);
+  let score = 0;
+  let hits = 0;
+  for (const token of queryTokens) {
+    const variants = synonymVariantsForToken(token);
+    let best = 0;
+    for (const variant of variants) {
+      if (!variant) continue;
+      if (title.includes(variant)) best = Math.max(best, 8);
+      else if (tags.includes(variant)) best = Math.max(best, 5);
+      else if (body.includes(variant)) best = Math.max(best, 2);
+    }
+    if (best > 0) {
+      hits += 1;
+      score += best;
+    }
+  }
+  if (!hits) return 0;
+  return score + hits * 10;
+}
+
+function searchArticlesByTokens(db, { queryTokens, limit, offset }) {
+  if (!queryTokens.length) return { articles: [], total: 0 };
+  const rows = db.prepare(`SELECT ${ARTICLE_COLUMNS} FROM knowledge_articles`).all().map(mapArticle);
+  const scored = [];
+  for (const article of rows) {
+    const score = scoreArticleAgainstTokens(article, queryTokens);
+    if (score > 0) scored.push({ article, score });
+  }
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const byDate = String(b.article.updated_at || '').localeCompare(String(a.article.updated_at || ''));
+    if (byDate) return byDate;
+    return Number(b.article.id) - Number(a.article.id);
+  });
+  const total = scored.length;
+  const articles = scored.slice(offset, offset + limit).map((row) => row.article);
+  return { articles, total };
 }
 
 function seedKnowledgeArticles(db) {
@@ -157,51 +301,47 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0 } = {}) {
     return { articles, total };
   }
 
+  const queryTokens = tokenizeKnowledgeQuery(trimmed);
+  const matchTokens = expandKnowledgeSearchTokens(queryTokens);
+  if (!matchTokens.length) return { articles: [], total: 0 };
+
   if (tableExists(db, 'knowledge_articles_fts')) {
     try {
-      const total = db
-        .prepare(
-          `SELECT COUNT(*) AS count
-           FROM knowledge_articles_fts
-           WHERE knowledge_articles_fts MATCH ?`
-        )
-        .get(trimmed).count;
-      const articles = db
-        .prepare(
-          `SELECT a.id, a.title, a.body, a.tags, a.locked, a.updated_by, a.created_at, a.updated_at
-           FROM knowledge_articles_fts f
-           JOIN knowledge_articles a ON a.id = f.rowid
-           WHERE knowledge_articles_fts MATCH ?
-           ORDER BY rank
-           LIMIT ? OFFSET ?`
-        )
-        .all(trimmed, safeLimit, safeOffset)
-        .map(mapArticle);
-      return { articles, total };
+      const ftsQuery = buildFtsOrQuery(matchTokens);
+      if (ftsQuery) {
+        const total = db
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM knowledge_articles_fts
+             WHERE knowledge_articles_fts MATCH ?`
+          )
+          .get(ftsQuery).count;
+        if (total > 0) {
+          const articles = db
+            .prepare(
+              `SELECT a.id, a.title, a.body, a.tags, a.locked, a.updated_by, a.created_at, a.updated_at
+               FROM knowledge_articles_fts f
+               JOIN knowledge_articles a ON a.id = f.rowid
+               WHERE knowledge_articles_fts MATCH ?
+               ORDER BY rank
+               LIMIT ? OFFSET ?`
+            )
+            .all(ftsQuery, safeLimit, safeOffset)
+            .map(mapArticle);
+          return { articles, total };
+        }
+      }
+      // Empty FTS hit — fall through to tokenized scoring (never return empty solely on FTS AND/OR miss).
     } catch {
-      // Invalid FTS query — fall through to LIKE.
+      // Invalid FTS query — fall through.
     }
   }
 
-  const like = `%${trimmed.replace(/%/g, '\\%')}%`;
-  const total = db
-    .prepare(
-      `SELECT COUNT(*) AS count
-       FROM knowledge_articles
-       WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' OR IFNULL(tags, '') LIKE ? ESCAPE '\\'`
-    )
-    .get(like, like, like).count;
-  const articles = db
-    .prepare(
-      `SELECT ${ARTICLE_COLUMNS}
-       FROM knowledge_articles
-       WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\' OR IFNULL(tags, '') LIKE ? ESCAPE '\\'
-       ORDER BY datetime(updated_at) DESC, id DESC
-       LIMIT ? OFFSET ?`
-    )
-    .all(like, like, like, safeLimit, safeOffset)
-    .map(mapArticle);
-  return { articles, total };
+  return searchArticlesByTokens(db, {
+    queryTokens: queryTokens.length ? queryTokens : matchTokens,
+    limit: safeLimit,
+    offset: safeOffset,
+  });
 }
 
 function getKnowledgeArticle(db, id) {
@@ -342,6 +482,7 @@ module.exports = {
   MAX_BODY,
   SEED_ARTICLES,
   ensureKnowledgeTables,
+  tokenizeKnowledgeQuery,
   listKnowledgeArticles,
   getKnowledgeArticle,
   createKnowledgeArticle,

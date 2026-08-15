@@ -102,12 +102,20 @@ export type AiSettings = {
   agent_tools?: AiAgentTool[];
   providers?: string[];
   models?: string[];
+  models_by_provider?: Partial<Record<string, string[]>>;
   transcribe_models?: string[];
   reasoning_efforts?: string[];
   agent_model_slugs?: AiPromptSlug[];
   history_limit_min?: number;
   history_limit_max?: number;
   group_topics_max?: number;
+  openai_api_key_configured?: boolean;
+  openai_api_key_hint?: string;
+  openai_api_key_source?: "database" | "env" | "none" | string;
+  openai_base_url?: string;
+  gemini_api_key_configured?: boolean;
+  gemini_api_key_hint?: string;
+  gemini_api_key_source?: "database" | "env" | "none" | string;
 };
 
 export type AiPrompt = {
@@ -229,6 +237,37 @@ export type CustomerTestTicket = {
   } | null;
 };
 
+export type AgentTraceToolCall = {
+  id?: string;
+  name: string;
+  arguments?: Record<string, unknown> | unknown;
+  result?: unknown;
+  ok: boolean;
+  error?: string | null;
+};
+
+export type AgentTraceStep =
+  | {
+      step: number;
+      type: "tool_round";
+      assistant_content?: string | null;
+      tool_calls: AgentTraceToolCall[];
+    }
+  | {
+      step: number;
+      type: "final";
+      content?: string;
+      stopped?: string;
+    };
+
+export type AgentRunUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cached_tokens?: number;
+  cache_write_tokens?: number;
+};
+
 export type CustomerTestSession = {
   session_id: number;
   ticket_id?: number | null;
@@ -236,6 +275,12 @@ export type CustomerTestSession = {
   ticket?: CustomerTestTicket | null;
   messages: KnowledgeChatMessage[];
   reply?: string;
+  steps?: number | null;
+  usage?: AgentRunUsage | null;
+  stopped?: string | null;
+  trace?: AgentTraceStep[];
+  replied_to_customer?: boolean;
+  customer_reply?: string | null;
 };
 
 export type TicketAiAssistSession = {

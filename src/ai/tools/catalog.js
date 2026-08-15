@@ -4,7 +4,7 @@ const AGENT_TOOL_CATALOG = [
   {
     name: 'search_knowledge',
     title: 'Поиск в базе знаний',
-    description: 'Поиск статей внутренней базы знаний по ключевым словам.',
+    description: 'Поиск статей внутренней базы знаний по коротким ключевым словам.',
     agents: ['customer', 'customer_assist', 'kb'],
   },
   {

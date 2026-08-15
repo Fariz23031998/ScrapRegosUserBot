@@ -132,11 +132,29 @@ const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
 const { loadAiSettings, saveAiSettings, serializeAiSettings } = require('../ai/settings');
+
+function isAiCredentialError(error) {
+  const message = String(error?.message || '');
+  return (
+    message === 'OPENAI_API_KEY is not configured' ||
+    message === 'GEMINI_API_KEY is not configured' ||
+    /OPENAI_API_KEY|GEMINI_API_KEY/.test(message)
+  );
+}
+
+function aiCredentialErrorMessage(error) {
+  const message = String(error?.message || '');
+  if (message.includes('GEMINI')) {
+    return 'AI не настроен. Укажите API-ключ Gemini в настройках или GEMINI_API_KEY.';
+  }
+  return 'AI не настроен. Укажите API-ключ OpenAI в настройках или OPENAI_API_KEY.';
+}
 const { notifyGroupTopic } = require('../ai/tools/notify-group');
 const { listToolSchemas, runAgentToolTest } = require('../ai/tools/test-runner');
 const { runKbAgent } = require('../ai/kb-agent');
 const { previewCustomerAgentPrompt } = require('../ai/customer-agent');
 const { loadCustomerTestSession, runCustomerTestAgent } = require('../ai/customer-test-agent');
+const { loadEmployeeTestSession, runEmployeeTestAgent } = require('../ai/employee-test-agent');
 const { loadTicketAssistSession, runTicketAssistAgent } = require('../ai/customer-assist-agent');
 const { CHAT_MESSAGE_JSON_LIMIT, parseChatUploadFiles } = require('../ai/chat-uploads');
 const {
@@ -1723,7 +1741,7 @@ function createBotAdminRouter(db) {
   router.put('/api/settings/ai', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
     try {
       const before = loadAiSettings(db);
-      const saved = saveAiSettings(db, {
+      const patch = {
         enabled: req.body?.enabled,
         testMode: req.body?.test_mode ?? req.body?.testMode,
         provider: req.body?.provider,
@@ -1735,7 +1753,26 @@ function createBotAdminRouter(db) {
         groupChatId: req.body?.group_chat_id ?? req.body?.groupChatId,
         groupTopics: req.body?.group_topics ?? req.body?.groupTopics,
         disabledTools: req.body?.disabled_tools ?? req.body?.disabledTools,
-      });
+      };
+      if (
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'openai_api_key') ||
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'openaiApiKey')
+      ) {
+        patch.openaiApiKey = req.body?.openai_api_key ?? req.body?.openaiApiKey;
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'openai_base_url') ||
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'openaiBaseUrl')
+      ) {
+        patch.openaiBaseUrl = req.body?.openai_base_url ?? req.body?.openaiBaseUrl;
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'gemini_api_key') ||
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'geminiApiKey')
+      ) {
+        patch.geminiApiKey = req.body?.gemini_api_key ?? req.body?.geminiApiKey;
+      }
+      const saved = saveAiSettings(db, patch);
       auditAdminChange(db, req, {
         entityType: 'ai_settings',
         entityId: null,
@@ -1757,7 +1794,9 @@ function createBotAdminRouter(db) {
         error.message === 'INVALID_AI_HISTORY_LIMIT' ||
         error.message === 'INVALID_AI_GROUP_CHAT_ID' ||
         error.message === 'INVALID_AI_GROUP_TOPICS' ||
-        error.message === 'INVALID_AI_DISABLED_TOOLS'
+        error.message === 'INVALID_AI_DISABLED_TOOLS' ||
+        error.message === 'INVALID_AI_API_KEY' ||
+        error.message === 'INVALID_AI_BASE_URL'
       ) {
         return res.status(400).json({ message: 'Некорректные настройки AI.' });
       }
@@ -2200,8 +2239,8 @@ function createBotAdminRouter(db) {
       if (error.message === 'EMPTY_MESSAGE') {
         return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
       }
-      if (error.message === 'OPENAI_API_KEY is not configured' || String(error.message || '').includes('OPENAI')) {
-        return res.status(503).json({ message: 'AI не настроен. Укажите OPENAI_API_KEY.' });
+      if (isAiCredentialError(error)) {
+        return res.status(503).json({ message: aiCredentialErrorMessage(error) });
       }
       console.error('KB chat error:', error);
       return res.status(500).json({ message: 'Не удалось получить ответ агента.' });
@@ -2233,8 +2272,8 @@ function createBotAdminRouter(db) {
     if (error instanceof RegosCrmError) {
       return res.status(error.status).json({ message: error.message });
     }
-    if (error.message === 'OPENAI_API_KEY is not configured' || String(error.message || '').includes('OPENAI')) {
-      return res.status(503).json({ message: 'AI не настроен. Укажите OPENAI_API_KEY.' });
+    if (isAiCredentialError(error)) {
+      return res.status(503).json({ message: aiCredentialErrorMessage(error) });
     }
     console.error('Customer test agent error:', error);
     return res.status(500).json({ message: 'Не удалось получить ответ агента поддержки.' });
@@ -2302,6 +2341,70 @@ function createBotAdminRouter(db) {
       return sendCustomerTestError(res, error);
     }
   });
+
+  router.get('/api/ai/employee-test-session', requireRight(db, 'ai_customer_test'), async (req, res) => {
+    try {
+      const result = await loadEmployeeTestSession({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        sessionId: req.query.session_id,
+        requireTicket: false,
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
+  router.post('/api/ai/employee-test-session', requireRight(db, 'ai_customer_test'), express.json(), async (req, res) => {
+    try {
+      const result = await loadEmployeeTestSession({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        sessionId: req.body?.session_id,
+        ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
+        clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+        reset: Boolean(req.body?.reset),
+      });
+      return res.json(result);
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
+  router.post(
+    '/api/ai/employee-test-chat',
+    requireRight(db, 'ai_customer_test'),
+    express.json({ limit: CHAT_MESSAGE_JSON_LIMIT }),
+    async (req, res) => {
+      try {
+        let files;
+        try {
+          files = parseChatUploadFiles(req.body?.files);
+        } catch (parseError) {
+          return res.status(parseError.status || 400).json({
+            message: parseError.message || 'Некорректный файл.',
+          });
+        }
+        const message = String(req.body?.message || '').trim();
+        if (!message && files.length === 0) {
+          return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+        }
+        const result = await runEmployeeTestAgent({
+          db,
+          userId: resolveKnowledgeActorUserId(req),
+          sessionId: req.body?.session_id,
+          message,
+          files,
+          ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
+          clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+        });
+        return res.json(result);
+      } catch (error) {
+        return sendCustomerTestError(res, error);
+      }
+    }
+  );
 
   router.get('/api/tickets/:id', requireRight(db, 'tickets_read'), async (req, res) => {
     try {
@@ -2433,8 +2536,8 @@ function createBotAdminRouter(db) {
     if (error instanceof RegosCrmError) {
       return res.status(error.status).json({ message: error.message });
     }
-    if (error.message === 'OPENAI_API_KEY is not configured' || String(error.message || '').includes('OPENAI')) {
-      return res.status(503).json({ message: 'AI не настроен. Укажите OPENAI_API_KEY.' });
+    if (isAiCredentialError(error)) {
+      return res.status(503).json({ message: aiCredentialErrorMessage(error) });
     }
     console.error('Ticket AI assist error:', error);
     return res.status(500).json({ message: 'Не удалось получить ответ агента поддержки.' });
@@ -4032,6 +4135,7 @@ function createBotAdminRouter(db) {
       '/prices',
       '/knowledge',
       '/customer-agent',
+      '/test-agents',
       '/prompts',
       '/settings',
     ];

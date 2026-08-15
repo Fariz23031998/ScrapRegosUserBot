@@ -1,4 +1,9 @@
 const { getSettings, setSettings } = require('../db/app-settings');
+const {
+  refreshProviderSecretsCache,
+  saveProviderSecrets,
+  serializeProviderSecretsStatus,
+} = require('./provider-secrets');
 const { isKnownAgentTool, listAgentToolCatalog } = require('./tools/catalog');
 
 const AI_SETTING_KEYS = {
@@ -15,26 +20,31 @@ const AI_SETTING_KEYS = {
   disabledTools: 'ai_disabled_tools',
 };
 
-const ALLOWED_PROVIDERS = ['openai'];
+const ALLOWED_PROVIDERS = ['openai', 'gemini'];
 const AGENT_MODEL_SLUGS = ['customer', 'customer_assist', 'kb', 'ticket_summary'];
-const SUGGESTED_MODELS = [
-  'gpt-5.6',
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-  'gpt-5.2',
-  'gpt-5.1',
-  'gpt-5',
-  'gpt-5-mini',
-  'gpt-5-nano',
-  'gpt-4.1',
-  'gpt-4o',
-  'gpt-4o-mini',
-];
+const SUGGESTED_MODELS_BY_PROVIDER = {
+  openai: [
+    'gpt-5.6',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.2',
+    'gpt-5.1',
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-4.1',
+    'gpt-4o',
+    'gpt-4o-mini',
+  ],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
+};
+const SUGGESTED_MODELS = [...SUGGESTED_MODELS_BY_PROVIDER.openai];
 const SUGGESTED_TRANSCRIBE_MODELS = ['gpt-4o-transcribe', 'gpt-transcribe', 'whisper-1'];
 const ALLOWED_REASONING_EFFORTS = ['none', 'low', 'medium', 'high'];
 const DEFAULT_PROVIDER = 'openai';
 const DEFAULT_MODEL = 'gpt-4o-mini';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-transcribe';
 const DEFAULT_REASONING_EFFORT = '';
 const DEFAULT_HISTORY_LIMIT = 30;
@@ -287,7 +297,14 @@ function parseStoredDisabledTools(value) {
   }
 }
 
+function suggestedModelsForProvider(provider) {
+  const key = String(provider || DEFAULT_PROVIDER).trim().toLowerCase();
+  const models = SUGGESTED_MODELS_BY_PROVIDER[key];
+  return models ? [...models] : [...SUGGESTED_MODELS_BY_PROVIDER[DEFAULT_PROVIDER]];
+}
+
 function loadAiSettings(db) {
+  refreshProviderSecretsCache(db);
   const stored = getSettings(db, Object.values(AI_SETTING_KEYS));
   let provider = DEFAULT_PROVIDER;
   try {
@@ -363,16 +380,37 @@ function saveAiSettings(db, patch = {}) {
     [AI_SETTING_KEYS.groupTopics]: JSON.stringify(next.groupTopics),
     [AI_SETTING_KEYS.disabledTools]: JSON.stringify(next.disabledTools),
   });
+
+  const secretPatch = {};
+  if (Object.prototype.hasOwnProperty.call(patch, 'openaiApiKey')) {
+    secretPatch.openaiApiKey = patch.openaiApiKey;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'openaiBaseUrl')) {
+    secretPatch.openaiBaseUrl = patch.openaiBaseUrl;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'geminiApiKey')) {
+    secretPatch.geminiApiKey = patch.geminiApiKey;
+  }
+  if (Object.keys(secretPatch).length) {
+    saveProviderSecrets(db, secretPatch);
+  } else {
+    refreshProviderSecretsCache(db);
+  }
+
   return loadAiSettings(db);
 }
 
 function serializeAiSettings(settings) {
   const disabledTools = Array.isArray(settings.disabledTools) ? settings.disabledTools : [];
   const disabledSet = new Set(disabledTools);
+  const provider = settings.provider || DEFAULT_PROVIDER;
+  const modelsByProvider = Object.fromEntries(
+    ALLOWED_PROVIDERS.map((name) => [name, suggestedModelsForProvider(name)])
+  );
   return {
     enabled: Boolean(settings.enabled),
     test_mode: Boolean(settings.testMode),
-    provider: settings.provider,
+    provider,
     model: settings.model,
     agent_models: { ...emptyAgentModels(), ...(settings.agentModels || {}) },
     transcribe_model: settings.transcribeModel || DEFAULT_TRANSCRIBE_MODEL,
@@ -391,13 +429,15 @@ function serializeAiSettings(settings) {
       enabled: !disabledSet.has(tool.name),
     })),
     providers: [...ALLOWED_PROVIDERS],
-    models: [...SUGGESTED_MODELS],
+    models: suggestedModelsForProvider(provider),
+    models_by_provider: modelsByProvider,
     transcribe_models: [...SUGGESTED_TRANSCRIBE_MODELS],
     reasoning_efforts: [...ALLOWED_REASONING_EFFORTS],
     agent_model_slugs: [...AGENT_MODEL_SLUGS],
     history_limit_min: MIN_HISTORY_LIMIT,
     history_limit_max: MAX_HISTORY_LIMIT,
     group_topics_max: MAX_GROUP_TOPICS,
+    ...serializeProviderSecretsStatus(),
   };
 }
 
@@ -406,10 +446,12 @@ module.exports = {
   ALLOWED_PROVIDERS,
   AGENT_MODEL_SLUGS,
   SUGGESTED_MODELS,
+  SUGGESTED_MODELS_BY_PROVIDER,
   SUGGESTED_TRANSCRIBE_MODELS,
   ALLOWED_REASONING_EFFORTS,
   DEFAULT_PROVIDER,
   DEFAULT_MODEL,
+  DEFAULT_GEMINI_MODEL,
   DEFAULT_TRANSCRIBE_MODEL,
   DEFAULT_REASONING_EFFORT,
   DEFAULT_HISTORY_LIMIT,
@@ -427,6 +469,7 @@ module.exports = {
   resolveAgentModel,
   isReasoningModel,
   isAgentModelSlug,
+  suggestedModelsForProvider,
   normalizeHistoryLimit,
   normalizeGroupChatId,
   normalizeGroupTopics,

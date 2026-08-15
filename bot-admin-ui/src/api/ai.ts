@@ -29,6 +29,9 @@ export function saveAiSettings(payload: {
   group_chat_id?: string;
   group_topics?: AiGroupTopic[];
   disabled_tools?: string[];
+  openai_api_key?: string;
+  openai_base_url?: string;
+  gemini_api_key?: string;
 }) {
   return apiFetch<AiSettings>("/bot-admin/api/settings/ai", {
     method: "PUT",
@@ -185,6 +188,35 @@ export function sendCustomerTestChat(payload: {
   client_phone?: string | null;
 }) {
   return apiFetch<CustomerTestSession>("/bot-admin/api/ai/customer-test-chat", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getEmployeeTestSession() {
+  return apiFetch<CustomerTestSession>("/bot-admin/api/ai/employee-test-session");
+}
+
+export function saveEmployeeTestSession(payload: {
+  session_id?: number;
+  ticket_id?: number | string | null;
+  client_phone?: string | null;
+  reset?: boolean;
+}) {
+  return apiFetch<CustomerTestSession>("/bot-admin/api/ai/employee-test-session", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function sendEmployeeTestChat(payload: {
+  session_id?: number;
+  message: string;
+  files?: Array<{ name: string; extension: string; data: string }>;
+  ticket_id?: number | string | null;
+  client_phone?: string | null;
+}) {
+  return apiFetch<CustomerTestSession>("/bot-admin/api/ai/employee-test-chat", {
     method: "POST",
     body: JSON.stringify(payload),
   });

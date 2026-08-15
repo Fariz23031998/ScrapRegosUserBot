@@ -5,7 +5,7 @@ const {
   isVisionImage,
   toImageUrlPart,
 } = require('./chat-media');
-const { DEFAULT_MODEL } = require('./settings');
+const { DEFAULT_MODEL, loadAiSettings } = require('./settings');
 const {
   getChatFileExtraction,
   upsertChatFileExtraction,
@@ -38,6 +38,17 @@ function rememberCaption(key, text) {
 
 function clearCaptionCache() {
   captionCache.clear();
+}
+
+function resolveCaptionProviderName(db, providerName) {
+  const explicit = String(providerName || '').trim();
+  if (explicit) return explicit;
+  if (!db) return 'openai';
+  try {
+    return loadAiSettings(db).provider || 'openai';
+  } catch {
+    return 'openai';
+  }
 }
 
 function persistImageCaption(db, file, { text, bytes, model, source, ticketId } = {}) {
@@ -73,7 +84,7 @@ function readStoredCaption(db, file) {
 
 async function captionImageBuffer(
   downloaded,
-  { model = DEFAULT_MODEL, captionImpl, chatImpl } = {}
+  { model = DEFAULT_MODEL, captionImpl, chatImpl, providerName } = {}
 ) {
   const part = toImageUrlPart(downloaded);
   if (!part) return { skipped: true, reason: 'empty' };
@@ -84,7 +95,10 @@ async function captionImageBuffer(
     return caption ? { text: caption } : { skipped: true, reason: 'empty_caption' };
   }
 
-  const chat = typeof chatImpl === 'function' ? chatImpl : getProvider('openai').chat;
+  const chat =
+    typeof chatImpl === 'function'
+      ? chatImpl
+      : getProvider(providerName || 'openai').chat;
   try {
     const result = await chat({
       model: model || DEFAULT_MODEL,
@@ -111,6 +125,7 @@ async function captionChatImage(
     ticketId = null,
     source = 'caption',
     model = DEFAULT_MODEL,
+    providerName = null,
     download = downloadChatFile,
     captionImpl,
     chatImpl,
@@ -134,7 +149,13 @@ async function captionChatImage(
     return { skipped: true, reason: downloaded?.reason || 'download_failed' };
   }
 
-  const result = await captionImageBuffer(downloaded, { model, captionImpl, chatImpl });
+  const resolvedProvider = resolveCaptionProviderName(db, providerName);
+  const result = await captionImageBuffer(downloaded, {
+    model,
+    captionImpl,
+    chatImpl,
+    providerName: resolvedProvider,
+  });
   if (result?.text) {
     if (idKey) rememberCaption(idKey, result.text);
     persistImageCaption(db, file, {
