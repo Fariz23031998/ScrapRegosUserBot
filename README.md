@@ -121,7 +121,7 @@ Local UI development (Vite on port 5301 with API proxy) is documented in [bot-ad
 IDEs can search and (unless read-only) edit the same knowledge base as `/bot-admin` over Streamable HTTP. No extra npm packages; the endpoint is token-authenticated and stateless JSON.
 
 1. Set a long random `MCP_TOKEN` in `.env`. Leave it unset to keep the endpoint disabled (`503`).
-2. Optionally set `MCP_KNOWLEDGE_READONLY=1` so only `knowledge_search` / `knowledge_get` are listed.
+2. Optionally set `MCP_KNOWLEDGE_READONLY=1` so only `knowledge_search` / `knowledge_get` / `knowledge_list_categories` are listed.
 3. Restart `npm run server`. Clients call `POST https://YOUR_HOST/bot-admin/mcp` with `Authorization: Bearer <MCP_TOKEN>` (or `X-MCP-Token`).
 
 Do not commit a real token. Copy [`.cursor/mcp.json.example`](.cursor/mcp.json.example) to `.cursor/mcp.json` and replace placeholders.

@@ -213,6 +213,7 @@ describe('knowledge MCP HTTP', () => {
     assert.deepEqual(names, [
       'knowledge_search',
       'knowledge_get',
+      'knowledge_list_categories',
       'knowledge_create',
       'knowledge_update',
       'knowledge_delete',
@@ -227,7 +228,7 @@ describe('knowledge MCP HTTP', () => {
     const listed = await callMcp(mcpRpc(1, 'tools/list', {}));
     assert.equal(listed.statusCode, 200);
     const names = parseJson(listed).result.tools.map((tool) => tool.name);
-    assert.deepEqual(names, ['knowledge_search', 'knowledge_get']);
+    assert.deepEqual(names, ['knowledge_search', 'knowledge_get', 'knowledge_list_categories']);
   });
 
   it('searches, creates, and gets articles', async () => {
@@ -286,8 +287,15 @@ describe('knowledge MCP HTTP', () => {
   });
 
   it('creates a category and assigns it on article create/update', async () => {
+    const emptyList = await callMcp(
+      mcpRpc(1, 'tools/call', { name: 'knowledge_list_categories', arguments: {} })
+    );
+    const emptyPayload = parseToolPayload(emptyList);
+    assert.equal(emptyPayload.isError, false);
+    assert.deepEqual(emptyPayload.data.categories, []);
+
     const createCategory = await callMcp(
-      mcpRpc(1, 'tools/call', {
+      mcpRpc(2, 'tools/call', {
         name: 'knowledge_create_category',
         arguments: { name: 'MCP category', tags: 'mcp, category' },
       })
@@ -298,14 +306,28 @@ describe('knowledge MCP HTTP', () => {
     assert.equal(categoryPayload.data.category.name, 'MCP category');
     assert.equal(categoryPayload.data.category.tags, 'mcp, category');
 
-    const listed = await callMcp(mcpRpc(2, 'tools/list', {}));
+    const listedCategoriesRes = await callMcp(
+      mcpRpc(3, 'tools/call', { name: 'knowledge_list_categories', arguments: {} })
+    );
+    const listedCategories = parseToolPayload(listedCategoriesRes);
+    assert.equal(listedCategories.isError, false);
+    assert.deepEqual(
+      listedCategories.data.categories.map((category) => ({
+        id: category.id,
+        name: category.name,
+        tags: category.tags,
+      })),
+      [{ id: categoryId, name: 'MCP category', tags: 'mcp, category' }]
+    );
+
+    const listed = await callMcp(mcpRpc(4, 'tools/list', {}));
     const createTool = parseJson(listed).result.tools.find((tool) => tool.name === 'knowledge_create');
     assert.ok(createTool);
     assert.match(createTool.description, new RegExp(`${categoryId}\\s+MCP category`));
     assert.match(createTool.inputSchema.properties.category_id.description, new RegExp(`${categoryId}\\s+MCP category`));
 
     const create = await callMcp(
-      mcpRpc(3, 'tools/call', {
+      mcpRpc(5, 'tools/call', {
         name: 'knowledge_create',
         arguments: {
           title: 'MCP categorized article',
@@ -321,7 +343,7 @@ describe('knowledge MCP HTTP', () => {
     assert.equal(created.data.article.category?.name, 'MCP category');
 
     const updated = await callMcp(
-      mcpRpc(4, 'tools/call', {
+      mcpRpc(6, 'tools/call', {
         name: 'knowledge_update',
         arguments: { id: created.data.article.id, category_id: null },
       })

@@ -7,6 +7,7 @@ const {
   updateKnowledgeArticle,
   deleteKnowledgeArticle,
   formatKnowledgeCategoriesForTools,
+  listKnowledgeCategories,
   getKnowledgeCategory,
   createKnowledgeCategory,
   updateKnowledgeCategory,
@@ -123,6 +124,14 @@ const READ_TOOLS = [
         id: { type: ['integer', 'number', 'string'], description: 'Article id' },
       },
       required: ['id'],
+    },
+  },
+  {
+    name: 'knowledge_list_categories',
+    description: 'List knowledge-base categories (id, name, tags). Call this before assigning category_id.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
     },
   },
 ];
@@ -280,6 +289,9 @@ function callTool(db, name, args = {}) {
       const article = getKnowledgeArticle(db, args.id);
       if (!article) return errorResult('Article not found.', { id: args.id });
       return textResult({ article });
+    }
+    case 'knowledge_list_categories': {
+      return textResult({ categories: listKnowledgeCategories(db) });
     }
     case 'knowledge_create': {
       try {
