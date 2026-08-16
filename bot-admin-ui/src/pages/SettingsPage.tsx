@@ -9,7 +9,7 @@ import LoadingState from "../components/LoadingState";
 import ToolTestModal from "../components/ToolTestModal";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
-import type { AiGroupTopic, AiPromptSlug, AiSettings, AiToolSchema, ChannelSetting } from "../lib/types";
+import type { AiAgentTool, AiGroupTopic, AiPromptSlug, AiSettings, AiToolAgentSlug, AiToolSchema, ChannelSetting } from "../lib/types";
 
 const CUSTOM_MODEL = "__custom__";
 const DEFAULT_AGENT_MODEL = "__default__";
@@ -34,6 +34,61 @@ const AGENT_TITLES: Record<AiPromptSlug, string> = {
   ticket_summary: "Сводка обращения",
 };
 
+const TOOL_AGENT_SLUGS: AiToolAgentSlug[] = ["customer", "customer_assist", "kb"];
+
+function emptyDisabledAgentTools(): Record<AiToolAgentSlug, string[]> {
+  return { customer: [], customer_assist: [], kb: [] };
+}
+
+function isToolAgentSlug(slug: string): slug is AiToolAgentSlug {
+  return TOOL_AGENT_SLUGS.includes(slug as AiToolAgentSlug);
+}
+
+function toolAgentEnabled(tool: AiAgentTool, slug: AiToolAgentSlug) {
+  if (tool.enabled_agents && slug in tool.enabled_agents) {
+    return tool.enabled_agents[slug] !== false;
+  }
+  return tool.enabled !== false;
+}
+
+function withToolAgentStates(
+  tool: AiAgentTool,
+  nextStates: Partial<Record<AiToolAgentSlug, boolean>>,
+): AiAgentTool {
+  const enabled_agents: Partial<Record<AiToolAgentSlug, boolean>> = {
+    ...(tool.enabled_agents || {}),
+  };
+  for (const slug of tool.agents || []) {
+    if (!isToolAgentSlug(slug)) continue;
+    enabled_agents[slug] = slug in nextStates ? Boolean(nextStates[slug]) : toolAgentEnabled(tool, slug);
+  }
+  const enabled =
+    (tool.agents || []).length > 0 &&
+    (tool.agents || []).every((slug) => !isToolAgentSlug(slug) || enabled_agents[slug] !== false);
+  return { ...tool, enabled, enabled_agents };
+}
+
+function disabledAgentToolsFromRows(tools: AiAgentTool[]): Record<AiToolAgentSlug, string[]> {
+  const next = emptyDisabledAgentTools();
+  for (const tool of tools) {
+    for (const slug of tool.agents || []) {
+      if (!isToolAgentSlug(slug) || toolAgentEnabled(tool, slug)) continue;
+      next[slug].push(tool.name);
+    }
+  }
+  return next;
+}
+
+function fullyDisabledToolNames(tools: AiAgentTool[]): string[] {
+  return tools
+    .filter(
+      (tool) =>
+        (tool.agents || []).length > 0 &&
+        (tool.agents || []).every((slug) => !isToolAgentSlug(slug) || !toolAgentEnabled(tool, slug)),
+    )
+    .map((tool) => tool.name);
+}
+
 const TICKET_REQUIRED_TOOLS = new Set([
   "search_chat_history",
   "read_chat_image",
@@ -54,11 +109,6 @@ function knownOrCustom(value: string, known: string[]) {
 function resolveListedModel(value: string, known: string[], custom: string) {
   if (known.includes(value)) return value;
   return custom.trim() || value;
-}
-
-function formatAgentLabels(agents: AiPromptSlug[] | undefined) {
-  if (!agents?.length) return "";
-  return agents.map((slug) => AGENT_TITLES[slug] || slug).join(", ");
 }
 
 function credentialStatusLabel(configured?: boolean, hint?: string, source?: string) {
@@ -172,9 +222,13 @@ export default function SettingsPage() {
         transcribe_model: transcribeModel,
         reasoning_effort: settings.reasoning_effort || "",
         history_limit: settings.history_limit,
+        customer_replies_per_hour: settings.customer_replies_per_hour,
+        customer_replies_per_ticket: settings.customer_replies_per_ticket,
         group_chat_id: settings.group_chat_id || "",
         group_topics: settings.group_topics || [],
         disabled_tools: settings.disabled_tools || [],
+        disabled_agent_tools: settings.disabled_agent_tools || emptyDisabledAgentTools(),
+        ignored_customer_messages: settings.ignored_customer_messages || [],
         openai_base_url: settings.openai_base_url || "",
         ...(clearOpenaiApiKey
           ? { openai_api_key: "" }
@@ -212,7 +266,6 @@ export default function SettingsPage() {
   const transcribeValue =
     ai && transcribeModels.includes(ai.transcribe_model || "") ? ai.transcribe_model || "" : CUSTOM_MODEL;
   const agentTools = ai?.agent_tools || [];
-  const disabledTools = new Set(ai?.disabled_tools || []);
   const toolSchemasByName = new Map(
     (toolsSchemaQuery.data?.tools || []).map((tool) => [tool.name, tool] as const),
   );
@@ -241,29 +294,45 @@ export default function SettingsPage() {
     );
   }
 
-  function setToolEnabled(toolName: string, enabled: boolean) {
+  function applyToolRows(agent_tools: AiAgentTool[]) {
     if (!ai) return;
-    const nextDisabled = new Set(ai.disabled_tools || []);
-    if (enabled) nextDisabled.delete(toolName);
-    else nextDisabled.add(toolName);
-    const disabled_tools = [...nextDisabled];
     setAiDraft({
       ...ai,
-      disabled_tools,
-      agent_tools: (ai.agent_tools || []).map((tool) =>
-        tool.name === toolName ? { ...tool, enabled } : tool,
-      ),
+      agent_tools,
+      disabled_agent_tools: disabledAgentToolsFromRows(agent_tools),
+      disabled_tools: fullyDisabledToolNames(agent_tools),
     });
   }
 
+  function setToolEnabled(toolName: string, enabled: boolean) {
+    applyToolRows(
+      (ai?.agent_tools || []).map((tool) => {
+        if (tool.name !== toolName) return tool;
+        const nextStates = Object.fromEntries(
+          (tool.agents || []).filter(isToolAgentSlug).map((slug) => [slug, enabled]),
+        ) as Partial<Record<AiToolAgentSlug, boolean>>;
+        return withToolAgentStates(tool, nextStates);
+      }),
+    );
+  }
+
+  function setToolAgentEnabled(toolName: string, slug: AiToolAgentSlug, enabled: boolean) {
+    applyToolRows(
+      (ai?.agent_tools || []).map((tool) =>
+        tool.name === toolName ? withToolAgentStates(tool, { [slug]: enabled }) : tool,
+      ),
+    );
+  }
+
   function setAllToolsEnabled(enabled: boolean) {
-    if (!ai) return;
-    const disabled_tools = enabled ? [] : agentTools.map((tool) => tool.name);
-    setAiDraft({
-      ...ai,
-      disabled_tools,
-      agent_tools: (ai.agent_tools || []).map((tool) => ({ ...tool, enabled })),
-    });
+    applyToolRows(
+      (ai?.agent_tools || []).map((tool) => {
+        const nextStates = Object.fromEntries(
+          (tool.agents || []).filter(isToolAgentSlug).map((slug) => [slug, enabled]),
+        ) as Partial<Record<AiToolAgentSlug, boolean>>;
+        return withToolAgentStates(tool, nextStates);
+      }),
+    );
   }
 
   function modeSelect(channel: ChannelSetting) {
@@ -353,6 +422,68 @@ export default function SettingsPage() {
                   <span>Тестовый режим — только клиенты с телефоном сотрудника</span>
                 </label>
               </div>
+              <div className="settings-topics">
+                <div className="settings-topics__header">
+                  <strong>Не отвечать на сообщения</strong>
+                  {canEdit ? (
+                    <div className="settings-topics__actions">
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        disabled={
+                          (ai.ignored_customer_messages || []).length >=
+                          (ai.ignored_customer_messages_max || 50)
+                        }
+                        onClick={() =>
+                          setAiDraft({
+                            ...ai,
+                            ignored_customer_messages: [...(ai.ignored_customer_messages || []), ""],
+                          })
+                        }
+                      >
+                        Добавить сообщение
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <p className="muted-copy">
+                  Точный текст клиентского сообщения, на который агент не должен отвечать автоматически
+                  (например <code>/start</code>). Регистр и пробелы по краям не учитываются.
+                </p>
+                {(ai.ignored_customer_messages || []).length === 0 ? (
+                  <p className="muted-copy">Список пуст. Агент отвечает на все клиентские сообщения.</p>
+                ) : (
+                  (ai.ignored_customer_messages || []).map((item, index) => (
+                    <div key={index} className="settings-ignore-row">
+                      <input
+                        value={item}
+                        disabled={!canEdit}
+                        placeholder="/start"
+                        maxLength={200}
+                        onChange={(event) => {
+                          const ignored_customer_messages = [...(ai.ignored_customer_messages || [])];
+                          ignored_customer_messages[index] = event.target.value;
+                          setAiDraft({ ...ai, ignored_customer_messages });
+                        }}
+                      />
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          className="btn-danger btn-sm"
+                          onClick={() => {
+                            const ignored_customer_messages = (ai.ignored_customer_messages || []).filter(
+                              (_, itemIndex) => itemIndex !== index,
+                            );
+                            setAiDraft({ ...ai, ignored_customer_messages });
+                          }}
+                        >
+                          Удалить
+                        </button>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
               <label>
                 Последних сообщений в промпт
                 <input
@@ -374,6 +505,54 @@ export default function SettingsPage() {
               <p className="muted-copy">
                 Агент поддержки получит ровно столько последних сообщений чата (от {ai.history_limit_min || 1} до{" "}
                 {ai.history_limit_max || 100}).
+              </p>
+              <label>
+                Автоответов клиенту в час
+                <input
+                  type="number"
+                  min={ai.customer_replies_per_hour_min ?? 0}
+                  max={ai.customer_replies_per_hour_max || 500}
+                  step={1}
+                  value={ai.customer_replies_per_hour ?? 8}
+                  disabled={!canEdit}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    setAiDraft({
+                      ...ai,
+                      customer_replies_per_hour: Number.isFinite(next)
+                        ? next
+                        : ai.customer_replies_per_hour,
+                    });
+                  }}
+                />
+              </label>
+              <p className="muted-copy">
+                Максимум автоматических ответов одному клиенту за скользящий час (0 — без лимита, до{" "}
+                {ai.customer_replies_per_hour_max || 500}).
+              </p>
+              <label>
+                Автоответов клиенту в одном тикете
+                <input
+                  type="number"
+                  min={ai.customer_replies_per_ticket_min ?? 0}
+                  max={ai.customer_replies_per_ticket_max || 500}
+                  step={1}
+                  value={ai.customer_replies_per_ticket ?? 20}
+                  disabled={!canEdit}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    setAiDraft({
+                      ...ai,
+                      customer_replies_per_ticket: Number.isFinite(next)
+                        ? next
+                        : ai.customer_replies_per_ticket,
+                    });
+                  }}
+                />
+              </label>
+              <p className="muted-copy">
+                После этого лимита автоответы в тикете останавливаются, пока сотрудник не включит их снова (0 — без
+                лимита, до {ai.customer_replies_per_ticket_max || 500}).
               </p>
               <label>
                 ID группы Telegram
@@ -782,8 +961,9 @@ export default function SettingsPage() {
               <div className="settings-tools__header">
                 <div className="settings-tools__intro">
                   <p className="muted-copy">
-                    Отключённые инструменты не передаются агентам. Проверка ниже вызывает инструмент напрямую
-                    (в том числе отключённые).
+                    Инструменты можно включать отдельно для каждого агента. Отключённые для агента
+                    инструменты ему не передаются. Проверка ниже вызывает инструмент напрямую (в том
+                    числе отключённые).
                   </p>
                   <p className="settings-tools__sandboxes muted-copy">
                     Песочницы агентов:{" "}
@@ -824,25 +1004,50 @@ export default function SettingsPage() {
               ) : (
                 <div className="settings-tools__list">
                   {agentTools.map((tool) => {
-                    const enabled = !disabledTools.has(tool.name);
+                    const agents = (tool.agents || []).filter(isToolAgentSlug);
+                    const enabledCount = agents.filter((slug) => toolAgentEnabled(tool, slug)).length;
+                    const allEnabled = agents.length > 0 && enabledCount === agents.length;
+                    const mixed = enabledCount > 0 && enabledCount < agents.length;
                     return (
-                      <div key={tool.name} className="settings-tool-row">
-                        <label className="settings-tool-row__toggle field-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={enabled}
-                            disabled={!canEdit}
-                            onChange={(event) => setToolEnabled(tool.name, event.target.checked)}
-                          />
-                          <span className="settings-tool-row__body">
-                            <strong>{tool.title}</strong>
-                            <small className="settings-tool-row__name">{tool.name}</small>
-                            <span className="muted-copy">{tool.description}</span>
-                            <span className="settings-tool-row__agents">
-                              {formatAgentLabels(tool.agents)}
+                      <div
+                        key={tool.name}
+                        className={`settings-tool-row${enabledCount ? "" : " settings-tool-row--off"}`}
+                      >
+                        <div className="settings-tool-row__main">
+                          <label className="settings-tool-row__toggle field-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={allEnabled}
+                              disabled={!canEdit}
+                              ref={(element) => {
+                                if (element) element.indeterminate = mixed;
+                              }}
+                              onChange={(event) => setToolEnabled(tool.name, event.target.checked)}
+                            />
+                            <span className="settings-tool-row__body">
+                              <strong>{tool.title}</strong>
+                              <small className="settings-tool-row__name">{tool.name}</small>
+                              <span className="muted-copy">{tool.description}</span>
                             </span>
-                          </span>
-                        </label>
+                          </label>
+                          {agents.length ? (
+                            <div className="settings-tool-row__agents">
+                              {agents.map((slug) => (
+                                <label key={slug} className="settings-tool-row__agent field-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    checked={toolAgentEnabled(tool, slug)}
+                                    disabled={!canEdit}
+                                    onChange={(event) =>
+                                      setToolAgentEnabled(tool.name, slug, event.target.checked)
+                                    }
+                                  />
+                                  <span>{AGENT_TITLES[slug] || slug}</span>
+                                </label>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
                         {canEdit ? (
                           <button
                             type="button"

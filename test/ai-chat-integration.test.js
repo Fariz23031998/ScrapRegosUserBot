@@ -89,6 +89,8 @@ const {
 } = require('../src/ai/customer-assist-agent');
 const { createRegosTicketWebhookHandler } = require('../src/integrations/regos-ticket-webhook');
 const { upsertTicketSummary } = require('../src/db/ticket-summaries');
+const { setTicketAiStopped, getCustomerReplyCount, isTicketAiStopped, incrementCustomerReplyCount } = require('../src/db/ticket-ai-state');
+const { countCustomerUsageSince, resolveCustomerUsageKey, recordCustomerUsage } = require('../src/db/ai-customer-usage');
 const { SUMMARY_TOKEN_BUDGET } = require('../src/ai/settings');
 const { ADMIN_PERMISSION_KEYS, RIGHTS } = require('../src/db/user-rights');
 const { DEFAULT_RIGHTS } = require('../src/db/bot-users-db');
@@ -137,6 +139,8 @@ describe('AI settings', () => {
     assert.equal(initial.provider, 'openai');
     assert.equal(initial.model, 'gpt-4o-mini');
     assert.equal(initial.historyLimit, 30);
+    assert.equal(initial.customerRepliesPerHour, 8);
+    assert.equal(initial.customerRepliesPerTicket, 20);
 
     const saved = saveAiSettings(database, {
       enabled: true,
@@ -151,6 +155,10 @@ describe('AI settings', () => {
     assert.equal(loadAiSettings(database).model, 'gpt-4o');
     assert.equal(loadAiSettings(database).historyLimit, 12);
     assert.equal(serializeAiSettings(saved).history_limit, 12);
+    assert.equal(serializeAiSettings(saved).customer_replies_per_hour, 8);
+    assert.equal(serializeAiSettings(saved).customer_replies_per_ticket, 20);
+    assert.equal(serializeAiSettings(saved).customer_replies_per_hour_min, 0);
+    assert.equal(serializeAiSettings(saved).customer_replies_per_hour_max, 500);
     assert.equal(serializeAiSettings(saved).models.includes('gpt-4o'), true);
     assert.ok(serializeAiSettings(saved).models.includes('gpt-5'));
     assert.ok(serializeAiSettings(saved).transcribe_models.includes('whisper-1'));
@@ -164,9 +172,12 @@ describe('AI settings', () => {
     });
     assert.equal(initial.groupChatId, '');
     assert.deepEqual(initial.groupTopics, []);
+    assert.deepEqual(initial.ignoredCustomerMessages, []);
     assert.equal(serializeAiSettings(saved).group_chat_id, '');
     assert.deepEqual(serializeAiSettings(saved).group_topics, []);
     assert.equal(serializeAiSettings(saved).group_topics_max, 30);
+    assert.deepEqual(serializeAiSettings(saved).ignored_customer_messages, []);
+    assert.equal(serializeAiSettings(saved).ignored_customer_messages_max, 50);
   });
 
   it('persists group chat id and topic allowlist', () => {
@@ -237,6 +248,37 @@ describe('AI settings', () => {
     assert.throws(() => saveAiSettings(database, { historyLimit: 1.5 }), /INVALID_AI_HISTORY_LIMIT/);
   });
 
+  it('persists customer reply caps and treats 0 as unlimited', () => {
+    const database = createDb();
+    const saved = saveAiSettings(database, {
+      customerRepliesPerHour: 0,
+      customerRepliesPerTicket: 3,
+    });
+    assert.equal(saved.customerRepliesPerHour, 0);
+    assert.equal(saved.customerRepliesPerTicket, 3);
+    assert.equal(serializeAiSettings(saved).customer_replies_per_hour, 0);
+    assert.equal(serializeAiSettings(saved).customer_replies_per_ticket, 3);
+    saveAiSettings(database, { enabled: true });
+    assert.equal(loadAiSettings(database).customerRepliesPerHour, 0);
+    assert.equal(loadAiSettings(database).customerRepliesPerTicket, 3);
+  });
+
+  it('rejects an out-of-range customer reply cap', () => {
+    const database = createDb();
+    assert.throws(
+      () => saveAiSettings(database, { customerRepliesPerHour: -1 }),
+      /INVALID_AI_CUSTOMER_REPLY_LIMIT/
+    );
+    assert.throws(
+      () => saveAiSettings(database, { customerRepliesPerTicket: 501 }),
+      /INVALID_AI_CUSTOMER_REPLY_LIMIT/
+    );
+    assert.throws(
+      () => saveAiSettings(database, { customerRepliesPerHour: 1.5 }),
+      /INVALID_AI_CUSTOMER_REPLY_LIMIT/
+    );
+  });
+
   it('persists per-agent models, transcribe model, and reasoning effort', () => {
     const database = createDb();
     const saved = saveAiSettings(database, {
@@ -265,6 +307,39 @@ describe('AI settings', () => {
       /INVALID_AI_TRANSCRIBE_MODEL/
     );
     assert.throws(() => saveAiSettings(database, { reasoningEffort: 'max' }), /INVALID_AI_REASONING_EFFORT/);
+  });
+
+  it('persists ignored customer messages', () => {
+    const database = createDb();
+    const saved = saveAiSettings(database, {
+      ignoredCustomerMessages: [' /start ', '/START', '', 'Спасибо'],
+    });
+    assert.deepEqual(saved.ignoredCustomerMessages, ['/start', 'Спасибо']);
+    const serialized = serializeAiSettings(saved);
+    assert.deepEqual(serialized.ignored_customer_messages, ['/start', 'Спасибо']);
+    assert.equal(serialized.ignored_customer_messages_max, 50);
+
+    saveAiSettings(database, { enabled: true });
+    assert.deepEqual(loadAiSettings(database).ignoredCustomerMessages, ['/start', 'Спасибо']);
+
+    saveAiSettings(database, { ignoredCustomerMessages: [] });
+    assert.deepEqual(loadAiSettings(database).ignoredCustomerMessages, []);
+  });
+
+  it('rejects invalid ignored customer messages', () => {
+    const database = createDb();
+    assert.throws(
+      () => saveAiSettings(database, { ignoredCustomerMessages: { text: '/start' } }),
+      /INVALID_AI_IGNORED_CUSTOMER_MESSAGES/
+    );
+    assert.throws(
+      () => saveAiSettings(database, { ignoredCustomerMessages: ['a'.repeat(201)] }),
+      /INVALID_AI_IGNORED_CUSTOMER_MESSAGES/
+    );
+    assert.throws(
+      () => saveAiSettings(database, { ignoredCustomerMessages: Array.from({ length: 51 }, (_, i) => `msg-${i}`) }),
+      /INVALID_AI_IGNORED_CUSTOMER_MESSAGES/
+    );
   });
 });
 
@@ -599,6 +674,31 @@ describe('customer message gate', () => {
     );
   });
 
+  it('skips listed customer messages and still handles other text', () => {
+    const settings = { enabled: true, ignoredCustomerMessages: ['/start'] };
+    assert.equal(
+      evaluateCustomerMessageGate({
+        settings,
+        message: { ...clientMessage, text: ' /START ' },
+      }).reason,
+      'ignored-message'
+    );
+    assert.equal(
+      evaluateCustomerMessageGate({
+        settings,
+        message: { ...clientMessage, text: '', display_text: '/start' },
+      }).reason,
+      'ignored-message'
+    );
+    assert.equal(
+      evaluateCustomerMessageGate({
+        settings,
+        message: { ...clientMessage, text: 'Сколько стоит?' },
+      }).handle,
+      true
+    );
+  });
+
   it('in test mode only allows employee phone numbers', () => {
     const database = createDb();
     createEmployeeUser(database, { phone: '+998901112233', displayName: 'Tester' });
@@ -621,6 +721,43 @@ describe('customer message gate', () => {
       true
     );
     assert.equal(isEmployeeClientPhone(database, '90 111 22 33'), true);
+  });
+
+  it('skips when the ticket reply cap is already reached', () => {
+    const database = createDb();
+    incrementCustomerReplyCount(database, 7);
+    const settings = { enabled: true, customerRepliesPerTicket: 1, customerRepliesPerHour: 0 };
+    assert.equal(
+      evaluateCustomerMessageGateWithDb(database, {
+        settings,
+        message: clientMessage,
+        ticket: { id: 7, status: 'Open', client_id: 15 },
+      }).reason,
+      'ticket-cap'
+    );
+  });
+
+  it('skips when the hourly client cap is already reached', () => {
+    const database = createDb();
+    const ticket = { id: 8, status: 'Open', client_id: 22 };
+    const settings = { enabled: true, customerRepliesPerTicket: 0, customerRepliesPerHour: 2 };
+    recordCustomerUsage(database, {
+      ticketId: 8,
+      clientKey: resolveCustomerUsageKey(ticket, 'chat-8'),
+    });
+    recordCustomerUsage(database, {
+      ticketId: 9,
+      clientKey: resolveCustomerUsageKey(ticket, 'chat-8'),
+    });
+    assert.equal(
+      evaluateCustomerMessageGateWithDb(database, {
+        settings,
+        message: clientMessage,
+        ticket,
+        chatId: 'chat-8',
+      }).reason,
+      'rate-limit'
+    );
   });
 });
 
@@ -660,6 +797,82 @@ describe('customer agent handler', () => {
     });
     assert.equal(result.handled, false);
     assert.equal(result.reason, 'disabled');
+    assert.equal(replied, false);
+  });
+
+  it('does not reply when the trigger text is ignored', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false, ignoredCustomerMessages: ['/start'] });
+    let replied = false;
+    let ran = false;
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [{ id: '9', author_entity_type: 'Client', message_type: 'Regular', text: '/start' }],
+        }),
+        addTicketMessage: async () => {
+          replied = true;
+        },
+        runAgent: async () => {
+          ran = true;
+          return { content: 'unused', steps: 1 };
+        },
+      }),
+    });
+    assert.equal(result.handled, false);
+    assert.equal(result.reason, 'ignored-message');
+    assert.equal(replied, false);
+    assert.equal(ran, false);
+  });
+
+  it('does not reply to a system notice remapped to an ignored client greeting', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false, ignoredCustomerMessages: ['/start'] });
+    let replied = false;
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: 'sys-phone',
+      payload: {
+        id: 'sys-phone',
+        chat_id: 'chat-42',
+        message_type: 'System',
+        text: 'Запросили у клиента номер телефона',
+      },
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 2,
+          result: [
+            { id: '9', author_entity_type: 'Client', message_type: 'Regular', text: '/start' },
+            {
+              id: 'sys-phone',
+              message_type: 'System',
+              text: 'Запросили у клиента номер телефона',
+            },
+          ],
+        }),
+        addTicketMessage: async () => {
+          replied = true;
+        },
+        runAgent: async () => ({ content: 'unused', steps: 1 }),
+      }),
+    });
+    assert.equal(result.handled, false);
+    assert.equal(result.reason, 'ignored-message');
     assert.equal(replied, false);
   });
 
@@ -786,6 +999,193 @@ describe('customer agent handler', () => {
     assert.equal(result.handled, false);
     assert.equal(result.reason, 'send-failed');
     assert.equal(closed, false);
+  });
+
+  async function sendClientReply(database, { chatId, ticketId, client, messageId, text = 'Вопрос', onSend } = {}) {
+    const runs = { n: 0 };
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId,
+      messageId: String(messageId),
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: ticketId,
+          status: 'Open',
+          chat_id: chatId,
+          client_id: client.id,
+          client,
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            {
+              id: String(messageId),
+              author_entity_type: 'Client',
+              message_type: 'Regular',
+              text,
+            },
+          ],
+        }),
+        addTicketMessage: async (payload) => {
+          if (onSend) return onSend(payload);
+          return { ok: true, id: `ai-${messageId}` };
+        },
+        runAgent: async () => {
+          runs.n += 1;
+          return { content: 'Ответ агента.', steps: 1 };
+        },
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      }),
+    });
+    return { result, runs };
+  }
+
+  it('skips the 9th hourly reply for the same client across tickets', async () => {
+    const database = createDb();
+    saveAiSettings(database, {
+      enabled: true,
+      testMode: false,
+      customerRepliesPerHour: 8,
+      customerRepliesPerTicket: 0,
+    });
+    const client = { id: 77, phone: '+998901112233' };
+    for (let i = 1; i <= 8; i += 1) {
+      const ticketId = i <= 4 ? 101 : 102;
+      const chatId = ticketId === 101 ? 'chat-101' : 'chat-102';
+      const { result, runs } = await sendClientReply(database, {
+        chatId,
+        ticketId,
+        client,
+        messageId: 1000 + i,
+      });
+      assert.equal(result.handled, true, `reply ${i} should send`);
+      assert.equal(runs.n, 1);
+    }
+    const ninth = await sendClientReply(database, {
+      chatId: 'chat-102',
+      ticketId: 102,
+      client,
+      messageId: 2009,
+    });
+    assert.equal(ninth.result.handled, false);
+    assert.equal(ninth.result.reason, 'rate-limit');
+    assert.equal(ninth.runs.n, 0);
+  });
+
+  it('auto-stops at the ticket cap and resumes after unmute resets the count', async () => {
+    const database = createDb();
+    saveAiSettings(database, {
+      enabled: true,
+      testMode: false,
+      customerRepliesPerHour: 0,
+      customerRepliesPerTicket: 1,
+    });
+    const client = { id: 88, phone: '+998909998877' };
+    const first = await sendClientReply(database, {
+      chatId: 'chat-88',
+      ticketId: 88,
+      client,
+      messageId: 1,
+    });
+    assert.equal(first.result.handled, true);
+    assert.equal(isTicketAiStopped(database, 88), true);
+    assert.equal(getCustomerReplyCount(database, 88), 1);
+
+    const blocked = await sendClientReply(database, {
+      chatId: 'chat-88',
+      ticketId: 88,
+      client,
+      messageId: 2,
+    });
+    assert.equal(blocked.result.handled, false);
+    assert.equal(blocked.result.reason, 'stopped');
+    assert.equal(blocked.runs.n, 0);
+
+    setTicketAiStopped(database, 88, false);
+    assert.equal(isTicketAiStopped(database, 88), false);
+    assert.equal(getCustomerReplyCount(database, 88), 0);
+
+    const resumed = await sendClientReply(database, {
+      chatId: 'chat-88',
+      ticketId: 88,
+      client,
+      messageId: 3,
+    });
+    assert.equal(resumed.result.handled, true);
+    assert.equal(getCustomerReplyCount(database, 88), 1);
+  });
+
+  it('treats 0 as unlimited for each customer reply cap independently', async () => {
+    const database = createDb();
+    saveAiSettings(database, {
+      enabled: true,
+      testMode: false,
+      customerRepliesPerHour: 0,
+      customerRepliesPerTicket: 1,
+    });
+    const client = { id: 55, phone: '+998901110000' };
+    const first = await sendClientReply(database, {
+      chatId: 'chat-55a',
+      ticketId: 551,
+      client,
+      messageId: 1,
+    });
+    assert.equal(first.result.handled, true);
+    const otherTicket = await sendClientReply(database, {
+      chatId: 'chat-55b',
+      ticketId: 552,
+      client,
+      messageId: 2,
+    });
+    assert.equal(otherTicket.result.handled, true);
+
+    saveAiSettings(database, {
+      customerRepliesPerHour: 1,
+      customerRepliesPerTicket: 0,
+    });
+    const clientB = { id: 56, phone: '+998901110001' };
+    const hourlyFirst = await sendClientReply(database, {
+      chatId: 'chat-56a',
+      ticketId: 561,
+      client: clientB,
+      messageId: 3,
+    });
+    assert.equal(hourlyFirst.result.handled, true);
+    const hourlySecond = await sendClientReply(database, {
+      chatId: 'chat-56b',
+      ticketId: 562,
+      client: clientB,
+      messageId: 4,
+    });
+    assert.equal(hourlySecond.result.handled, false);
+    assert.equal(hourlySecond.result.reason, 'rate-limit');
+    assert.equal(hourlySecond.runs.n, 0);
+  });
+
+  it('does not consume quota when the reply fails to send', async () => {
+    const database = createDb();
+    saveAiSettings(database, {
+      enabled: true,
+      testMode: false,
+      customerRepliesPerHour: 8,
+      customerRepliesPerTicket: 20,
+    });
+    const client = { id: 44, phone: '+998907776655' };
+    const ticket = { id: 44, client_id: 44, client };
+    const failed = await sendClientReply(database, {
+      chatId: 'chat-44',
+      ticketId: 44,
+      client,
+      messageId: 1,
+      onSend: async () => {
+        throw new Error('send failed');
+      },
+    });
+    assert.equal(failed.result.handled, false);
+    assert.equal(failed.result.reason, 'send-failed');
+    assert.equal(failed.runs.n, 1);
+    assert.equal(getCustomerReplyCount(database, 44), 0);
+    assert.equal(countCustomerUsageSince(database, resolveCustomerUsageKey(ticket, 'chat-44')), 0);
   });
 
   it('passes the stored customer system prompt into runAgent', async () => {
@@ -1910,6 +2310,62 @@ describe('close_ticket tool', () => {
     }).find((tool) => tool.name === 'close_ticket');
     assert.deepEqual(await already.execute(), { ok: true, already_closed: true });
     assert.equal(closed, 'unchanged');
+  });
+});
+
+describe('get_client_firm tool', () => {
+  it('uses only the ticket client phone and ignores extra args', async () => {
+    const database = createDb();
+    const queried = [];
+    const firm = createCustomerTools({
+      db: database,
+      ticket: { id: 42, client: { phone: '+998901112233' } },
+      deps: {
+        searchUser: async (query) => {
+          queried.push(query);
+          return { found: true, message: 'Firm card' };
+        },
+        searchFirmAdmin: async () => {
+          throw new Error('must not fall through');
+        },
+      },
+    }).find((tool) => tool.name === 'get_client_firm');
+
+    const missing = createCustomerTools({ db: database }).find((tool) => tool.name === 'get_client_firm');
+    assert.deepEqual(await missing.execute(), { ok: false, error: 'missing_phone' });
+
+    const noPhone = createCustomerTools({
+      db: database,
+      ticket: { id: 42, client: { name: 'Fariz' } },
+    }).find((tool) => tool.name === 'get_client_firm');
+    assert.deepEqual(await noPhone.execute(), { ok: false, error: 'missing_phone' });
+
+    const result = await firm.execute({ phone: '998909999999', query: 'other' });
+    assert.equal(result.found, true);
+    assert.equal(result.message, 'Firm card');
+    assert.equal(result.phone, '+998901112233');
+    assert.deepEqual(queried, ['+998901112233']);
+  });
+
+  it('falls through to searchFirmAdmin when searchUser finds nothing', async () => {
+    const database = createDb();
+    const queried = [];
+    const firm = createCustomerTools({
+      db: database,
+      ticket: { id: 42, client: { phone: '998901112233' } },
+      deps: {
+        searchUser: async () => ({ found: false }),
+        searchFirmAdmin: async (query) => {
+          queried.push(query);
+          return { found: true, result: [{ type: 'partner', clientName: 'Test' }] };
+        },
+      },
+    }).find((tool) => tool.name === 'get_client_firm');
+
+    const result = await firm.execute();
+    assert.equal(result.found, true);
+    assert.equal(result.phone, '998901112233');
+    assert.deepEqual(queried, ['998901112233']);
   });
 });
 

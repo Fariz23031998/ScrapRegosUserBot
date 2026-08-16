@@ -238,7 +238,8 @@ async function runTicketAssistAgent({
           },
         }),
       ],
-      settings.disabledTools,
+      settings.disabledAgentTools,
+      'customer_assist',
     );
 
     const result = await run({

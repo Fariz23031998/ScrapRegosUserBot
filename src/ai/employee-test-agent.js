@@ -252,7 +252,8 @@ async function runEmployeeTestAgent({
             },
           }),
         ],
-        settings.disabledTools
+        settings.disabledAgentTools,
+        'customer_assist',
       ),
     });
 

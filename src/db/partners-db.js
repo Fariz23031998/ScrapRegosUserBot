@@ -173,6 +173,8 @@ function migrateSchema(db) {
   ensureChatFileExtractionsTable(db);
   const { ensureTicketAiStateTable } = require('./ticket-ai-state');
   ensureTicketAiStateTable(db);
+  const { ensureAiCustomerUsageTable } = require('./ai-customer-usage');
+  ensureAiCustomerUsageTable(db);
 }
 
 const {

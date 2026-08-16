@@ -126,22 +126,23 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Vite hashed assets (filenames change per build — safe to cache long).
+    # Vite hashed assets (filenames change per build — safe to cache 1y).
     location ^~ /bot-admin/assets/ {
         alias /srv/ScrapRegosUserBot/bot-admin-ui/dist/assets/;
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800, immutable" always;
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
         access_log off;
     }
 
     # React SPA shell + other files from dist (deep links fall back to index.html).
     # Prefer error_page over try_files here — alias + try_files is unreliable in nginx.
+    # no-cache: revalidate HTML every navigation; a new index.html points at new hashed assets.
     location /bot-admin/ {
         alias /srv/ScrapRegosUserBot/bot-admin-ui/dist/;
         index index.html;
         error_page 404 = @bot_admin_spa;
         expires -1;
-        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        add_header Cache-Control "no-cache, must-revalidate" always;
     }
 
     location @bot_admin_spa {
@@ -151,7 +152,7 @@ server {
     location = /bot-admin/index.html {
         alias /srv/ScrapRegosUserBot/bot-admin-ui/dist/index.html;
         expires -1;
-        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        add_header Cache-Control "no-cache, must-revalidate" always;
     }
 
     location = /pay {

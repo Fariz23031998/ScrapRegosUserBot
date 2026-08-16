@@ -263,7 +263,8 @@ async function runCustomerTestAgent({
             }),
           },
         }),
-        settings.disabledTools,
+        settings.disabledAgentTools,
+        'customer',
       ),
     });
 

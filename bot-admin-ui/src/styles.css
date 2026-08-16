@@ -1595,6 +1595,16 @@ body.is-column-resizing * {
   background: var(--muted);
 }
 
+.settings-tool-row--off {
+  opacity: 0.72;
+}
+
+.settings-tool-row__main {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
 .settings-tool-row__toggle {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1631,8 +1641,21 @@ body.is-column-resizing * {
 }
 
 .settings-tool-row__agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  padding-left: 1.7rem;
+}
+
+.settings-tool-row__agent {
+  align-self: center;
   font-size: 0.8rem;
   color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.settings-tool-row__agent input:disabled + span {
+  cursor: default;
 }
 
 .settings-tool-row__test {
@@ -1721,6 +1744,17 @@ body.is-column-resizing * {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--muted);
+}
+
+.settings-ignore-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.settings-ignore-row input {
+  min-width: 0;
 }
 
 .settings-topic-row label {

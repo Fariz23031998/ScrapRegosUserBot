@@ -89,6 +89,12 @@ const AGENT_TOOL_CATALOG = [
     agents: ['customer', 'customer_assist'],
   },
   {
+    name: 'get_client_firm',
+    title: 'Фирма клиента',
+    description: 'Загрузить данные фирмы текущего клиента тикета по его телефону.',
+    agents: ['customer', 'customer_assist'],
+  },
+  {
     name: 'get_prices',
     title: 'Прайс-лист',
     description: 'Загрузить каталог цен и тарифы техподдержки.',
@@ -151,9 +157,66 @@ const AGENT_TOOL_CATALOG = [
 ];
 
 const KNOWN_TOOL_NAMES = new Set(AGENT_TOOL_CATALOG.map((tool) => tool.name));
+const TOOL_AGENTS_BY_NAME = new Map(AGENT_TOOL_CATALOG.map((tool) => [tool.name, tool.agents]));
+const TOOL_AGENT_SLUGS = ['customer', 'customer_assist', 'kb'];
 
 function isKnownAgentTool(name) {
   return KNOWN_TOOL_NAMES.has(String(name || ''));
+}
+
+function isToolAgentSlug(slug) {
+  return TOOL_AGENT_SLUGS.includes(String(slug || ''));
+}
+
+function agentsForTool(name) {
+  return [...(TOOL_AGENTS_BY_NAME.get(String(name || '')) || [])];
+}
+
+function toolBelongsToAgent(name, slug) {
+  return agentsForTool(name).includes(String(slug || ''));
+}
+
+function emptyDisabledAgentTools() {
+  return Object.fromEntries(TOOL_AGENT_SLUGS.map((slug) => [slug, []]));
+}
+
+function cloneDisabledAgentTools(map) {
+  const next = emptyDisabledAgentTools();
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return next;
+  for (const slug of TOOL_AGENT_SLUGS) {
+    next[slug] = Array.isArray(map[slug]) ? [...map[slug]] : [];
+  }
+  return next;
+}
+
+function isDisabledAgentToolsEmpty(map) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return true;
+  return TOOL_AGENT_SLUGS.every((slug) => !Array.isArray(map[slug]) || map[slug].length === 0);
+}
+
+function expandDisabledToolsToAgentMap(disabledTools = []) {
+  const next = emptyDisabledAgentTools();
+  for (const item of Array.isArray(disabledTools) ? disabledTools : []) {
+    const name = String(item || '').trim();
+    if (!name) continue;
+    for (const slug of agentsForTool(name)) {
+      if (!isToolAgentSlug(slug) || next[slug].includes(name)) continue;
+      next[slug].push(name);
+    }
+  }
+  return next;
+}
+
+function deriveFullyDisabledTools(disabledAgentTools, catalog = AGENT_TOOL_CATALOG) {
+  const map = cloneDisabledAgentTools(disabledAgentTools);
+  const names = [];
+  for (const tool of catalog || []) {
+    const agents = Array.isArray(tool.agents) ? tool.agents.filter(isToolAgentSlug) : [];
+    if (!agents.length) continue;
+    const allDisabled = agents.every((slug) => map[slug].includes(tool.name));
+    if (allDisabled) names.push(tool.name);
+  }
+  return names;
 }
 
 function listAgentToolCatalog() {
@@ -169,12 +232,20 @@ function listAgentToolCatalog() {
   );
 }
 
-function filterEnabledTools(tools, disabledTools = []) {
-  const disabled = new Set(
-    (Array.isArray(disabledTools) ? disabledTools : [])
-      .map((name) => String(name || '').trim())
-      .filter(Boolean),
-  );
+function namesDisabledForAgent(disabledAgentTools, agentSlug) {
+  if (Array.isArray(disabledAgentTools)) {
+    return new Set(
+      disabledAgentTools.map((name) => String(name || '').trim()).filter(Boolean),
+    );
+  }
+  if (!disabledAgentTools || typeof disabledAgentTools !== 'object') return new Set();
+  const slug = String(agentSlug || '').trim();
+  const rows = Array.isArray(disabledAgentTools[slug]) ? disabledAgentTools[slug] : [];
+  return new Set(rows.map((name) => String(name || '').trim()).filter(Boolean));
+}
+
+function filterEnabledTools(tools, disabledAgentTools = [], agentSlug) {
+  const disabled = namesDisabledForAgent(disabledAgentTools, agentSlug);
   if (!disabled.size) return Array.isArray(tools) ? tools : [];
   return (tools || []).filter((tool) => !disabled.has(String(tool?.name || '')));
 }
@@ -182,7 +253,16 @@ function filterEnabledTools(tools, disabledTools = []) {
 module.exports = {
   AGENT_TOOL_CATALOG,
   KNOWN_TOOL_NAMES,
+  TOOL_AGENT_SLUGS,
   isKnownAgentTool,
+  isToolAgentSlug,
+  agentsForTool,
+  toolBelongsToAgent,
+  emptyDisabledAgentTools,
+  cloneDisabledAgentTools,
+  isDisabledAgentToolsEmpty,
+  expandDisabledToolsToAgentMap,
+  deriveFullyDisabledTools,
   listAgentToolCatalog,
   filterEnabledTools,
 };

@@ -84,6 +84,22 @@ function createCustomerTools({
   const notifyGroupTopic =
     deps.notifyGroupTopic || ((args) => require('./notify-group').notifyGroupTopic(db, args));
 
+  async function lookupClientFirm(text) {
+    try {
+      const userResult = await searchUser(text);
+      if (userResult && userResult.ok !== false && (userResult.found || userResult.result || userResult.message)) {
+        return userResult;
+      }
+    } catch (error) {
+      if (!error) return { ok: false, error: 'search_failed' };
+    }
+    try {
+      return await searchFirmAdmin(text);
+    } catch (error) {
+      return { ok: false, error: error.message || 'search_failed' };
+    }
+  }
+
   const tools = createKnowledgeTools({ db, write: false, deps });
 
   tools.push(
@@ -194,20 +210,25 @@ function createCustomerTools({
       execute: async ({ query }) => {
         const text = String(query || ticket?.client?.phone || '').trim();
         if (!text) return { ok: false, error: 'empty_query' };
-        try {
-          const userResult = await searchUser(text);
-          if (userResult && userResult.ok !== false && (userResult.found || userResult.result || userResult.message)) {
-            return userResult;
-          }
-        } catch (error) {
-          // Fall through to firm search.
-          if (!error) return { ok: false, error: 'search_failed' };
+        return lookupClientFirm(text);
+      },
+    },
+    {
+      name: 'get_client_firm',
+      description:
+        'Load billing-portal firm data for the current ticket client. Uses only that client’s phone from the ticket. Do not pass a phone or query.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      execute: async () => {
+        const phone = String(ticket?.client?.phone || '').trim();
+        if (!phone) return { ok: false, error: 'missing_phone' };
+        const result = await lookupClientFirm(phone);
+        if (result && typeof result === 'object') {
+          return { ...result, phone };
         }
-        try {
-          return await searchFirmAdmin(text);
-        } catch (error) {
-          return { ok: false, error: error.message || 'search_failed' };
-        }
+        return { ok: false, error: 'search_failed', phone };
       },
     },
     {

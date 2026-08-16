@@ -7,6 +7,7 @@ const TICKET_REQUIRED_TOOLS = new Set([
   'search_chat_history',
   'read_chat_image',
   'transcribe_chat_audio',
+  'get_client_firm',
   'assign_responsible',
   'close_ticket',
   'reply_to_customer',

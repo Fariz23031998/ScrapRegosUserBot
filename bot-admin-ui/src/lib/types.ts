@@ -60,20 +60,22 @@ export type AiGroupTopic = {
 };
 
 export type AiPromptSlug = "customer" | "customer_assist" | "kb" | "ticket_summary";
+export type AiToolAgentSlug = "customer" | "customer_assist" | "kb";
 
 export type AiAgentTool = {
   name: string;
   title: string;
   description: string;
-  agents: AiPromptSlug[];
+  agents: AiToolAgentSlug[];
   enabled: boolean;
+  enabled_agents?: Partial<Record<AiToolAgentSlug, boolean>>;
 };
 
 export type AiToolSchema = {
   name: string;
   title: string;
   description: string;
-  agents: AiPromptSlug[];
+  agents: AiToolAgentSlug[];
   parameters?: Record<string, unknown>;
   requires_ticket: boolean;
 };
@@ -96,9 +98,13 @@ export type AiSettings = {
   transcribe_model?: string;
   reasoning_effort?: string;
   history_limit: number;
+  customer_replies_per_hour?: number;
+  customer_replies_per_ticket?: number;
   group_chat_id?: string;
   group_topics?: AiGroupTopic[];
   disabled_tools?: string[];
+  disabled_agent_tools?: Partial<Record<AiToolAgentSlug, string[]>>;
+  ignored_customer_messages?: string[];
   agent_tools?: AiAgentTool[];
   providers?: string[];
   models?: string[];
@@ -108,7 +114,12 @@ export type AiSettings = {
   agent_model_slugs?: AiPromptSlug[];
   history_limit_min?: number;
   history_limit_max?: number;
+  customer_replies_per_hour_min?: number;
+  customer_replies_per_hour_max?: number;
+  customer_replies_per_ticket_min?: number;
+  customer_replies_per_ticket_max?: number;
   group_topics_max?: number;
+  ignored_customer_messages_max?: number;
   openai_api_key_configured?: boolean;
   openai_api_key_hint?: string;
   openai_api_key_source?: "database" | "env" | "none" | string;

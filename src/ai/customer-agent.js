@@ -35,6 +35,8 @@ const { knowledgeCategoryContext } = require('../db/knowledge-articles');
 
 const inflightChats = new Set();
 const pendingCustomerChats = new Map();
+const inflightClients = new Set();
+const pendingClientWork = new Map();
 const processedCustomerMessages = new Map();
 const PROCESSED_MESSAGE_TTL_MS = 60 * 60 * 1000;
 
@@ -141,6 +143,13 @@ function resolveCustomerTrigger(messages, messageId, payload) {
   return trigger;
 }
 
+function isIgnoredCustomerMessage(text, list) {
+  const normalized = String(text || '').trim().toLowerCase();
+  if (!normalized) return false;
+  const items = Array.isArray(list) ? list : [];
+  return items.some((item) => String(item || '').trim().toLowerCase() === normalized);
+}
+
 function evaluateCustomerMessageGate({ settings, message, ticket, isEmployeePhone = false, aiStopped = false } = {}) {
   if (!settings?.enabled) return { handle: false, reason: 'disabled' };
   // Per-ticket stop: blocks automatic customer replies only (not employee assist).
@@ -159,17 +168,47 @@ function evaluateCustomerMessageGate({ settings, message, ticket, isEmployeePhon
   if (settings.testMode && !isEmployeePhone) {
     return { handle: false, reason: 'test-mode' };
   }
+  const triggerText = message?.display_text || message?.text;
+  if (isIgnoredCustomerMessage(triggerText, settings.ignoredCustomerMessages)) {
+    return { handle: false, reason: 'ignored-message' };
+  }
   return { handle: true, reason: null };
 }
 
-function evaluateCustomerMessageGateWithDb(db, { settings, message, ticket } = {}) {
+function evaluateCustomerReplyQuota(db, { settings, ticket, chatId } = {}) {
+  if (!db) return { handle: true, reason: null };
+  const perTicket = Number(settings?.customerRepliesPerTicket);
+  if (Number.isInteger(perTicket) && perTicket > 0) {
+    const { getCustomerReplyCount } = require('../db/ticket-ai-state');
+    if (getCustomerReplyCount(db, ticket?.id) >= perTicket) {
+      return { handle: false, reason: 'ticket-cap' };
+    }
+  }
+  const perHour = Number(settings?.customerRepliesPerHour);
+  if (Number.isInteger(perHour) && perHour > 0) {
+    const { countCustomerUsageSince, resolveCustomerUsageKey } = require('../db/ai-customer-usage');
+    const clientKey = resolveCustomerUsageKey(ticket, chatId);
+    if (countCustomerUsageSince(db, clientKey) >= perHour) {
+      return { handle: false, reason: 'rate-limit' };
+    }
+  }
+  return { handle: true, reason: null };
+}
+
+function evaluateCustomerMessageGateWithDb(db, { settings, message, ticket, chatId } = {}) {
   const { isTicketAiStopped } = require('../db/ticket-ai-state');
-  return evaluateCustomerMessageGate({
+  const gate = evaluateCustomerMessageGate({
     settings,
     message,
     ticket,
     isEmployeePhone: isEmployeeClientPhone(db, ticket?.client?.phone),
     aiStopped: isTicketAiStopped(db, ticket?.id),
+  });
+  if (!gate.handle) return gate;
+  return evaluateCustomerReplyQuota(db, {
+    settings,
+    ticket,
+    chatId: chatId || ticket?.chat_id,
   });
 }
 
@@ -459,7 +498,7 @@ async function previewCustomerAgentPrompt({ db, ticketId, messageId, deps = {} }
     deps,
   });
   const tools = serializeCustomerTools(
-    filterEnabledTools(createCustomerTools({ db, ticket, chatId, filesById, deps }), settings.disabledTools),
+    filterEnabledTools(createCustomerTools({ db, ticket, chatId, filesById, deps }), settings.disabledAgentTools, 'customer'),
   );
   if (!trigger) {
     return buildPreviewResult({
@@ -487,7 +526,12 @@ async function previewCustomerAgentPrompt({ db, ticketId, messageId, deps = {} }
     system,
     messages: prependUserContext(history, context),
     tools,
-    gate: evaluateCustomerMessageGateWithDb(db, { settings, message: trigger, ticket }),
+    gate: evaluateCustomerMessageGateWithDb(db, {
+      settings,
+      message: trigger,
+      ticket,
+      chatId,
+    }),
     settings: serializedSettings,
     trigger,
     chatId,
@@ -568,8 +612,16 @@ async function handleCustomerChatMessage({
       return { handled: false, reason: 'already-processed' };
     }
 
-    const gate = evaluateCustomerMessageGateWithDb(db, { settings, message: trigger, ticket });
+    const gate = evaluateCustomerMessageGateWithDb(db, {
+      settings,
+      message: trigger,
+      ticket,
+      chatId: id,
+    });
     if (!gate.handle) {
+      if (gate.reason === 'ticket-cap') {
+        require('../db/ticket-ai-state').setTicketAiStopped(db, ticket.id, true);
+      }
       console.info(`[ai] skip customer message: ${gate.reason} chat=${id} ticket=${ticket.id}`);
       auditAiEvent(db, {
         ticketId: ticket.id,
@@ -625,98 +677,142 @@ async function handleCustomerChatMessage({
       return { handled: false, reason: 'already-replied' };
     }
 
-    const history = await buildCustomerModelMessages({
-      messages,
-      trigger,
-      filesById,
-      download,
-      transcribe,
-      transcribeModel: settings.transcribeModel,
-      historyLimit: settings.historyLimit,
-      db,
-      ticketId: ticket.id,
-    });
-    if (!history.length) return { handled: false, reason: 'empty-history' };
-
-    let closeRequested = false;
-    const setTicketStatus =
-      deps.setTicketStatus || require('../integrations/regos-crm').setTicketStatus;
-
-    const result = await run({
-      provider,
-      providerName: settings.provider,
-      model,
-      system: buildCustomerSystemPrompt(db),
-      messages: prependUserContext(history, buildCustomerContextContent(db, ticket)),
-      promptCacheKey: buildPromptCacheKey('customer', ticket.id),
-      tools: filterEnabledTools(
-        createCustomerTools({
-          db,
-          ticket,
-          chatId: id,
-          filesById,
-          deps: {
-            ...deps,
-            transcribeModel: settings.transcribeModel,
-            onTicketClose: () => {
-              closeRequested = true;
-            },
-          },
-        }),
-        settings.disabledTools,
-      ),
-      reasoningEffort: settings.reasoningEffort,
-      hasVision: historyHasVisionParts(history),
-      hasAudio: historyHasAudioTranscript(history),
-    });
-
-    const reply = truncateText(result.content);
-    if (!reply) return { handled: false, reason: 'empty-reply' };
-
-    try {
-      await addTicketMessage({
-        chatId: id,
-        text: reply,
-        authorEntityType: 'User',
-        authorEntityId,
-      });
-    } catch (error) {
-      console.error(`[ai] failed to send reply to ticket ${ticket.id}:`, error);
-      auditAiEvent(db, {
-        ticketId: ticket.id,
-        action: 'ai_skip',
-        summary: `AI не смог отправить ответ в тикет #${ticket.id}`,
-        details: { reason: 'send-failed', model },
-      });
-      return { handled: false, reason: 'send-failed' };
+    const { resolveCustomerUsageKey, recordCustomerUsage } = require('../db/ai-customer-usage');
+    const { incrementCustomerReplyCount, setTicketAiStopped } = require('../db/ticket-ai-state');
+    const clientKey = resolveCustomerUsageKey(ticket, id);
+    if (inflightClients.has(clientKey)) {
+      pendingClientWork.set(clientKey, { db, chatId: id, messageId, payload, deps });
+      return { handled: false, reason: 'busy' };
     }
-
-    let closed = false;
-    if (closeRequested) {
-      try {
-        await setTicketStatus(ticket.id, 'Closed');
-        closed = true;
-      } catch (error) {
-        console.error(`[ai] failed to close ticket ${ticket.id}:`, error);
+    inflightClients.add(clientKey);
+    try {
+      const quota = evaluateCustomerReplyQuota(db, { settings, ticket, chatId: id });
+      if (!quota.handle) {
+        if (quota.reason === 'ticket-cap') {
+          setTicketAiStopped(db, ticket.id, true);
+        }
+        console.info(`[ai] skip customer message: ${quota.reason} chat=${id} ticket=${ticket.id}`);
         auditAiEvent(db, {
           ticketId: ticket.id,
           action: 'ai_skip',
-          summary: `AI не смог закрыть тикет #${ticket.id}`,
-          details: { reason: 'close-failed', model },
+          summary: `AI пропустил тикет #${ticket.id}: ${quota.reason}`,
+          details: { reason: quota.reason, model },
+        });
+        return { handled: false, reason: quota.reason };
+      }
+
+      const history = await buildCustomerModelMessages({
+        messages,
+        trigger,
+        filesById,
+        download,
+        transcribe,
+        transcribeModel: settings.transcribeModel,
+        historyLimit: settings.historyLimit,
+        db,
+        ticketId: ticket.id,
+      });
+      if (!history.length) return { handled: false, reason: 'empty-history' };
+
+      let closeRequested = false;
+      const setTicketStatus =
+        deps.setTicketStatus || require('../integrations/regos-crm').setTicketStatus;
+
+      const result = await run({
+        provider,
+        providerName: settings.provider,
+        model,
+        system: buildCustomerSystemPrompt(db),
+        messages: prependUserContext(history, buildCustomerContextContent(db, ticket)),
+        promptCacheKey: buildPromptCacheKey('customer', ticket.id),
+        tools: filterEnabledTools(
+          createCustomerTools({
+            db,
+            ticket,
+            chatId: id,
+            filesById,
+            deps: {
+              ...deps,
+              transcribeModel: settings.transcribeModel,
+              onTicketClose: () => {
+                closeRequested = true;
+              },
+            },
+          }),
+          settings.disabledAgentTools,
+          'customer',
+        ),
+        reasoningEffort: settings.reasoningEffort,
+        hasVision: historyHasVisionParts(history),
+        hasAudio: historyHasAudioTranscript(history),
+      });
+
+      const reply = truncateText(result.content);
+      if (!reply) return { handled: false, reason: 'empty-reply' };
+
+      try {
+        await addTicketMessage({
+          chatId: id,
+          text: reply,
+          authorEntityType: 'User',
+          authorEntityId,
+        });
+      } catch (error) {
+        console.error(`[ai] failed to send reply to ticket ${ticket.id}:`, error);
+        auditAiEvent(db, {
+          ticketId: ticket.id,
+          action: 'ai_skip',
+          summary: `AI не смог отправить ответ в тикет #${ticket.id}`,
+          details: { reason: 'send-failed', model },
+        });
+        return { handled: false, reason: 'send-failed' };
+      }
+
+      recordCustomerUsage(db, { ticketId: ticket.id, clientKey });
+      const nextCount = incrementCustomerReplyCount(db, ticket.id);
+      const perTicket = Number(settings.customerRepliesPerTicket);
+      if (Number.isInteger(perTicket) && perTicket > 0 && nextCount >= perTicket) {
+        setTicketAiStopped(db, ticket.id, true);
+      }
+
+      let closed = false;
+      if (closeRequested) {
+        try {
+          await setTicketStatus(ticket.id, 'Closed');
+          closed = true;
+        } catch (error) {
+          console.error(`[ai] failed to close ticket ${ticket.id}:`, error);
+          auditAiEvent(db, {
+            ticketId: ticket.id,
+            action: 'ai_skip',
+            summary: `AI не смог закрыть тикет #${ticket.id}`,
+            details: { reason: 'close-failed', model },
+          });
+        }
+      }
+
+      markCustomerMessageProcessed(id, trigger.id);
+      auditAiEvent(db, {
+        ticketId: ticket.id,
+        action: 'ai_reply',
+        summary: closed
+          ? `AI ответил и закрыл тикет #${ticket.id}`
+          : `AI ответил в тикет #${ticket.id}`,
+        details: { model, provider: settings.provider, steps: result.steps, closed },
+      });
+      return { handled: true, reason: null, reply, closed };
+    } finally {
+      inflightClients.delete(clientKey);
+      const pendingClient = pendingClientWork.get(clientKey);
+      if (pendingClient) {
+        pendingClientWork.delete(clientKey);
+        setImmediate(() => {
+          handleCustomerChatMessage(pendingClient).catch((error) => {
+            console.error('[ai] customer agent failed', error);
+          });
         });
       }
     }
-
-    markCustomerMessageProcessed(id, trigger.id);
-    auditAiEvent(db, {
-      ticketId: ticket.id,
-      action: 'ai_reply',
-      summary: closed
-        ? `AI ответил и закрыл тикет #${ticket.id}`
-        : `AI ответил в тикет #${ticket.id}`,
-      details: { model, provider: settings.provider, steps: result.steps, closed },
-    });
-    return { handled: true, reason: null, reply, closed };
   } finally {
     inflightChats.delete(id);
     const pending = pendingCustomerChats.get(id);
@@ -740,6 +836,8 @@ async function handleCustomerChatMessage({
 function resetCustomerAgentLocks() {
   inflightChats.clear();
   pendingCustomerChats.clear();
+  inflightClients.clear();
+  pendingClientWork.clear();
   processedCustomerMessages.clear();
 }
 
@@ -747,6 +845,8 @@ module.exports = {
   CUSTOMER_SYSTEM_PROMPT,
   evaluateCustomerMessageGate,
   evaluateCustomerMessageGateWithDb,
+  evaluateCustomerReplyQuota,
+  isIgnoredCustomerMessage,
   handleCustomerChatMessage,
   previewCustomerAgentPrompt,
   buildCustomerSystemPrompt,

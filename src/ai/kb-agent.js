@@ -55,7 +55,8 @@ async function runKbAgent({
     promptCacheKey: buildPromptCacheKey('kb', session.id),
     tools: filterEnabledTools(
       createKnowledgeTools({ db, userId, write: canWrite, deps }),
-      settings.disabledTools,
+      settings.disabledAgentTools,
+      'kb',
     ),
     reasoningEffort: settings.reasoningEffort,
     hasVision: historyHasVisionParts(history),

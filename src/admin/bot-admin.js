@@ -1756,9 +1756,16 @@ function createBotAdminRouter(db) {
         transcribeModel: req.body?.transcribe_model ?? req.body?.transcribeModel,
         reasoningEffort: req.body?.reasoning_effort ?? req.body?.reasoningEffort,
         historyLimit: req.body?.history_limit ?? req.body?.historyLimit,
+        customerRepliesPerHour:
+          req.body?.customer_replies_per_hour ?? req.body?.customerRepliesPerHour,
+        customerRepliesPerTicket:
+          req.body?.customer_replies_per_ticket ?? req.body?.customerRepliesPerTicket,
         groupChatId: req.body?.group_chat_id ?? req.body?.groupChatId,
         groupTopics: req.body?.group_topics ?? req.body?.groupTopics,
         disabledTools: req.body?.disabled_tools ?? req.body?.disabledTools,
+        disabledAgentTools: req.body?.disabled_agent_tools ?? req.body?.disabledAgentTools,
+        ignoredCustomerMessages:
+          req.body?.ignored_customer_messages ?? req.body?.ignoredCustomerMessages,
       };
       if (
         Object.prototype.hasOwnProperty.call(req.body || {}, 'openai_api_key') ||
@@ -1798,9 +1805,11 @@ function createBotAdminRouter(db) {
         error.message === 'INVALID_AI_TRANSCRIBE_MODEL' ||
         error.message === 'INVALID_AI_REASONING_EFFORT' ||
         error.message === 'INVALID_AI_HISTORY_LIMIT' ||
+        error.message === 'INVALID_AI_CUSTOMER_REPLY_LIMIT' ||
         error.message === 'INVALID_AI_GROUP_CHAT_ID' ||
         error.message === 'INVALID_AI_GROUP_TOPICS' ||
         error.message === 'INVALID_AI_DISABLED_TOOLS' ||
+        error.message === 'INVALID_AI_IGNORED_CUSTOMER_MESSAGES' ||
         error.message === 'INVALID_AI_API_KEY' ||
         error.message === 'INVALID_AI_BASE_URL'
       ) {

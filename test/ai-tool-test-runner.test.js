@@ -13,6 +13,7 @@ describe('ai tool test-runner', () => {
   it('marks ticket-scoped tools', () => {
     assert.equal(toolRequiresTicket('search_chat_history'), true);
     assert.equal(toolRequiresTicket('close_ticket'), true);
+    assert.equal(toolRequiresTicket('get_client_firm'), true);
     assert.equal(toolRequiresTicket('web_search'), false);
   });
 
@@ -33,6 +34,10 @@ describe('ai tool test-runner', () => {
     const close = tools.find((tool) => tool.name === 'close_ticket');
     assert.ok(close);
     assert.equal(close.requires_ticket, true);
+    const clientFirm = tools.find((tool) => tool.name === 'get_client_firm');
+    assert.ok(clientFirm);
+    assert.equal(clientFirm.requires_ticket, true);
+    assert.deepEqual(clientFirm.parameters, { type: 'object', properties: {} });
     assert.ok(tools.find((tool) => tool.name === 'list_knowledge_categories'));
     assert.ok(tools.find((tool) => tool.name === 'create_category'));
     assert.ok(tools.find((tool) => tool.name === 'update_category'));

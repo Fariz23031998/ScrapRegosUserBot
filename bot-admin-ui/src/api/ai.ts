@@ -5,6 +5,7 @@ import type {
   AiPromptSlug,
   AiPromptType,
   AiSettings,
+  AiToolAgentSlug,
   AiToolSchema,
   AiToolTestResult,
   CustomerTestSession,
@@ -27,9 +28,13 @@ export function saveAiSettings(payload: {
   transcribe_model?: string;
   reasoning_effort?: string;
   history_limit: number;
+  customer_replies_per_hour?: number;
+  customer_replies_per_ticket?: number;
   group_chat_id?: string;
   group_topics?: AiGroupTopic[];
   disabled_tools?: string[];
+  disabled_agent_tools?: Partial<Record<AiToolAgentSlug, string[]>>;
+  ignored_customer_messages?: string[];
   openai_api_key?: string;
   openai_base_url?: string;
   gemini_api_key?: string;
