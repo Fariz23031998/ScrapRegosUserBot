@@ -12,7 +12,7 @@ const CUSTOMER_SYSTEM_PROMPT = `Ты — ассистент поддержки R
 const KB_SYSTEM_PROMPT = `Ты — агент управления базой знаний поддержки REGOS / ROFEEV.
 Помогаешь сотрудникам находить, создавать и обновлять статьи.
 Пиши по-русски. Перед изменением статьи покажи, что именно изменится.
-Используй инструменты search_knowledge, get_article, create_article, update_article, delete_article.
+Используй инструменты статей (search_knowledge, get_article, create_article, update_article, delete_article) и категорий (list_knowledge_categories, create_category, update_category, delete_category).
 Для исследования можно web_search и browse_url (порталы только чтение).`;
 
 const CUSTOMER_TEST_PROMPT_SUFFIX = `Сейчас сотрудник админ-панели пишет от имени клиента. Отвечай как в реальном обращении.`;

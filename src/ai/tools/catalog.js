@@ -1,16 +1,25 @@
 /** Catalog of toggleable AI agent tools (settings UI + filtering). */
 
+const BROWSE_TOOL_NAMES = new Set(['web_search', 'browse_url']);
+
 const AGENT_TOOL_CATALOG = [
   {
     name: 'search_knowledge',
     title: 'Поиск в базе знаний',
-    description: 'Поиск статей внутренней базы знаний по коротким ключевым словам.',
+    description:
+      'Поиск статей внутренней базы знаний по коротким ключевым словам. Можно ограничить категорией.',
     agents: ['customer', 'customer_assist', 'kb'],
   },
   {
     name: 'get_article',
     title: 'Читать статью',
     description: 'Загрузить полную статью базы знаний по id.',
+    agents: ['customer', 'customer_assist', 'kb'],
+  },
+  {
+    name: 'list_knowledge_categories',
+    title: 'Список категорий',
+    description: 'Показать категории базы знаний (id, название, теги).',
     agents: ['customer', 'customer_assist', 'kb'],
   },
   {
@@ -28,19 +37,37 @@ const AGENT_TOOL_CATALOG = [
   {
     name: 'create_article',
     title: 'Создать статью',
-    description: 'Создать новую статью в базе знаний.',
+    description: 'Создать новую статью в базе знаний и при необходимости назначить категорию.',
     agents: ['kb'],
   },
   {
     name: 'update_article',
     title: 'Обновить статью',
-    description: 'Изменить существующую статью базы знаний.',
+    description: 'Изменить существующую статью базы знаний, в том числе категорию.',
     agents: ['kb'],
   },
   {
     name: 'delete_article',
     title: 'Удалить статью',
-    description: 'Удалить статью базы знаний.',
+    description: 'Удалить статью базы знаний. Заблокированные статьи удалить нельзя.',
+    agents: ['kb'],
+  },
+  {
+    name: 'create_category',
+    title: 'Создать категорию',
+    description: 'Создать категорию базы знаний.',
+    agents: ['kb'],
+  },
+  {
+    name: 'update_category',
+    title: 'Обновить категорию',
+    description: 'Изменить название или теги категории базы знаний.',
+    agents: ['kb'],
+  },
+  {
+    name: 'delete_category',
+    title: 'Удалить категорию',
+    description: 'Удалить категорию. Статьи в ней станут без категории.',
     agents: ['kb'],
   },
   {
@@ -52,13 +79,13 @@ const AGENT_TOOL_CATALOG = [
   {
     name: 'search_orders',
     title: 'Поиск заказов',
-    description: 'Найти заказы клиента или партнёра.',
+    description: 'Найти локальные платёжные заказы по телефону клиента или тексту.',
     agents: ['customer', 'customer_assist'],
   },
   {
     name: 'search_client',
     title: 'Поиск клиента',
-    description: 'Найти клиента или фирму по телефону, имени или ИНН.',
+    description: 'Найти клиента или фирму в биллинговых порталах по телефону, логину, ИНН или имени.',
     agents: ['customer', 'customer_assist'],
   },
   {
@@ -101,7 +128,7 @@ const AGENT_TOOL_CATALOG = [
     name: 'close_ticket',
     title: 'Закрыть обращение',
     description: 'Закрыть текущее обращение клиента, когда запрос полностью решён.',
-    agents: ['customer'],
+    agents: ['customer', 'customer_assist'],
   },
   {
     name: 'read_chat_image',
@@ -130,12 +157,16 @@ function isKnownAgentTool(name) {
 }
 
 function listAgentToolCatalog() {
-  return AGENT_TOOL_CATALOG.map((tool) => ({
-    name: tool.name,
-    title: tool.title,
-    description: tool.description,
-    agents: [...tool.agents],
-  }));
+  const { isBrowseEnabled } = require('./browse');
+  const browseEnabled = isBrowseEnabled();
+  return AGENT_TOOL_CATALOG.filter((tool) => browseEnabled || !BROWSE_TOOL_NAMES.has(tool.name)).map(
+    (tool) => ({
+      name: tool.name,
+      title: tool.title,
+      description: tool.description,
+      agents: [...tool.agents],
+    }),
+  );
 }
 
 function filterEnabledTools(tools, disabledTools = []) {

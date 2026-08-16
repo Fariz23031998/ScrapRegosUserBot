@@ -470,6 +470,27 @@ label {
   flex-shrink: 0;
 }
 
+.knowledge-user-prompt {
+  display: grid;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  padding: 0 0.15rem 0.5rem;
+  min-width: 0;
+}
+
+.knowledge-user-prompt h5 {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.knowledge-user-prompt .ticket-ai-prompt__pre {
+  max-height: 4.5rem;
+  padding: 0.5rem 0.65rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .knowledge-list-scroll {
   margin-top: 0.75rem;
   overflow: auto;

@@ -12,6 +12,9 @@ const SIDE_EFFECT_TOOLS = new Set([
   "delete_article",
   "create_article",
   "update_article",
+  "create_category",
+  "update_category",
+  "delete_category",
   "reply_to_customer",
 ]);
 

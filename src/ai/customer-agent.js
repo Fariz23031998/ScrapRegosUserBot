@@ -31,6 +31,7 @@ const {
 const { formatAudioTranscript, transcribeChatAudio } = require('./transcribe');
 const { formatImageCaption } = require('./image-caption');
 const { extractionsByFileId } = require('../db/chat-file-extractions');
+const { knowledgeCategoryContext } = require('../db/knowledge-articles');
 
 const inflightChats = new Set();
 const pendingCustomerChats = new Map();
@@ -350,7 +351,9 @@ function buildCustomerContextContent(db, ticket, { budgetTokens = SUMMARY_TOKEN_
   const summaries = listClientTicketSummaries(db, resolveTicketClientId(ticket), {
     excludeTicketId: ticket?.id,
   });
-  return formatPriorSummariesForPrompt(summaries, { budgetTokens });
+  return [formatPriorSummariesForPrompt(summaries, { budgetTokens }), knowledgeCategoryContext(db)]
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 async function loadCustomerAgentChatContext({

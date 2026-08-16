@@ -6,6 +6,7 @@ const { filterEnabledTools } = require('./tools/catalog');
 const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_ASSIST_PROMPT_SUFFIX } = require('./default-prompts');
 const { getResolvedPrompt } = require('../db/ai-prompts');
 const { listClientTicketSummaries } = require('../db/ticket-summaries');
+const { knowledgeCategoryContext } = require('../db/knowledge-articles');
 const { formatPriorSummariesForPrompt, resolveTicketClientId } = require('./ticket-period');
 const { historyHasAudioTranscript, historyHasVisionParts } = require('./chat-media');
 const { buildUploadedMessageContent, toModelHistory } = require('./chat-uploads');
@@ -72,6 +73,7 @@ function buildCustomerAssistContextContent(db, { ticket, chatSnapshot } = {}) {
   if (chatSnapshot) {
     parts.push(`Текущая переписка обращения (клиент видит только её):\n${chatSnapshot}`);
   }
+  parts.push(knowledgeCategoryContext(db));
   return parts.filter(Boolean).join('\n\n');
 }
 

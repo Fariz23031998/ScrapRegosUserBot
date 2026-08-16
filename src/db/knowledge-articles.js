@@ -174,13 +174,15 @@ function scoreArticleAgainstTokens(article, queryTokens) {
   let score = 0;
   let hits = 0;
   for (const token of queryTokens) {
+    const literal = foldSearchText(token);
     const variants = synonymVariantsForToken(token);
     let best = 0;
     for (const variant of variants) {
       if (!variant) continue;
-      if (title.includes(variant)) best = Math.max(best, 8);
-      else if (tags.includes(variant)) best = Math.max(best, 5);
-      else if (body.includes(variant)) best = Math.max(best, 2);
+      const boost = variant === literal ? 2 : 0;
+      if (title.includes(variant)) best = Math.max(best, 8 + boost);
+      else if (tags.includes(variant)) best = Math.max(best, 5 + boost);
+      else if (body.includes(variant)) best = Math.max(best, 2 + boost);
     }
     if (best > 0) {
       hits += 1;
@@ -189,6 +191,21 @@ function scoreArticleAgainstTokens(article, queryTokens) {
   }
   if (!hits) return 0;
   return score + hits * 10;
+}
+
+function compareScoredArticles(a, b) {
+  if (b.score !== a.score) return b.score - a.score;
+  const byDate = String(b.article.updated_at || '').localeCompare(String(a.article.updated_at || ''));
+  if (byDate) return byDate;
+  return Number(b.article.id) - Number(a.article.id);
+}
+
+function pageScoredArticles(scored, { limit, offset }) {
+  scored.sort(compareScoredArticles);
+  return {
+    articles: scored.slice(offset, offset + limit).map((row) => row.article),
+    total: scored.length,
+  };
 }
 
 function categoryFilterClause(categoryId) {
@@ -209,15 +226,7 @@ function searchArticlesByTokens(db, { queryTokens, limit, offset, categoryId }) 
     const score = scoreArticleAgainstTokens(article, queryTokens);
     if (score > 0) scored.push({ article, score });
   }
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    const byDate = String(b.article.updated_at || '').localeCompare(String(a.article.updated_at || ''));
-    if (byDate) return byDate;
-    return Number(b.article.id) - Number(a.article.id);
-  });
-  const total = scored.length;
-  const articles = scored.slice(offset, offset + limit).map((row) => row.article);
-  return { articles, total };
+  return pageScoredArticles(scored, { limit, offset });
 }
 
 function seedKnowledgeArticles(db) {
@@ -312,6 +321,10 @@ function formatKnowledgeCategoriesForTools(db) {
   if (!categories.length) return 'No categories yet. Omit category_id.';
   const list = categories.map((category) => `${category.id} ${category.name}`).join('; ');
   return `Categories: ${list}. Omit or null for none.`;
+}
+
+function knowledgeCategoryContext(db) {
+  return formatKnowledgeCategoriesForTools(db);
 }
 
 function getKnowledgeCategory(db, id) {
@@ -441,28 +454,23 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId 
     try {
       const ftsQuery = buildFtsOrQuery(matchTokens);
       if (ftsQuery) {
-        const total = db
+        const rows = db
           .prepare(
-            `SELECT COUNT(*) AS count
+            `SELECT ${ARTICLE_SELECT}
              FROM knowledge_articles_fts f
              JOIN knowledge_articles a ON a.id = f.rowid
-             WHERE knowledge_articles_fts MATCH ?${filter.sql}`
+             LEFT JOIN knowledge_categories c ON c.id = a.category_id
+             WHERE knowledge_articles_fts MATCH ?${filter.sql}
+             LIMIT ?`
           )
-          .get(ftsQuery, ...filter.params).count;
-        if (total > 0) {
-          const articles = db
-            .prepare(
-              `SELECT ${ARTICLE_SELECT}
-               FROM knowledge_articles_fts f
-               JOIN knowledge_articles a ON a.id = f.rowid
-               LEFT JOIN knowledge_categories c ON c.id = a.category_id
-               WHERE knowledge_articles_fts MATCH ?${filter.sql}
-               ORDER BY rank
-               LIMIT ? OFFSET ?`
-            )
-            .all(ftsQuery, ...filter.params, safeLimit, safeOffset)
-            .map(mapArticle);
-          return { articles, total };
+          .all(ftsQuery, ...filter.params, 200);
+        if (rows.length > 0) {
+          const scoreTokens = queryTokens.length ? queryTokens : matchTokens;
+          const scored = rows.map((row) => {
+            const article = mapArticle(row);
+            return { article, score: scoreArticleAgainstTokens(article, scoreTokens) };
+          });
+          return pageScoredArticles(scored, { limit: safeLimit, offset: safeOffset });
         }
       }
       // Empty FTS hit — fall through to tokenized scoring (never return empty solely on FTS AND/OR miss).
@@ -632,6 +640,7 @@ module.exports = {
   tokenizeKnowledgeQuery,
   listKnowledgeCategories,
   formatKnowledgeCategoriesForTools,
+  knowledgeCategoryContext,
   getKnowledgeCategory,
   createKnowledgeCategory,
   updateKnowledgeCategory,

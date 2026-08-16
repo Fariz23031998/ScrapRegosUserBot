@@ -342,8 +342,57 @@ describe('knowledge MCP HTTP', () => {
     assert.equal(created.data.article.category_id, categoryId);
     assert.equal(created.data.article.category?.name, 'MCP category');
 
-    const updated = await callMcp(
+    const filteredSearch = await callMcp(
       mcpRpc(6, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'MCP categorized article', category_id: categoryId },
+      })
+    );
+    const filtered = parseToolPayload(filteredSearch);
+    assert.equal(filtered.isError, false);
+    assert.equal(filtered.data.category_id, categoryId);
+    assert.deepEqual(
+      filtered.data.articles.map((article) => article.id),
+      [created.data.article.id]
+    );
+
+    const uncategorizedSearch = await callMcp(
+      mcpRpc(7, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'MCP categorized article', category_id: null },
+      })
+    );
+    const uncategorized = parseToolPayload(uncategorizedSearch);
+    assert.equal(uncategorized.isError, false);
+    assert.equal(uncategorized.data.category_id, null);
+    assert.equal(
+      uncategorized.data.articles.some((article) => article.id === created.data.article.id),
+      false
+    );
+
+    const emptyQueryInCategory = await callMcp(
+      mcpRpc(8, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: '', category_id: categoryId },
+      })
+    );
+    const emptyQuery = parseToolPayload(emptyQueryInCategory);
+    assert.equal(emptyQuery.isError, false);
+    assert.ok(emptyQuery.data.articles.every((article) => article.category_id === categoryId));
+    assert.ok(emptyQuery.data.articles.some((article) => article.id === created.data.article.id));
+
+    const invalidCategory = await callMcp(
+      mcpRpc(9, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'MCP', category_id: 0 },
+      })
+    );
+    const invalidPayload = parseToolPayload(invalidCategory);
+    assert.equal(invalidPayload.isError, true);
+    assert.match(String(invalidPayload.data.error || ''), /category_id/i);
+
+    const updated = await callMcp(
+      mcpRpc(10, 'tools/call', {
         name: 'knowledge_update',
         arguments: { id: created.data.article.id, category_id: null },
       })

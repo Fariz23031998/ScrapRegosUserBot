@@ -99,11 +99,21 @@ function errorResult(message, extra) {
   return textResult(extra ? { error: message, ...extra } : { error: message }, { isError: true });
 }
 
+function parseSearchCategoryId(value) {
+  if (value === undefined) return { categoryId: undefined };
+  if (value === null || value === '') return { categoryId: null };
+  const id = Number(value);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { error: 'Invalid category_id.' };
+  }
+  return { categoryId: id };
+}
+
 const READ_TOOLS = [
   {
     name: 'knowledge_search',
     description:
-      'Search the project knowledge base by short keywords (2–6 terms; prefer Russian synonyms used in articles). Empty query returns recently updated articles.',
+      'Search the project knowledge base by short keywords (2–6 terms; prefer Russian synonyms used in articles). Empty query returns recently updated articles. Optional category_id limits results; call knowledge_list_categories for ids.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -112,6 +122,11 @@ const READ_TOOLS = [
           description: 'Short keyword query. Empty returns recent articles. Do not paste full sentences.',
         },
         limit: { type: 'integer', description: 'Max results (1–200, default 100).' },
+        category_id: {
+          type: ['integer', 'number', 'null'],
+          description:
+            'Optional category id. Omit to search all articles. Pass null for uncategorized articles. Use knowledge_list_categories to get ids.',
+        },
       },
     },
   },
@@ -267,11 +282,14 @@ function callTool(db, name, args = {}) {
   switch (name) {
     case 'knowledge_search': {
       const queryUsed = args.query == null ? '' : String(args.query);
+      const parsedCategory = parseSearchCategoryId(args.category_id);
+      if (parsedCategory.error) return errorResult(parsedCategory.error);
       const { articles } = listKnowledgeArticles(db, {
         query: args.query,
         limit: args.limit,
+        categoryId: parsedCategory.categoryId,
       });
-      return textResult({
+      const payload = {
         query_used: queryUsed.trim(),
         articles: articles.map((article) => ({
           id: article.id,
@@ -283,7 +301,9 @@ function callTool(db, name, args = {}) {
           locked: Boolean(article.locked),
           updated_at: article.updated_at,
         })),
-      });
+      };
+      if (parsedCategory.categoryId !== undefined) payload.category_id = parsedCategory.categoryId;
+      return textResult(payload);
     }
     case 'knowledge_get': {
       const article = getKnowledgeArticle(db, args.id);

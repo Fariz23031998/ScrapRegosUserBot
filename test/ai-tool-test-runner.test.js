@@ -5,7 +5,9 @@ const {
   listToolSchemas,
   runAgentToolTest,
   toolRequiresTicket,
+  buildAgentTools,
 } = require('../src/ai/tools/test-runner');
+const { listAgentToolCatalog } = require('../src/ai/tools/catalog');
 
 describe('ai tool test-runner', () => {
   it('marks ticket-scoped tools', () => {
@@ -21,6 +23,8 @@ describe('ai tool test-runner', () => {
     assert.ok(search);
     assert.equal(search.requires_ticket, false);
     assert.equal(search.parameters?.type, 'object');
+    assert.ok(search.parameters?.properties?.category_id);
+    assert.match(search.parameters.properties.category_id.description, /No categories yet/);
     const history = tools.find((tool) => tool.name === 'search_chat_history');
     assert.equal(history?.requires_ticket, true);
     const reply = tools.find((tool) => tool.name === 'reply_to_customer');
@@ -29,6 +33,21 @@ describe('ai tool test-runner', () => {
     const close = tools.find((tool) => tool.name === 'close_ticket');
     assert.ok(close);
     assert.equal(close.requires_ticket, true);
+    assert.ok(tools.find((tool) => tool.name === 'list_knowledge_categories'));
+    assert.ok(tools.find((tool) => tool.name === 'create_category'));
+    assert.ok(tools.find((tool) => tool.name === 'update_category'));
+    assert.ok(tools.find((tool) => tool.name === 'delete_category'));
+  });
+
+  it('settings catalog matches registered agent tools', () => {
+    const catalog = new Set(listAgentToolCatalog().map((tool) => tool.name));
+    const registered = new Set(buildAgentTools({ db: null }).map((tool) => tool.name));
+    for (const name of registered) {
+      assert.ok(catalog.has(name), `missing from settings catalog: ${name}`);
+    }
+    for (const name of catalog) {
+      assert.ok(registered.has(name), `settings catalog extra: ${name}`);
+    }
   });
 
   it('rejects unknown tools', async () => {

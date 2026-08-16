@@ -38,6 +38,12 @@ function parseCategoryFilter(value: string): CategoryFilter {
   return Number.isFinite(id) && id > 0 ? id : "all";
 }
 
+function formatKnowledgeCategoryContext(categories: KnowledgeCategory[]) {
+  if (!categories.length) return "No categories yet. Omit category_id.";
+  const list = categories.map((category) => `${category.id} ${category.name}`).join("; ");
+  return `Categories: ${list}. Omit or null for none.`;
+}
+
 export default function KnowledgePage() {
   const { hasPermission } = useAuth();
   const confirm = useConfirm();
@@ -423,6 +429,10 @@ export default function KnowledgePage() {
               Очистить чат
             </button>
           ) : null}
+        </div>
+        <div className="knowledge-user-prompt">
+          <h5>Пользовательский промпт</h5>
+          <pre className="ticket-ai-prompt__pre">{categoriesQuery.isPending ? "…" : formatKnowledgeCategoryContext(categories)}</pre>
         </div>
         <div
           className={`ticket-chat__messages${dropActive ? " ticket-chat__messages--drop" : ""}`}

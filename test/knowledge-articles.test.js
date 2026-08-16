@@ -22,6 +22,8 @@ const {
   listKbSessionMessages,
   listKnowledgeArticles,
   listKnowledgeCategories,
+  formatKnowledgeCategoriesForTools,
+  knowledgeCategoryContext,
   setKnowledgeArticleLocked,
   updateKnowledgeArticle,
   updateKnowledgeCategory,
@@ -396,6 +398,16 @@ describe('knowledge categories', () => {
     assert.equal(listed[0].name, 'Цены');
   });
 
+  it('formats a live category line for tools and agent context', () => {
+    assert.equal(knowledgeCategoryContext(db), 'No categories yet. Omit category_id.');
+    assert.equal(formatKnowledgeCategoriesForTools(db), knowledgeCategoryContext(db));
+    const created = createKnowledgeCategory(db, { name: 'Прайс', tags: 'цены' });
+    const line = knowledgeCategoryContext(db);
+    assert.match(line, new RegExp(`${created.id} Прайс`));
+    assert.match(line, /Omit or null for none/);
+    assert.equal(formatKnowledgeCategoriesForTools(db), line);
+  });
+
   it('rejects invalid category names and unknown article categories', () => {
     assert.throws(() => createKnowledgeCategory(db, { name: '  ' }), { message: 'INVALID_CATEGORY_NAME' });
     const created = createKnowledgeArticle(db, {
@@ -639,5 +651,27 @@ describe('knowledge article search retrieval', () => {
     const found = listKnowledgeArticles(db, { query: 'xyzzy-no-such-article-qqq', limit: 10 });
     assert.equal(found.total, 0);
     assert.deepEqual(found.articles, []);
+  });
+
+  it('ranks the office article first over a weak synonym decoy', () => {
+    createKnowledgeArticle(db, {
+      title: 'Лицензии REGOS',
+      body: 'REGOS portal location and general company notes. No office address here.',
+      tags: 'regos',
+    });
+    const found = listKnowledgeArticles(db, { query: 'офис адрес', limit: 10 });
+    assert.ok(found.articles.length >= 2);
+    assert.match(found.articles[0].title, /как нас найти/i);
+  });
+
+  it('ranks a title match above a body-only synonym match', () => {
+    createKnowledgeArticle(db, {
+      title: 'Прочее',
+      body: 'The warehouse location is listed on the map only.',
+      tags: '',
+    });
+    const found = listKnowledgeArticles(db, { query: 'офис', limit: 10 });
+    assert.ok(found.articles.length >= 2);
+    assert.match(found.articles[0].title, /как нас найти/i);
   });
 });

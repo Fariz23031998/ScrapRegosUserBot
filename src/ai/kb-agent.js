@@ -1,5 +1,5 @@
 const { loadAiSettings, resolveAgentModel } = require('./settings');
-const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
+const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createKnowledgeTools } = require('./tools/knowledge');
 const { filterEnabledTools } = require('./tools/catalog');
@@ -7,6 +7,7 @@ const {
   getOrCreateKbSession,
   listKbSessionMessages,
   addKbSessionMessage,
+  knowledgeCategoryContext,
 } = require('../db/knowledge-articles');
 const { KB_SYSTEM_PROMPT } = require('./default-prompts');
 const { getResolvedPrompt } = require('../db/ai-prompts');
@@ -50,7 +51,7 @@ async function runKbAgent({
     providerName: settings.provider,
     model: resolveAgentModel(settings, 'kb'),
     system: getResolvedPrompt(db, 'kb'),
-    messages: history,
+    messages: prependUserContext(history, knowledgeCategoryContext(db)),
     promptCacheKey: buildPromptCacheKey('kb', session.id),
     tools: filterEnabledTools(
       createKnowledgeTools({ db, userId, write: canWrite, deps }),

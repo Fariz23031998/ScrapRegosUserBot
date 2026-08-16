@@ -17,6 +17,8 @@ const {
   createKnowledgeArticle,
   updateKnowledgeArticle,
   deleteKnowledgeArticle,
+  createKnowledgeCategory,
+  knowledgeCategoryContext,
 } = require('../src/db/knowledge-articles');
 const {
   listPrompts,
@@ -54,6 +56,14 @@ const {
   webSearch,
 } = require('../src/ai/tools/browse');
 const { findEmployeesForAgent, isEmployeeClientPhone } = require('../src/ai/tools/employees');
+
+function withoutCategoryContext(messages, db) {
+  const line = knowledgeCategoryContext(db);
+  if (!Array.isArray(messages) || !messages.length) return messages || [];
+  const first = String(messages[0]?.content || '');
+  if (first === line || first.includes(line)) return messages.slice(1);
+  return messages;
+}
 const {
   evaluateCustomerMessageGate,
   evaluateCustomerMessageGateWithDb,
@@ -851,9 +861,11 @@ describe('customer agent handler', () => {
     });
     assert.equal(result.handled, true);
     assert.deepEqual(requested, [{ limit: 2, offset: 0 }]);
-    assert.equal(captured.messages.length, 2);
+    const history = withoutCategoryContext(captured.messages, database);
+    assert.equal(captured.messages[0].content, knowledgeCategoryContext(database));
+    assert.equal(history.length, 2);
     assert.deepEqual(
-      captured.messages.map((item) => item.content),
+      history.map((item) => item.content),
       ['four', 'five']
     );
   });
@@ -899,7 +911,7 @@ describe('customer agent handler', () => {
     });
     assert.equal(result.handled, true);
     assert.deepEqual(
-      captured.messages.map((item) => item.content),
+      withoutCategoryContext(captured.messages, database).map((item) => item.content),
       ['current-two', 'current-three']
     );
     assert.equal(
@@ -955,8 +967,10 @@ describe('customer agent handler', () => {
     assert.equal(captured.system, 'BASE PROMPT');
     assert.equal(captured.messages[0].role, 'user');
     assert.match(captured.messages[0].content, /Клиент уже спрашивал про оплату/);
+    assert.ok(captured.messages[0].content.includes(knowledgeCategoryContext(database)));
     assert.ok(!String(captured.system).includes('Клиент уже спрашивал про оплату'));
-    assert.ok(captured.messages[0].content.length <= SUMMARY_TOKEN_BUDGET * 4 + 8);
+    const summaryOnly = captured.messages[0].content.replace(`\n\n${knowledgeCategoryContext(database)}`, '');
+    assert.ok(summaryOnly.length <= SUMMARY_TOKEN_BUDGET * 4 + 8);
     assert.equal(captured.promptCacheKey, 'customer:42');
   });
 
@@ -1393,12 +1407,13 @@ describe('customer agent handler', () => {
       }),
     });
     assert.equal(result.handled, true);
-    assert.equal(captured.messages.length, 3);
-    assert.equal(typeof captured.messages[0].content, 'string');
-    assert.match(captured.messages[0].content, /\[изображение: old\.png #201\]/);
-    assert.equal(typeof captured.messages[2].content, 'string');
-    assert.match(captured.messages[2].content, /\[аудио: voice\.ogg #202\]/);
-    assert.equal(captured.messages[2].content.includes('Расшифровка:'), false);
+    const history = withoutCategoryContext(captured.messages, database);
+    assert.equal(history.length, 3);
+    assert.equal(typeof history[0].content, 'string');
+    assert.match(history[0].content, /\[изображение: old\.png #201\]/);
+    assert.equal(typeof history[2].content, 'string');
+    assert.match(history[2].content, /\[аудио: voice\.ogg #202\]/);
+    assert.equal(history[2].content.includes('Расшифровка:'), false);
     assert.equal(
       captured.messages.some((message) => Array.isArray(message.content)),
       false
@@ -1476,10 +1491,11 @@ describe('customer agent handler', () => {
     });
     assert.equal(result.handled, true);
     assert.deepEqual(transcribed, [202]);
-    assert.match(captured.messages[0].content, /\[аудио: old\.ogg #201\]/);
-    assert.equal(captured.messages[0].content.includes('Расшифровка:'), false);
-    assert.match(captured.messages[1].content, /\[аудио: voice\.ogg #202\]/);
-    assert.match(captured.messages[1].content, /Расшифровка: текст 202/);
+    const history = withoutCategoryContext(captured.messages, database);
+    assert.match(history[0].content, /\[аудио: old\.ogg #201\]/);
+    assert.equal(history[0].content.includes('Расшифровка:'), false);
+    assert.match(history[1].content, /\[аудио: voice\.ogg #202\]/);
+    assert.match(history[1].content, /Расшифровка: текст 202/);
     assert.equal(captured.hasAudio, true);
     assert.equal(captured.model, 'gpt-5-mini');
     assert.ok(captured.tools.some((tool) => tool.name === 'transcribe_chat_audio'));
@@ -1550,11 +1566,12 @@ describe('customer agent handler', () => {
       }),
     });
     assert.equal(result.handled, true);
-    assert.match(captured.messages[0].content, /\[аудио: old\.ogg #201\]/);
-    assert.match(captured.messages[0].content, /Расшифровка: старое голосовое/);
-    assert.match(captured.messages[1].content, /\[изображение: shot\.png #101\]/);
-    assert.match(captured.messages[1].content, /Описание: скрин ошибки/);
-    assert.match(captured.messages[2].content, /ещё вопрос/);
+    const history = withoutCategoryContext(captured.messages, database);
+    assert.match(history[0].content, /\[аудио: old\.ogg #201\]/);
+    assert.match(history[0].content, /Расшифровка: старое голосовое/);
+    assert.match(history[1].content, /\[изображение: shot\.png #101\]/);
+    assert.match(history[1].content, /Описание: скрин ошибки/);
+    assert.match(history[2].content, /ещё вопрос/);
   });
 });
 
@@ -1613,9 +1630,10 @@ describe('customer agent prompt preview', () => {
     assert.equal(preview.settings.history_limit, 30);
     assert.deepEqual(
       preview.messages.map((item) => item.role),
-      ['assistant', 'user']
+      ['user', 'assistant', 'user']
     );
-    assert.equal(preview.messages[1].content, 'Сколько стоит?');
+    assert.equal(preview.messages[0].content, knowledgeCategoryContext(database));
+    assert.equal(preview.messages[2].content, 'Сколько стоит?');
     const toolNames = preview.tools.map((tool) => tool.name);
     assert.ok(toolNames.includes('search_knowledge'));
     assert.ok(toolNames.includes('search_chat_history'));
@@ -1638,7 +1656,8 @@ describe('customer agent prompt preview', () => {
     assert.equal(preview.gate.handle, false);
     assert.equal(preview.gate.reason, 'disabled');
     assert.equal(preview.system, CUSTOMER_SYSTEM_PROMPT);
-    assert.equal(preview.messages.length, 2);
+    assert.equal(preview.messages.length, 3);
+    assert.equal(preview.messages[0].content, knowledgeCategoryContext(database));
     assert.ok(preview.tools.length > 0);
   });
 
@@ -1750,6 +1769,7 @@ describe('customer agent prompt preview', () => {
     assert.equal(preview.system.includes('Ранее чинили кассу'), false);
     assert.equal(preview.messages[0].role, 'user');
     assert.match(preview.messages[0].content, /Ранее чинили кассу/);
+    assert.ok(preview.messages[0].content.includes(knowledgeCategoryContext(database)));
     assert.equal(preview.messages.length, 3);
     assert.equal(preview.summary, null);
     assert.equal(preview.prior_summaries.length, 1);
@@ -2124,6 +2144,18 @@ describe('knowledge base', () => {
     const searchResult = await search.execute({ query: 'прайс' });
     assert.ok(searchResult.articles.length > 0);
 
+    const category = createKnowledgeCategory(database, { name: 'Прайс', tags: 'цены' });
+    const listCategories = tools.find((tool) => tool.name === 'list_knowledge_categories');
+    const listed = await listCategories.execute();
+    assert.ok(listed.categories.some((item) => item.id === category.id && item.name === 'Прайс'));
+
+    const filtered = await search.execute({ query: 'прайс', category_id: category.id });
+    assert.equal(filtered.category_id, category.id);
+
+    const createCategory = tools.find((tool) => tool.name === 'create_category');
+    const createdCategory = await createCategory.execute({ name: 'Поддержка', tags: 'help' });
+    assert.equal(createdCategory.name, 'Поддержка');
+
     const updated = updateKnowledgeArticle(database, created.id, { title: 'Обновлено', body: created.body });
     assert.equal(updated.title, 'Обновлено');
     assert.equal(deleteKnowledgeArticle(database, created.id), true);
@@ -2147,8 +2179,83 @@ describe('knowledge base', () => {
       },
     });
     assert.equal(captured.system, 'KB STORED PROMPT');
+    assert.equal(captured.messages[0].content, knowledgeCategoryContext(database));
     assert.equal(captured.promptCacheKey, `kb:${result.session_id}`);
     assert.equal(result.reply, 'Нашёл.');
+  });
+
+  it('shows live categories in search schema and agent context before tools run', async () => {
+    const database = createDb();
+    const prices = createKnowledgeCategory(database, { name: 'Прайс', tags: 'цены' });
+    const line = knowledgeCategoryContext(database);
+    assert.match(line, new RegExp(`${prices.id} Прайс`));
+
+    const tools = createKnowledgeTools({ db: database, write: true });
+    const search = tools.find((tool) => tool.name === 'search_knowledge');
+    assert.match(search.description, new RegExp(`${prices.id} Прайс`));
+    assert.match(search.parameters.properties.category_id.description, new RegExp(`${prices.id} Прайс`));
+    assert.match(
+      tools.find((tool) => tool.name === 'create_article').description,
+      new RegExp(`${prices.id} Прайс`)
+    );
+
+    saveAiSettings(database, { enabled: true, testMode: false, model: 'gpt-4o-mini' });
+    const preview = await previewCustomerAgentPrompt({
+      db: database,
+      ticketId: 42,
+      deps: {
+        findTicketById: async () => ({
+          id: 42,
+          chat_id: 'chat-42',
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            {
+              id: '9',
+              author_entity_type: 'Client',
+              message_type: 'Regular',
+              text: 'Сколько стоит?',
+              created_date: 1200,
+            },
+          ],
+        }),
+        getChatFilesByIds: async () => [],
+      },
+    });
+    assert.equal(preview.messages[0].content, line);
+
+    let capturedKb = null;
+    await runKbAgent({
+      db: database,
+      userId: 1,
+      message: 'Найди прайс',
+      deps: {
+        runAgent: async (args) => {
+          capturedKb = args;
+          return { content: 'Ок', steps: 1 };
+        },
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      },
+    });
+    assert.equal(capturedKb.messages[0].content, line);
+
+    let capturedTest = null;
+    await runCustomerTestAgent({
+      db: database,
+      userId: 1,
+      message: 'Привет',
+      deps: {
+        runAgent: async (args) => {
+          capturedTest = args;
+          return { content: 'Ок', steps: 1 };
+        },
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      },
+    });
+    assert.equal(capturedTest.messages[0].content, line);
   });
 
   it('inlines uploaded images for the latest KB message', async () => {
@@ -2812,6 +2919,7 @@ describe('ticket AI assist agent', () => {
     assert.match(captured.messages[0].content, /Обращение #42/);
     assert.match(captured.messages[0].content, /Клиент: Сколько стоит лицензия\?/);
     assert.match(captured.messages[0].content, /Сотрудник: Сейчас уточню/);
+    assert.ok(captured.messages[0].content.includes(knowledgeCategoryContext(database)));
     assert.equal(captured.messages.at(-1).content, 'Назови цену 450 тысяч и предложи акцию');
     assert.equal(captured.promptCacheKey, 'customer_assist:42');
     assert.ok(captured.tools.some((tool) => tool.name === 'reply_to_customer'));
