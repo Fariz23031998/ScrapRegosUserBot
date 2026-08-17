@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
+  clearTestAgentSessions,
+  deleteTestAgentSession,
   getCustomerTestSession,
   getEmployeeTestSession,
+  listTestAgentSessions,
   saveCustomerTestSession,
   saveEmployeeTestSession,
   sendCustomerTestChat,
@@ -12,103 +15,96 @@ import AgentChatFiles from "../components/AgentChatFiles";
 import AgentRunTrace from "../components/AgentRunTrace";
 import ChatCompose, { type ChatComposeHandle } from "../components/ChatCompose";
 import LoadingState from "../components/LoadingState";
+import TestAgentModelPrompt from "../components/TestAgentModelPrompt";
 import { useConfirm } from "../contexts/ConfirmContext";
+import { useAuth } from "../hooks/useAuth";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { filesFromDataTransfer, isFileDrag } from "../lib/ticket-chat";
-import type { AgentTraceStep, AgentRunUsage, CustomerTestSession } from "../lib/types";
+import type { CustomerTestSession, TestAgentSessionSummary } from "../lib/types";
 
 type AgentKind = "customer" | "employee";
 type WorkspaceView = "chat" | "content";
-
-type TurnTrace = {
-  trace: AgentTraceStep[];
-  steps?: number | null;
-  usage?: AgentRunUsage | null;
-  stopped?: string | null;
-  replied_to_customer?: boolean;
-  customer_reply?: string | null;
-};
 
 function textOrDash(value?: string | number | null) {
   const text = String(value ?? "").trim();
   return text || "—";
 }
 
-function sessionKey(kind: AgentKind) {
-  return ["test-agents-session", kind] as const;
+function sessionKey(kind: AgentKind, sessionId?: number | null) {
+  return ["test-agents-session", kind, sessionId ?? "latest"] as const;
+}
+
+function historyKey(kind: AgentKind, allUsers: boolean) {
+  return ["test-agents-history", kind, allUsers ? "all" : "own"] as const;
+}
+
+function formatSessionTime(value?: string) {
+  if (!value) return "—";
+  const iso = /Z$|[+-]\d\d:\d\d$/.test(value) ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" });
 }
 
 export default function TestAgentsPage() {
   const confirm = useConfirm();
+  const { hasPermission } = useAuth();
   const queryClient = useQueryClient();
   const isMobile = useMediaQuery("(max-width: 960px)");
+  const canSeeAllHistory = hasPermission("ai_customer_test_history");
   const [agentKind, setAgentKind] = useState<AgentKind>("customer");
   const [view, setView] = useState<WorkspaceView>("chat");
   const [ticketId, setTicketId] = useState("");
   const [clientPhone, setClientPhone] = useState("");
   const [message, setMessage] = useState("");
-  const [sessionId, setSessionId] = useState<number | undefined>();
+  const [openedSessionId, setOpenedSessionId] = useState<number | null>(null);
+  const [allUsers, setAllUsers] = useState(false);
   const [dropActive, setDropActive] = useState(false);
-  const [tracesByMessageId, setTracesByMessageId] = useState<Record<string, TurnTrace>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const composeRef = useRef<ChatComposeHandle>(null);
   const isEmployee = agentKind === "employee";
+  const showAllUsers = canSeeAllHistory && allUsers;
 
   const sessionQuery = useQuery({
-    queryKey: sessionKey(agentKind),
+    queryKey: sessionKey(agentKind, openedSessionId),
     queryFn: async () => {
-      const data = isEmployee ? await getEmployeeTestSession() : await getCustomerTestSession();
-      setSessionId(data.session_id);
+      const data = isEmployee
+        ? await getEmployeeTestSession(openedSessionId ?? undefined)
+        : await getCustomerTestSession(openedSessionId ?? undefined);
       setTicketId(data.ticket_id != null ? String(data.ticket_id) : "");
       setClientPhone(data.client_phone || data.ticket?.client?.phone || "");
       return data;
     },
   });
 
+  const historyQuery = useQuery({
+    queryKey: historyKey(agentKind, showAllUsers),
+    queryFn: () => listTestAgentSessions(agentKind, showAllUsers),
+  });
+
   useEffect(() => {
     setMessage("");
     setDropActive(false);
-    setTracesByMessageId({});
-    const cached = queryClient.getQueryData<CustomerTestSession>(sessionKey(agentKind));
-    if (cached) {
-      setSessionId(cached.session_id);
-      setTicketId(cached.ticket_id != null ? String(cached.ticket_id) : "");
-      setClientPhone(cached.client_phone || cached.ticket?.client?.phone || "");
-    } else {
-      setSessionId(undefined);
-      setTicketId("");
-      setClientPhone("");
-    }
-  }, [agentKind, queryClient]);
+    setOpenedSessionId(null);
+    setTicketId("");
+    setClientPhone("");
+  }, [agentKind]);
 
   function applySession(data: CustomerTestSession) {
-    setSessionId(data.session_id);
+    setOpenedSessionId(data.session_id);
     setTicketId(data.ticket_id != null ? String(data.ticket_id) : "");
     setClientPhone(data.client_phone || data.ticket?.client?.phone || "");
-    queryClient.setQueryData(sessionKey(agentKind), data);
+    queryClient.setQueryData(sessionKey(agentKind, data.session_id), data);
   }
 
-  function rememberTrace(data: CustomerTestSession) {
-    const messages = data.messages || [];
-    const lastAssistant = [...messages].reverse().find((item) => item.role === "assistant");
-    if (!lastAssistant || !Array.isArray(data.trace)) return;
-    setTracesByMessageId((prev) => ({
-      ...prev,
-      [String(lastAssistant.id)]: {
-        trace: data.trace || [],
-        steps: data.steps,
-        usage: data.usage,
-        stopped: data.stopped,
-        replied_to_customer: data.replied_to_customer,
-        customer_reply: data.customer_reply,
-      },
-    }));
+  function invalidateHistory() {
+    void queryClient.invalidateQueries({ queryKey: ["test-agents-history", agentKind] });
   }
 
   const contextMutation = useMutation({
     mutationFn: () => {
       const payload = {
-        session_id: sessionId,
+        session_id: sessionQuery.data?.session_id,
         ticket_id: ticketId.trim() || null,
         client_phone: clientPhone.trim() || null,
       };
@@ -120,7 +116,7 @@ export default function TestAgentsPage() {
   const resetMutation = useMutation({
     mutationFn: () => {
       const payload = {
-        session_id: sessionId,
+        session_id: sessionQuery.data?.session_id,
         ticket_id: ticketId.trim() || null,
         client_phone: clientPhone.trim() || null,
         reset: true,
@@ -128,15 +124,15 @@ export default function TestAgentsPage() {
       return isEmployee ? saveEmployeeTestSession(payload) : saveCustomerTestSession(payload);
     },
     onSuccess: (data) => {
-      setTracesByMessageId({});
       applySession(data);
+      invalidateHistory();
     },
   });
 
   const chatMutation = useMutation({
     mutationFn: (payload: { message: string; files?: Array<{ name: string; extension: string; data: string }> }) => {
       const body = {
-        session_id: sessionId,
+        session_id: sessionQuery.data?.session_id,
         message: payload.message,
         files: payload.files,
         ticket_id: ticketId.trim() || null,
@@ -147,14 +143,37 @@ export default function TestAgentsPage() {
     onSuccess: (data) => {
       setMessage("");
       applySession(data);
-      rememberTrace(data);
+      invalidateHistory();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteTestAgentSession(id),
+    onSuccess: (_data, id) => {
+      invalidateHistory();
+      if (sessionQuery.data?.session_id === id) {
+        setOpenedSessionId(null);
+        void queryClient.invalidateQueries({ queryKey: ["test-agents-session", agentKind] });
+      }
+    },
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: () => clearTestAgentSessions({ agent_kind: agentKind, all: showAllUsers }),
+    onSuccess: () => {
+      setOpenedSessionId(null);
+      invalidateHistory();
+      void queryClient.invalidateQueries({ queryKey: ["test-agents-session", agentKind] });
     },
   });
 
   const session = sessionQuery.data;
   const messages = session?.messages || [];
   const ticket = session?.ticket;
-  const contextError = (contextMutation.error || resetMutation.error) as Error | null;
+  const history = historyQuery.data?.sessions || [];
+  const contextError = (contextMutation.error || resetMutation.error || clearMutation.error || deleteMutation.error) as
+    | Error
+    | null;
   const chatError = chatMutation.error as Error | null;
 
   useEffect(() => {
@@ -164,10 +183,28 @@ export default function TestAgentsPage() {
 
   async function handleReset() {
     const ok = await confirm({
-      message: "Начать новый тестовый чат? Текущая переписка останется только в истории сессий.",
+      message: "Начать новый тестовый чат? Текущая переписка останется в истории сессий.",
       confirmLabel: "Новый чат",
     });
     if (ok) resetMutation.mutate();
+  }
+
+  async function handleClearHistory() {
+    const ok = await confirm({
+      message: showAllUsers
+        ? "Удалить историю тестовых чатов всех пользователей для этого агента?"
+        : "Удалить всю свою историю тестовых чатов для этого агента?",
+      confirmLabel: "Очистить",
+    });
+    if (ok) clearMutation.mutate();
+  }
+
+  async function handleDeleteSession(item: TestAgentSessionSummary) {
+    const ok = await confirm({
+      message: `Удалить чат «${item.title}»?`,
+      confirmLabel: "Удалить",
+    });
+    if (ok) deleteMutation.mutate(item.id);
   }
 
   const composerEnabled = !chatMutation.isPending;
@@ -330,6 +367,65 @@ export default function TestAgentsPage() {
               искать заказы и техподдержку.
             </p>
           )}
+          <TestAgentModelPrompt prompt={session?.prompt} title="Промпт модели" />
+
+          <div className="test-agents-history">
+            <div className="card-toolbar">
+              <h3>История</h3>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void handleClearHistory()}
+                disabled={clearMutation.isPending || history.length === 0}
+              >
+                Очистить
+              </button>
+            </div>
+            {canSeeAllHistory ? (
+              <label className="test-agents-history__all">
+                <input
+                  type="checkbox"
+                  checked={allUsers}
+                  onChange={(event) => setAllUsers(event.target.checked)}
+                />
+                Все пользователи
+              </label>
+            ) : null}
+            {historyQuery.isLoading ? <LoadingState /> : null}
+            {!historyQuery.isLoading && history.length === 0 ? (
+              <p className="empty-state">Нет сохранённых чатов.</p>
+            ) : null}
+            <ul className="test-agents-history__list">
+              {history.map((item) => {
+                const active = session?.session_id === item.id;
+                return (
+                  <li key={item.id} className={`test-agents-history__item${active ? " is-active" : ""}`}>
+                    <button
+                      type="button"
+                      className="test-agents-history__open"
+                      onClick={() => setOpenedSessionId(item.id)}
+                    >
+                      <span className="test-agents-history__title">{item.title}</span>
+                      <span className="test-agents-history__meta">
+                        {showAllUsers ? `${item.user_name || "—"} · ` : ""}
+                        {item.ticket_id ? `#${item.ticket_id} · ` : ""}
+                        {formatSessionTime(item.updated_at)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary test-agents-history__delete"
+                      onClick={() => void handleDeleteSession(item)}
+                      disabled={deleteMutation.isPending}
+                      aria-label="Удалить чат"
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         </section>
 
         <section
@@ -357,15 +453,12 @@ export default function TestAgentsPage() {
               </p>
             ) : null}
             {messages.map((item) => {
-              const turn = tracesByMessageId[String(item.id)];
+              const run = item.run;
               const isUser = item.role === "user";
               const userLabel = isEmployee ? "Сотрудник" : "Клиент";
               const msgSide = isUser ? (isEmployee ? "staff" : "client") : "staff";
               return (
-                <div
-                  key={item.id}
-                  className="test-agents-turn"
-                >
+                <div key={item.id} className="test-agents-turn">
                   <div className={`ticket-chat__msg ticket-chat__msg--${msgSide}`}>
                     <div className="ticket-chat__bubble">
                       <div className="ticket-chat__meta">
@@ -375,19 +468,20 @@ export default function TestAgentsPage() {
                       <AgentChatFiles files={item.files} />
                     </div>
                   </div>
-                  {item.role === "assistant" && turn ? (
+                  {item.role === "assistant" && run ? (
                     <div className="test-agents-turn__trace">
-                      {turn.replied_to_customer ? (
+                      {run.replied_to_customer ? (
                         <p className="muted-copy agent-run-trace__sim">
-                          reply_to_customer (имитация): {turn.customer_reply || "—"}
+                          reply_to_customer (имитация): {run.customer_reply || "—"}
                         </p>
                       ) : null}
                       <AgentRunTrace
-                        trace={turn.trace}
-                        steps={turn.steps}
-                        usage={turn.usage}
-                        stopped={turn.stopped}
+                        trace={run.trace}
+                        steps={run.steps}
+                        usage={run.usage}
+                        stopped={run.stopped}
                       />
+                      <TestAgentModelPrompt prompt={run} />
                     </div>
                   ) : null}
                 </div>

@@ -1,5 +1,6 @@
 const net = require('net');
 const { stripTags } = require('../../sync/rpos-html');
+const { factoryToolDescription } = require('./descriptions');
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const MAX_TEXT = 8000;
@@ -275,8 +276,7 @@ function createBrowseTools({ deps = {} } = {}) {
   return [
     {
       name: 'web_search',
-      description:
-        'Search the public web. Returns titles, URLs, and snippets. Then use browse_url to read a page. Do not invent sources.',
+      description: factoryToolDescription('web_search'),
       parameters: {
         type: 'object',
         properties: {
@@ -288,8 +288,7 @@ function createBrowseTools({ deps = {} } = {}) {
     },
     {
       name: 'browse_url',
-      description:
-        'Open a public or internal portal URL (GET only, read-only) and return page text. Use for docs, tariff pages, and portal screens. Do not create, edit, or delete anything.',
+      description: factoryToolDescription('browse_url'),
       parameters: {
         type: 'object',
         properties: {

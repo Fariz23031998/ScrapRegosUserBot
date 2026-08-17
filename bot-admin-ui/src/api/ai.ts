@@ -4,14 +4,17 @@ import type {
   AiPrompt,
   AiPromptSlug,
   AiPromptType,
+  AiPromptVariable,
   AiSettings,
   AiToolAgentSlug,
+  AiToolDescription,
   AiToolSchema,
   AiToolTestResult,
   CustomerTestSession,
   KnowledgeArticle,
   KnowledgeCategory,
   KnowledgeChatMessage,
+  TestAgentSessionSummary,
   TicketAiAssistSession,
 } from "../lib/types";
 
@@ -99,6 +102,69 @@ export function deleteAiPrompt(id: number) {
   return apiFetch<{ ok: boolean; prompt: AiPrompt }>(`/bot-admin/api/ai/prompts/${id}`, {
     method: "DELETE",
   });
+}
+
+export function getAiPromptVariables() {
+  return apiFetch<{ variables: AiPromptVariable[] }>("/bot-admin/api/ai/prompt-variables");
+}
+
+export function createAiPromptVariable(payload: { key: string; name: string; source: string }) {
+  return apiFetch<{ variable: AiPromptVariable }>("/bot-admin/api/ai/prompt-variables", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function saveAiPromptVariable(
+  id: number,
+  payload: { key: string; name: string; source: string },
+) {
+  return apiFetch<{ variable: AiPromptVariable }>(`/bot-admin/api/ai/prompt-variables/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteAiPromptVariable(id: number) {
+  return apiFetch<{ ok: boolean; variable: AiPromptVariable }>(`/bot-admin/api/ai/prompt-variables/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function testAiPromptVariable(payload: {
+  id?: number;
+  source: string;
+  context?: { ticket?: unknown; client?: unknown };
+}) {
+  const path =
+    payload.id != null
+      ? `/bot-admin/api/ai/prompt-variables/${payload.id}/test`
+      : "/bot-admin/api/ai/prompt-variables/test";
+  return apiFetch<{ value?: string; error?: string }>(path, {
+    method: "POST",
+    body: JSON.stringify({ source: payload.source, context: payload.context || {} }),
+  });
+}
+
+export function getAiToolDescriptions() {
+  return apiFetch<{ tools: AiToolDescription[] }>("/bot-admin/api/ai/tool-descriptions");
+}
+
+export function saveAiToolDescription(name: string, body: string) {
+  return apiFetch<{ tool: AiToolDescription }>(
+    `/bot-admin/api/ai/tool-descriptions/${encodeURIComponent(name)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ body }),
+    },
+  );
+}
+
+export function resetAiToolDescription(name: string) {
+  return apiFetch<{ ok: boolean; tool: AiToolDescription }>(
+    `/bot-admin/api/ai/tool-descriptions/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
 }
 
 export function listKnowledgeArticles(params: {
@@ -204,8 +270,9 @@ export function sendKbChat(payload: {
   );
 }
 
-export function getCustomerTestSession() {
-  return apiFetch<CustomerTestSession>("/bot-admin/api/ai/customer-test-session");
+export function getCustomerTestSession(sessionId?: number) {
+  const query = sessionId ? `?session_id=${sessionId}` : "";
+  return apiFetch<CustomerTestSession>(`/bot-admin/api/ai/customer-test-session${query}`);
 }
 
 export function saveCustomerTestSession(payload: {
@@ -233,8 +300,9 @@ export function sendCustomerTestChat(payload: {
   });
 }
 
-export function getEmployeeTestSession() {
-  return apiFetch<CustomerTestSession>("/bot-admin/api/ai/employee-test-session");
+export function getEmployeeTestSession(sessionId?: number) {
+  const query = sessionId ? `?session_id=${sessionId}` : "";
+  return apiFetch<CustomerTestSession>(`/bot-admin/api/ai/employee-test-session${query}`);
 }
 
 export function saveEmployeeTestSession(payload: {
@@ -257,6 +325,27 @@ export function sendEmployeeTestChat(payload: {
   client_phone?: string | null;
 }) {
   return apiFetch<CustomerTestSession>("/bot-admin/api/ai/employee-test-chat", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listTestAgentSessions(agentKind: "customer" | "employee", allUsers = false) {
+  const params = new URLSearchParams({ agent_kind: agentKind });
+  if (allUsers) params.set("all", "1");
+  return apiFetch<{ sessions: TestAgentSessionSummary[]; all_users: boolean }>(
+    `/bot-admin/api/ai/test-sessions?${params.toString()}`,
+  );
+}
+
+export function deleteTestAgentSession(id: number) {
+  return apiFetch<{ ok: boolean }>(`/bot-admin/api/ai/test-sessions/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function clearTestAgentSessions(payload: { agent_kind: "customer" | "employee"; all?: boolean }) {
+  return apiFetch<{ ok: boolean; deleted: number }>("/bot-admin/api/ai/test-sessions/clear", {
     method: "POST",
     body: JSON.stringify(payload),
   });

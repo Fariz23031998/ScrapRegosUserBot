@@ -1089,6 +1089,8 @@ export default function SettingsPage() {
                     ) : (
                       <span>нет доступа к базе знаний</span>
                     )}
+                    {" · "}
+                    <Link to="/prompts">Описания инструментов — на странице Промпты</Link>
                   </p>
                 </div>
                 {canEdit && agentTools.length ? (

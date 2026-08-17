@@ -398,7 +398,7 @@ describe('knowledge categories', () => {
     assert.equal(listed[0].name, 'Цены');
   });
 
-  it('formats a live category line for tools and agent context', () => {
+  it('formats a live category line for tools', () => {
     assert.equal(knowledgeCategoryContext(db), 'No categories yet. Omit category_id.');
     assert.equal(formatKnowledgeCategoriesForTools(db), knowledgeCategoryContext(db));
     const created = createKnowledgeCategory(db, { name: 'Прайс', tags: 'цены' });

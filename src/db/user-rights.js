@@ -161,6 +161,14 @@ const RIGHTS = {
     column: 'ai_customer_test',
     label: 'Админ: тест агентов',
   },
+  ai_customer_test_history: {
+    column: 'ai_customer_test_history',
+    label: 'Админ: тест агентов — история всех',
+  },
+  prompt_variables_create: {
+    column: 'prompt_variables_create',
+    label: 'Админ: промпты — создание переменных',
+  },
 };
 
 /** Admin UI section permission keys returned by /api/session. */
@@ -198,6 +206,8 @@ const ADMIN_PERMISSION_KEYS = [
   'knowledge_lock',
   'knowledge_unlock',
   'ai_customer_test',
+  'ai_customer_test_history',
+  'prompt_variables_create',
 ];
 
 function hasRight(db, telegramId, rightKey) {

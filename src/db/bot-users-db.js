@@ -50,6 +50,8 @@ const DEFAULT_RIGHTS = {
   knowledge_lock: 0,
   knowledge_unlock: 0,
   ai_customer_test: 0,
+  ai_customer_test_history: 0,
+  prompt_variables_create: 0,
 };
 
 const RIGHTS_COLUMNS = Object.keys(DEFAULT_RIGHTS);
@@ -85,6 +87,8 @@ const ADMIN_RIGHTS_COLUMNS = [
   'knowledge_lock',
   'knowledge_unlock',
   'ai_customer_test',
+  'ai_customer_test_history',
+  'prompt_variables_create',
 ];
 
 function normalizePhoneKey(phone) {

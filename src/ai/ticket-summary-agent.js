@@ -3,6 +3,7 @@ const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { TICKET_SUMMARY_SYSTEM_PROMPT } = require('./default-prompts');
 const { getResolvedPrompt } = require('../db/ai-prompts');
+const { promptContextFromTicket } = require('../db/ai-prompt-variables');
 const {
   hasSuccessfulTicketSummary,
   upsertTicketSummary,
@@ -198,8 +199,9 @@ async function summarizeTranscript({
   run,
   provider,
   model,
+  ticket,
 } = {}) {
-  const system = getResolvedPrompt(db, 'ticket_summary');
+  const system = getResolvedPrompt(db, 'ticket_summary', promptContextFromTicket(ticket));
   const resolvedModel = model || resolveAgentModel(settings, 'ticket_summary');
   const promptCacheKey = buildPromptCacheKey('ticket_summary');
   if (chunks.length <= 1) {
@@ -347,7 +349,7 @@ async function summarizeClosedTicket({ db, ticket, occurredAt, now, deps = {} } 
     );
     const run = deps.runAgent || runAgent;
     const provider = deps.provider || getProvider(settings.provider);
-    const content = await summarizeTranscript({ db, chunks, settings, run, provider, model });
+    const content = await summarizeTranscript({ db, chunks, settings, run, provider, model, ticket: resolved });
     const summary = String(content || '').trim() || EMPTY_SUMMARY;
     return {
       skipped: false,

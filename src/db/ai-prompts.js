@@ -1,4 +1,5 @@
 const { getDefaultPrompt, isPromptSlug, listPromptSlots, PROMPT_SLOTS } = require('../ai/default-prompts');
+const { interpolatePrompt } = require('./ai-prompt-variables');
 
 const MAX_BODY = 20000;
 const MAX_NAME = 120;
@@ -192,14 +193,15 @@ function getPrompt(db, id) {
   return serializePromptRow(stored, activeId);
 }
 
-function getResolvedPrompt(db, slug) {
+function getResolvedPrompt(db, slug, context = {}) {
   const key = normalizeSlug(slug);
   const activeId = getActivePromptId(db, key);
+  let body = '';
   if (activeId) {
-    const storedBody = String(getStoredPrompt(db, activeId)?.body || '').trim();
-    if (storedBody) return storedBody;
+    body = String(getStoredPrompt(db, activeId)?.body || '').trim();
   }
-  return getDefaultPrompt(key);
+  if (!body) body = getDefaultPrompt(key);
+  return interpolatePrompt(db, body, context);
 }
 
 function createPrompt(db, input = {}, { updatedBy } = {}) {

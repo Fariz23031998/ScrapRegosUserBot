@@ -1,14 +1,11 @@
 const { loadAiSettings, resolveAgentModel } = require('./settings');
 const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
-const { createCustomerTools } = require('./tools/customer');
-const { filterEnabledTools } = require('./tools/catalog');
 const { EMPLOYEE_TEST_PROMPT_SUFFIX } = require('./default-prompts');
 const { historyHasAudioTranscript, historyHasVisionParts } = require('./chat-media');
 const { buildUploadedMessageContent, toModelHistory } = require('./chat-uploads');
-const {
-  loadCustomerAgentChatContext,
-} = require('./customer-agent');
+const { loadCustomerAgentChatContext } = require('./customer-agent');
+const { factoryToolDescription } = require('./tools/descriptions');
 const {
   buildCustomerAssistSystemPrompt,
   buildCustomerAssistContextContent,
@@ -16,9 +13,11 @@ const {
 } = require('./customer-assist-agent');
 const {
   buildSyntheticTicket,
-  mapTestTicketContext,
   resolveTestTicket,
   sessionMessagesAsChat,
+  serializeAgentTools,
+  buildTestAgentRunSnapshot,
+  createCustomerTestSandboxTools,
   serializeCustomerTestSession,
 } = require('./customer-test-agent');
 const {
@@ -30,16 +29,15 @@ const {
 
 const inflightSessions = new Set();
 
-function buildEmployeeTestSystemPrompt(db) {
-  return `${buildCustomerAssistSystemPrompt(db)}
+function buildEmployeeTestSystemPrompt(db, ticket) {
+  return `${buildCustomerAssistSystemPrompt(db, ticket)}
 ${EMPLOYEE_TEST_PROMPT_SUFFIX}`;
 }
 
 function createSimulatedReplyToCustomerTool({ onSent } = {}) {
   return {
     name: 'reply_to_customer',
-    description:
-      'Post a message to the customer in the ticket chat. Use when the employee asked you to answer the client or gave enough guidance to send a customer-facing reply. Do not call this for private notes to the employee.',
+    description: factoryToolDescription('reply_to_customer'),
     parameters: {
       type: 'object',
       properties: {
@@ -56,6 +54,24 @@ function createSimulatedReplyToCustomerTool({ onSent } = {}) {
   };
 }
 
+function buildEmployeeTestPrompt(db, ticket, { sessionId, deps = {} } = {}) {
+  const settings = (deps.loadAiSettings || loadAiSettings)(db);
+  const tools = createCustomerTestSandboxTools({
+    db,
+    ticket,
+    sessionId,
+    chatId: ticket?.chat_id || (sessionId ? `employee-test:${sessionId}` : 'employee-test:preview'),
+    deps,
+    extraTools: [createSimulatedReplyToCustomerTool()],
+    agentSlug: 'customer_assist',
+  });
+  return {
+    system: buildEmployeeTestSystemPrompt(db, ticket),
+    tools: serializeAgentTools(tools),
+    model: resolveAgentModel(settings, 'customer_assist'),
+  };
+}
+
 async function loadEmployeeTestSession({
   db,
   userId,
@@ -64,6 +80,7 @@ async function loadEmployeeTestSession({
   clientPhone,
   reset = false,
   requireTicket = true,
+  allowAnyUser = false,
   deps = {},
 } = {}) {
   let session = getOrCreateCustomerTestSession(db, {
@@ -73,6 +90,7 @@ async function loadEmployeeTestSession({
     clientPhone,
     agentKind: 'employee',
     reset,
+    allowAnyUser,
   });
   if (ticketId !== undefined || clientPhone !== undefined) {
     session =
@@ -98,7 +116,9 @@ async function loadEmployeeTestSession({
       subject: 'Тестовый чат агента сотрудника',
     });
   }
-  return serializeCustomerTestSession(db, session, ticket);
+  return serializeCustomerTestSession(db, session, ticket, {
+    prompt: buildEmployeeTestPrompt(db, ticket, { sessionId: session.id, deps }),
+  });
 }
 
 async function runEmployeeTestAgent({
@@ -109,6 +129,7 @@ async function runEmployeeTestAgent({
   files = [],
   ticketId,
   clientPhone,
+  allowAnyUser = false,
   deps = {},
 } = {}) {
   const text = String(message || '').trim();
@@ -123,6 +144,7 @@ async function runEmployeeTestAgent({
     ticketId,
     clientPhone,
     agentKind: 'employee',
+    allowAnyUser,
   });
   if (ticketId !== undefined || clientPhone !== undefined) {
     session =
@@ -161,8 +183,6 @@ async function runEmployeeTestAgent({
 
     const run = deps.runAgent || runAgent;
     const provider = deps.provider || getProvider(settings.provider);
-    const realGetTicketMessages =
-      deps.getTicketMessages || require('../integrations/regos-crm').getTicketMessages;
     const sandboxChatId = `employee-test:${session.id}`;
     const chatId = ticket?.chat_id || sandboxChatId;
 
@@ -186,81 +206,62 @@ async function runEmployeeTestAgent({
 
     let repliedToCustomer = false;
     let customerReply = null;
+    const system = buildEmployeeTestSystemPrompt(db, ticket);
+    const modelMessages = prependUserContext(
+      history,
+      buildCustomerAssistContextContent(db, { ticket, chatSnapshot })
+    );
+    const tools = createCustomerTestSandboxTools({
+      db,
+      ticket,
+      sessionId: session.id,
+      chatId,
+      filesById,
+      deps: { ...deps, transcribeModel: settings.transcribeModel },
+      extraTools: [
+        createSimulatedReplyToCustomerTool({
+          onSent: (reply) => {
+            repliedToCustomer = true;
+            customerReply = reply;
+          },
+        }),
+      ],
+      agentSlug: 'customer_assist',
+    });
 
     const result = await run({
       provider,
       providerName: settings.provider,
       model: resolveAgentModel(settings, 'customer_assist'),
-      system: buildEmployeeTestSystemPrompt(db),
-      messages: prependUserContext(
-        history,
-        buildCustomerAssistContextContent(db, { ticket, chatSnapshot })
-      ),
+      system,
+      messages: modelMessages,
       promptCacheKey: buildPromptCacheKey('employee_test', session.id),
       reasoningEffort: settings.reasoningEffort,
       hasVision: historyHasVisionParts(history),
       hasAudio: historyHasAudioTranscript(history),
-      tools: filterEnabledTools(
-        [
-          ...createCustomerTools({
-            db,
-            ticket,
-            chatId,
-            filesById,
-            deps: {
-              ...deps,
-              transcribeModel: settings.transcribeModel,
-              getTicketMessages: async (requestedChatId, options) => {
-                if (ticket?.chat_id && String(requestedChatId) === String(ticket.chat_id)) {
-                  return realGetTicketMessages(requestedChatId, options);
-                }
-                const messages = listCustomerTestMessages(db, session.id);
-                return {
-                  ok: true,
-                  result: sessionMessagesAsChat(messages),
-                  total: messages.length,
-                };
-              },
-              notifyEmployee: async (args) => ({
-                ok: true,
-                employee_id: args.employeeId ?? args.employee_id ?? null,
-                display_name: 'Тестовый сотрудник',
-                ticket_id: ticket?.id ?? null,
-              }),
-              notifyGroupTopic: async (args) => ({
-                ok: true,
-                topic_key: args.topicKey ?? args.topic_key ?? null,
-                topic_name: 'Тестовая тема',
-                ticket_id: ticket?.id ?? null,
-              }),
-              setTicketResponsible: async (id, regosUserId) => ({
-                ok: true,
-                ticket_id: id,
-                responsible_user_id: regosUserId,
-              }),
-              setTicketStatus: async (id, status) => ({
-                ok: true,
-                ticket_id: id,
-                status,
-              }),
-            },
-          }),
-          createSimulatedReplyToCustomerTool({
-            onSent: (reply) => {
-              repliedToCustomer = true;
-              customerReply = reply;
-            },
-          }),
-        ],
-        settings.disabledAgentTools,
-        'customer_assist',
-      ),
+      tools,
     });
 
     const reply = truncateText(result.content) || 'Готово.';
-    addCustomerTestMessage(db, session.id, { role: 'assistant', content: reply });
+    const snapshot = buildTestAgentRunSnapshot({
+      system,
+      messages: modelMessages,
+      tools,
+      result,
+      extra: {
+        replied_to_customer: repliedToCustomer,
+        customer_reply: customerReply,
+      },
+    });
+    addCustomerTestMessage(db, session.id, { role: 'assistant', content: reply, run: snapshot });
     return {
-      ...serializeCustomerTestSession(db, session, ticket),
+      ...serializeCustomerTestSession(db, session, ticket, {
+        prompt: {
+          system,
+          tools: serializeAgentTools(tools),
+          model: resolveAgentModel(settings, 'customer_assist'),
+        },
+      }),
       reply,
       replied_to_customer: repliedToCustomer,
       customer_reply: customerReply,
@@ -282,6 +283,7 @@ module.exports = {
   EMPLOYEE_TEST_PROMPT_SUFFIX,
   buildEmployeeTestSystemPrompt,
   createSimulatedReplyToCustomerTool,
+  buildEmployeeTestPrompt,
   loadEmployeeTestSession,
   runEmployeeTestAgent,
   resetEmployeeTestLocks,

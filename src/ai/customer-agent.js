@@ -2,11 +2,12 @@ const { DEFAULT_HISTORY_LIMIT, SUMMARY_TOKEN_BUDGET, loadAiSettings, resolveAgen
 const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createCustomerTools } = require('./tools/customer');
-const { filterEnabledTools } = require('./tools/catalog');
+const { prepareAgentTools } = require('./tools/catalog');
 const { isEmployeeClientPhone } = require('./tools/employees');
 const { logAdminAudit } = require('../db/admin-audit-logs');
 const { CUSTOMER_SYSTEM_PROMPT } = require('./default-prompts');
 const { getResolvedPrompt } = require('../db/ai-prompts');
+const { promptContextFromTicket } = require('../db/ai-prompt-variables');
 const { getTicketSummary, listClientTicketSummaries } = require('../db/ticket-summaries');
 const {
   formatPriorSummariesForPrompt,
@@ -38,7 +39,6 @@ const {
   claimCustomerChat,
   releaseCustomerChat,
 } = require('../db/customer-message-claims');
-const { knowledgeCategoryContext } = require('../db/knowledge-articles');
 const {
   getTelegramTicketSessionByTicketId,
   getTelegramTicketSessionByChatId,
@@ -416,17 +416,15 @@ function serializePreviewSettings(settings) {
   };
 }
 
-function buildCustomerSystemPrompt(db) {
-  return getResolvedPrompt(db, 'customer');
+function buildCustomerSystemPrompt(db, ticket) {
+  return getResolvedPrompt(db, 'customer', promptContextFromTicket(ticket));
 }
 
 function buildCustomerContextContent(db, ticket, { budgetTokens = SUMMARY_TOKEN_BUDGET } = {}) {
   const summaries = listClientTicketSummaries(db, resolveTicketClientId(ticket), {
     excludeTicketId: ticket?.id,
   });
-  return [formatPriorSummariesForPrompt(summaries, { budgetTokens }), knowledgeCategoryContext(db)]
-    .filter(Boolean)
-    .join('\n\n');
+  return formatPriorSummariesForPrompt(summaries, { budgetTokens });
 }
 
 async function loadCustomerAgentChatContext({
@@ -512,7 +510,7 @@ async function previewCustomerAgentPrompt({ db, ticketId, messageId, deps = {} }
     throw error;
   }
 
-  const system = buildCustomerSystemPrompt(db);
+  const system = buildCustomerSystemPrompt(db, ticket);
   const context = buildCustomerContextContent(db, ticket);
   const { summary, prior_summaries: priorSummaries } = loadPromptSummaries(db, ticket);
   const chatId = ticket.chat_id != null ? String(ticket.chat_id).trim() : '';
@@ -535,7 +533,12 @@ async function previewCustomerAgentPrompt({ db, ticketId, messageId, deps = {} }
     deps,
   });
   const tools = serializeCustomerTools(
-    filterEnabledTools(createCustomerTools({ db, ticket, chatId, filesById, deps }), settings.disabledAgentTools, 'customer'),
+    prepareAgentTools(createCustomerTools({ db, ticket, chatId, filesById, deps }), {
+      db,
+      settings,
+      agentSlug: 'customer',
+      ticket,
+    }),
   );
   if (!trigger) {
     return buildPreviewResult({
@@ -812,10 +815,10 @@ async function handleCustomerChatMessage({
           provider,
           providerName: settings.provider,
           model,
-          system: buildCustomerSystemPrompt(db),
+          system: buildCustomerSystemPrompt(db, ticket),
           messages: prependUserContext(history, buildCustomerContextContent(db, ticket)),
           promptCacheKey: buildPromptCacheKey('customer', ticket.id),
-          tools: filterEnabledTools(
+          tools: prepareAgentTools(
             createCustomerTools({
               db,
               ticket,
@@ -829,8 +832,7 @@ async function handleCustomerChatMessage({
                 },
               },
             }),
-            settings.disabledAgentTools,
-            'customer',
+            { db, settings, agentSlug: 'customer', ticket },
           ),
           reasoningEffort: settings.reasoningEffort,
           hasVision: historyHasVisionParts(history),

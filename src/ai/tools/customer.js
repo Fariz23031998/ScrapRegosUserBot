@@ -3,6 +3,7 @@ const { getServicePricesCatalog } = require('../../db/service-prices');
 const { listTechnicalSupportPrices, getActiveTechnicalSupportSubscription } = require('../../db/technical-support');
 const { findEmployeesForAgent, getEmployeeForAgent } = require('./employees');
 const { createKnowledgeTools } = require('./knowledge');
+const { factoryToolDescription } = require('./descriptions');
 const {
   classifyChatFile,
   collectMessageFileIds,
@@ -105,8 +106,7 @@ function createCustomerTools({
   tools.push(
     {
       name: 'search_chat_history',
-      description:
-        'Read recent messages from the current ticket period. Set include_other_tickets=true to also return saved summaries of earlier tickets for this client.',
+      description: factoryToolDescription('search_chat_history'),
       parameters: {
         type: 'object',
         properties: {
@@ -167,7 +167,7 @@ function createCustomerTools({
     },
     {
       name: 'search_orders',
-      description: 'Search local payment orders by client phone or free text.',
+      description: factoryToolDescription('search_orders'),
       parameters: {
         type: 'object',
         properties: {
@@ -199,7 +199,7 @@ function createCustomerTools({
     },
     {
       name: 'search_client',
-      description: 'Look up a client/firm in billing portals by phone, login, INN, or name.',
+      description: factoryToolDescription('search_client'),
       parameters: {
         type: 'object',
         properties: {
@@ -215,8 +215,7 @@ function createCustomerTools({
     },
     {
       name: 'get_client_firm',
-      description:
-        'Load billing-portal firm data for the current ticket client. Uses only that client’s phone from the ticket. Do not pass a phone or query.',
+      description: factoryToolDescription('get_client_firm'),
       parameters: {
         type: 'object',
         properties: {},
@@ -233,7 +232,7 @@ function createCustomerTools({
     },
     {
       name: 'get_prices',
-      description: 'Load the service price catalog and technical-support subscription prices. Optionally include the client TP subscription.',
+      description: factoryToolDescription('get_prices'),
       parameters: {
         type: 'object',
         properties: {
@@ -252,8 +251,7 @@ function createCustomerTools({
     },
     {
       name: 'get_employee',
-      description:
-        'Find an employee by name, phone, or job title (for example «менеджер по продажам»). Returns description and whether they can be notified in Telegram.',
+      description: factoryToolDescription('get_employee'),
       parameters: {
         type: 'object',
         properties: {
@@ -267,8 +265,7 @@ function createCustomerTools({
     },
     {
       name: 'notify_employee',
-      description:
-        'Send a Telegram message to an employee, for example to forward a customer request to a sales manager. Use get_employee first. Client name/phone and the ticket link are appended automatically.',
+      description: factoryToolDescription('notify_employee'),
       parameters: {
         type: 'object',
         properties: {
@@ -287,15 +284,13 @@ function createCustomerTools({
     },
     {
       name: 'list_group_topics',
-      description:
-        'List internal Telegram group topics the agent may post to. Use this to pick a topic_key before send_group_topic_message.',
+      description: factoryToolDescription('list_group_topics'),
       parameters: { type: 'object', properties: {} },
       execute: async () => listGroupTopics(),
     },
     {
       name: 'send_group_topic_message',
-      description:
-        'Post a message to an internal staff Telegram group topic (urgent help, KKM, new clients, field visits). Do not use this instead of answering the client. Call list_group_topics first if you are unsure which topic_key to use. Client name/phone and the ticket link are appended automatically.',
+      description: factoryToolDescription('send_group_topic_message'),
       parameters: {
         type: 'object',
         properties: {
@@ -314,7 +309,7 @@ function createCustomerTools({
     },
     {
       name: 'assign_responsible',
-      description: 'Assign a REGOS user as the ticket responsible. The employee must have regos_user_id.',
+      description: factoryToolDescription('assign_responsible'),
       parameters: {
         type: 'object',
         properties: {
@@ -338,8 +333,7 @@ function createCustomerTools({
     },
     {
       name: 'close_ticket',
-      description:
-        'Close the current support ticket. Use when the client request is fully resolved and no follow-up is needed. Do not close if you are waiting for data, escalated to staff, or still troubleshooting.',
+      description: factoryToolDescription('close_ticket'),
       parameters: { type: 'object', properties: {} },
       execute: async () => {
         if (!ticket?.id) return { ok: false, error: 'missing_ticket' };
@@ -354,8 +348,7 @@ function createCustomerTools({
     },
     {
       name: 'read_chat_image',
-      description:
-        'Load a chat image by file_id so you can see it. Use for older screenshots listed as [изображение: … #id]. Does not work for audio or video.',
+      description: factoryToolDescription('read_chat_image'),
       parameters: {
         type: 'object',
         properties: {
@@ -404,8 +397,7 @@ function createCustomerTools({
     },
     {
       name: 'transcribe_chat_audio',
-      description:
-        'Transcribe a chat voice or audio file by file_id. Use for older voice notes listed as [аудио: … #id]. Does not work for images or video.',
+      description: factoryToolDescription('transcribe_chat_audio'),
       parameters: {
         type: 'object',
         properties: {

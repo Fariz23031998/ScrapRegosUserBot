@@ -1,4 +1,6 @@
 const { isKnownAgentTool, listAgentToolCatalog } = require('./catalog');
+const { getDefaultToolDescription } = require('./descriptions');
+const { getStoredToolDescription } = require('../../db/ai-tool-descriptions');
 const { createKnowledgeTools } = require('./knowledge');
 const { createCustomerTools } = require('./customer');
 const { createReplyToCustomerTool } = require('../customer-assist-agent');
@@ -41,10 +43,11 @@ function listToolSchemas({ db = null, deps = {} } = {}) {
     .filter((tool) => isKnownAgentTool(tool.name))
     .map((tool) => {
       const meta = catalogByName.get(tool.name) || {};
+      const stored = db ? getStoredToolDescription(db, tool.name) : '';
       return {
         name: tool.name,
         title: meta.title || tool.name,
-        description: meta.description || tool.description || '',
+        description: stored || getDefaultToolDescription(tool.name) || tool.description || '',
         agents: meta.agents || [],
         parameters: tool.parameters || { type: 'object', properties: {} },
         requires_ticket: toolRequiresTicket(tool.name),

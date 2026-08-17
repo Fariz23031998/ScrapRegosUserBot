@@ -425,6 +425,10 @@ label {
   overflow: auto;
 }
 
+.page--test-agents .knowledge-workspace__panel:not(.knowledge-workspace__panel--chat) > * {
+  flex-shrink: 0;
+}
+
 .test-agents-header {
   display: flex;
   flex-wrap: wrap;
@@ -443,6 +447,7 @@ label {
   gap: 0.45rem;
   width: 100%;
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .test-agents-turn .ticket-chat__msg {
@@ -462,33 +467,106 @@ label {
   min-width: 0;
 }
 
+.test-agents-history {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.test-agents-history h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.test-agents-history__all {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.test-agents-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.test-agents-history__item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.test-agents-history__item.is-active {
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 45%, var(--border));
+}
+
+.test-agents-history__open {
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 0.55rem 0.65rem;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.test-agents-history__title {
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-agents-history__meta {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.test-agents-history__delete {
+  align-self: center;
+  margin-right: 0.35rem;
+  min-width: 2rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.page--test-agents .test-agent-prompt[open] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.page--test-agents .test-agent-prompt[open] > .agent-run-trace__summary {
+  flex-shrink: 0;
+}
+
+.page--test-agents .test-agent-prompt[open] > .agent-run-trace__body {
+  flex: 1 1 auto;
+  max-height: min(36rem, 70vh);
+  overflow: auto;
+  min-height: 0;
+}
+
+.page--test-agents .test-agent-prompt .ticket-ai-prompt__pre {
+  max-height: none;
+  overflow: visible;
+}
+
 .knowledge-workspace__panel--chat .ticket-chat__messages {
   flex: 1;
 }
 
 .knowledge-workspace__panel--chat .ticket-chat__compose {
   flex-shrink: 0;
-}
-
-.knowledge-user-prompt {
-  display: grid;
-  gap: 0.35rem;
-  flex-shrink: 0;
-  padding: 0 0.15rem 0.5rem;
-  min-width: 0;
-}
-
-.knowledge-user-prompt h5 {
-  margin: 0;
-  font-size: 0.8rem;
-  color: var(--ink-soft);
-}
-
-.knowledge-user-prompt .ticket-ai-prompt__pre {
-  max-height: 4.5rem;
-  padding: 0.5rem 0.65rem;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .knowledge-list-scroll {
@@ -576,6 +654,44 @@ label {
 
 .page--prompts .role-tabs {
   flex-wrap: wrap;
+}
+
+.page--prompts > .role-tabs {
+  margin-bottom: 0.15rem;
+}
+
+.page--prompts {
+  display: grid;
+  gap: 1rem;
+}
+
+.prompt-var-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+}
+
+.prompt-var-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.prompt-var-source {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.prompt-var-test {
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
 }
 
 .knowledge-list__item--active {

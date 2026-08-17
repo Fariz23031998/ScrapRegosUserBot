@@ -250,6 +250,10 @@ function filterEnabledTools(tools, disabledAgentTools = [], agentSlug) {
   return (tools || []).filter((tool) => !disabled.has(String(tool?.name || '')));
 }
 
+function prepareAgentTools(tools, options) {
+  return require('../../db/ai-tool-descriptions').prepareAgentTools(tools, options);
+}
+
 module.exports = {
   AGENT_TOOL_CATALOG,
   KNOWN_TOOL_NAMES,
@@ -265,4 +269,5 @@ module.exports = {
   deriveFullyDisabledTools,
   listAgentToolCatalog,
   filterEnabledTools,
+  prepareAgentTools,
 };

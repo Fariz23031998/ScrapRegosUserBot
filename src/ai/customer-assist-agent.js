@@ -2,11 +2,12 @@ const { loadAiSettings, resolveAgentModel } = require('./settings');
 const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createCustomerTools } = require('./tools/customer');
-const { filterEnabledTools } = require('./tools/catalog');
+const { prepareAgentTools } = require('./tools/catalog');
 const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_ASSIST_PROMPT_SUFFIX } = require('./default-prompts');
 const { getResolvedPrompt } = require('../db/ai-prompts');
+const { promptContextFromTicket } = require('../db/ai-prompt-variables');
+const { factoryToolDescription } = require('./tools/descriptions');
 const { listClientTicketSummaries } = require('../db/ticket-summaries');
-const { knowledgeCategoryContext } = require('../db/knowledge-articles');
 const { formatPriorSummariesForPrompt, resolveTicketClientId } = require('./ticket-period');
 const { historyHasAudioTranscript, historyHasVisionParts } = require('./chat-media');
 const { buildUploadedMessageContent, toModelHistory } = require('./chat-uploads');
@@ -56,8 +57,9 @@ function formatTicketMeta(ticket) {
   ].join(' ');
 }
 
-function buildCustomerAssistSystemPrompt(db) {
-  return [getResolvedPrompt(db, 'customer'), getResolvedPrompt(db, 'customer_assist')]
+function buildCustomerAssistSystemPrompt(db, ticket) {
+  const context = promptContextFromTicket(ticket);
+  return [getResolvedPrompt(db, 'customer', context), getResolvedPrompt(db, 'customer_assist', context)]
     .filter(Boolean)
     .join('\n\n');
 }
@@ -73,7 +75,6 @@ function buildCustomerAssistContextContent(db, { ticket, chatSnapshot } = {}) {
   if (chatSnapshot) {
     parts.push(`Текущая переписка обращения (клиент видит только её):\n${chatSnapshot}`);
   }
-  parts.push(knowledgeCategoryContext(db));
   return parts.filter(Boolean).join('\n\n');
 }
 
@@ -110,8 +111,7 @@ function createReplyToCustomerTool({ ticket, chatId, deps = {}, onSent } = {}) {
 
   return {
     name: 'reply_to_customer',
-    description:
-      'Post a message to the customer in the ticket chat. Use when the employee asked you to answer the client or gave enough guidance to send a customer-facing reply. Do not call this for private notes to the employee.',
+    description: factoryToolDescription('reply_to_customer'),
     parameters: {
       type: 'object',
       properties: {
@@ -219,7 +219,7 @@ async function runTicketAssistAgent({
 
     let repliedToCustomer = false;
     let customerReply = null;
-    const tools = filterEnabledTools(
+    const tools = prepareAgentTools(
       [
         ...createCustomerTools({
           db,
@@ -238,15 +238,14 @@ async function runTicketAssistAgent({
           },
         }),
       ],
-      settings.disabledAgentTools,
-      'customer_assist',
+      { db, settings, agentSlug: 'customer_assist', ticket },
     );
 
     const result = await run({
       provider,
       providerName: settings.provider,
       model: resolveAgentModel(settings, 'customer_assist'),
-      system: buildCustomerAssistSystemPrompt(db),
+      system: buildCustomerAssistSystemPrompt(db, ticket),
       messages: prependUserContext(
         history,
         buildCustomerAssistContextContent(db, { ticket, chatSnapshot }),

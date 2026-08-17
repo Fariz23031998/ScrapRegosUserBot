@@ -170,6 +170,11 @@ const { runKbAgent } = require('../ai/kb-agent');
 const { previewCustomerAgentPrompt } = require('../ai/customer-agent');
 const { loadCustomerTestSession, runCustomerTestAgent } = require('../ai/customer-test-agent');
 const { loadEmployeeTestSession, runEmployeeTestAgent } = require('../ai/employee-test-agent');
+const {
+  listCustomerTestSessions,
+  deleteCustomerTestSession,
+  clearCustomerTestSessions,
+} = require('../db/customer-agent-sessions');
 const { loadTicketAssistSession, runTicketAssistAgent } = require('../ai/customer-assist-agent');
 const { CHAT_MESSAGE_JSON_LIMIT, parseChatUploadFiles } = require('../ai/chat-uploads');
 const {
@@ -196,6 +201,20 @@ const {
   setActivePrompt,
   deletePrompt,
 } = require('../db/ai-prompts');
+const {
+  listPromptVariables,
+  getPromptVariable,
+  createPromptVariable,
+  updatePromptVariable,
+  deletePromptVariable,
+  testVariableSource,
+} = require('../db/ai-prompt-variables');
+const {
+  listToolDescriptions,
+  getToolDescription,
+  saveToolDescription,
+  resetToolDescription,
+} = require('../db/ai-tool-descriptions');
 const {
   getTicketSummary,
   saveTicketSummaryText,
@@ -2228,6 +2247,169 @@ function createBotAdminRouter(db) {
     }
   });
 
+  function respondToolDescriptionWriteError(res, error, fallbackMessage) {
+    if (error.message === 'UNKNOWN_TOOL') {
+      return res.status(404).json({ message: 'Инструмент не найден.' });
+    }
+    if (error.message === 'INVALID_TOOL_DESCRIPTION') {
+      return res.status(400).json({ message: 'Некорректное описание инструмента.' });
+    }
+    console.error(fallbackMessage, error);
+    return res.status(500).json({ message: fallbackMessage });
+  }
+
+  router.get('/api/ai/tool-descriptions', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ tools: listToolDescriptions(db) });
+    } catch (error) {
+      console.error('List AI tool descriptions error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить описания инструментов.' });
+    }
+  });
+
+  router.put('/api/ai/tool-descriptions/:name', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const before = getToolDescription(db, req.params.name);
+      const tool = saveToolDescription(db, req.params.name, req.body?.body, {
+        updatedBy: resolveKnowledgeActorUserId(req),
+      });
+      auditAdminChange(db, req, {
+        entityType: 'ai_tool_description',
+        entityId: tool.name,
+        action: 'update',
+        summary: `Изменено описание инструмента «${tool.title}»`,
+        details: buildAuditDetails({ before, after: tool }),
+      });
+      return res.json({ tool });
+    } catch (error) {
+      return respondToolDescriptionWriteError(res, error, 'Не удалось сохранить описание инструмента.');
+    }
+  });
+
+  router.delete('/api/ai/tool-descriptions/:name', requireRight(db, 'settings_edit'), (req, res) => {
+    try {
+      const before = getToolDescription(db, req.params.name);
+      const tool = resetToolDescription(db, req.params.name);
+      auditAdminChange(db, req, {
+        entityType: 'ai_tool_description',
+        entityId: before.name,
+        action: 'delete',
+        summary: `Сброшено описание инструмента «${before.title}»`,
+        details: buildAuditDetails({ before, after: tool }),
+      });
+      return res.json({ ok: true, tool });
+    } catch (error) {
+      return respondToolDescriptionWriteError(res, error, 'Не удалось сбросить описание инструмента.');
+    }
+  });
+
+  function respondPromptVariableWriteError(res, error, fallbackMessage) {
+    if (error.message === 'VARIABLE_NOT_FOUND') {
+      return res.status(404).json({ message: 'Переменная не найдена.' });
+    }
+    if (error.message === 'INVALID_VARIABLE_KEY') {
+      return res.status(400).json({ message: 'Ключ переменной: латиница, цифры и _, начинается с буквы.' });
+    }
+    if (error.message === 'INVALID_VARIABLE_NAME') {
+      return res.status(400).json({ message: 'Некорректное название переменной.' });
+    }
+    if (error.message === 'INVALID_VARIABLE_SOURCE') {
+      return res.status(400).json({ message: 'Введите тело JavaScript-функции.' });
+    }
+    if (error.message === 'VARIABLE_KEY_TAKEN') {
+      return res.status(409).json({ message: 'Переменная с таким ключом уже есть.' });
+    }
+    console.error(fallbackMessage, error);
+    return res.status(500).json({ message: fallbackMessage });
+  }
+
+  router.get('/api/ai/prompt-variables', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ variables: listPromptVariables(db) });
+    } catch (error) {
+      console.error('List AI prompt variables error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить переменные.' });
+    }
+  });
+
+  router.post('/api/ai/prompt-variables/test', requireRight(db, 'prompt_variables_create'), express.json(), (req, res) => {
+    try {
+      const source = req.body?.source != null ? String(req.body.source) : '';
+      return res.json(testVariableSource(db, source, req.body?.context || {}));
+    } catch (error) {
+      return respondPromptVariableWriteError(res, error, 'Не удалось выполнить переменную.');
+    }
+  });
+
+  router.post('/api/ai/prompt-variables/:id/test', requireRight(db, 'prompt_variables_create'), express.json(), (req, res) => {
+    try {
+      const variable = getPromptVariable(db, req.params.id);
+      const source = req.body?.source != null ? String(req.body.source) : variable.source;
+      return res.json(testVariableSource(db, source, req.body?.context || {}));
+    } catch (error) {
+      return respondPromptVariableWriteError(res, error, 'Не удалось выполнить переменную.');
+    }
+  });
+
+  router.post('/api/ai/prompt-variables', requireRight(db, 'prompt_variables_create'), express.json(), (req, res) => {
+    try {
+      const variable = createPromptVariable(
+        db,
+        { key: req.body?.key, name: req.body?.name, source: req.body?.source },
+        { updatedBy: resolveKnowledgeActorUserId(req) }
+      );
+      auditAdminChange(db, req, {
+        entityType: 'ai_prompt_variable',
+        entityId: variable.id,
+        action: 'create',
+        summary: `Создана переменная промпта «${variable.key}»`,
+        details: buildAuditDetails({ before: null, after: variable }),
+      });
+      return res.status(201).json({ variable });
+    } catch (error) {
+      return respondPromptVariableWriteError(res, error, 'Не удалось создать переменную.');
+    }
+  });
+
+  router.put('/api/ai/prompt-variables/:id', requireRight(db, 'prompt_variables_create'), express.json(), (req, res) => {
+    try {
+      const before = getPromptVariable(db, req.params.id);
+      const variable = updatePromptVariable(
+        db,
+        req.params.id,
+        { key: req.body?.key, name: req.body?.name, source: req.body?.source },
+        { updatedBy: resolveKnowledgeActorUserId(req) }
+      );
+      auditAdminChange(db, req, {
+        entityType: 'ai_prompt_variable',
+        entityId: variable.id,
+        action: 'update',
+        summary: `Изменена переменная промпта «${variable.key}»`,
+        details: buildAuditDetails({ before, after: variable }),
+      });
+      return res.json({ variable });
+    } catch (error) {
+      return respondPromptVariableWriteError(res, error, 'Не удалось сохранить переменную.');
+    }
+  });
+
+  router.delete('/api/ai/prompt-variables/:id', requireRight(db, 'prompt_variables_create'), (req, res) => {
+    try {
+      const before = getPromptVariable(db, req.params.id);
+      const result = deletePromptVariable(db, req.params.id);
+      auditAdminChange(db, req, {
+        entityType: 'ai_prompt_variable',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалена переменная промпта «${before.key}»`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true, variable: result.variable });
+    } catch (error) {
+      return respondPromptVariableWriteError(res, error, 'Не удалось удалить переменную.');
+    }
+  });
+
   function resolveKnowledgeActorUserId(req) {
     const actor = getSessionActor(req);
     if (actor?.type === 'user') return Number(actor.userId) || null;
@@ -2597,6 +2779,12 @@ function createBotAdminRouter(db) {
     if (error.message === 'TICKET_NOT_FOUND') {
       return res.status(404).json({ message: 'Тикет не найден.' });
     }
+    if (error.message === 'SESSION_NOT_FOUND') {
+      return res.status(404).json({ message: 'Сессия не найдена.' });
+    }
+    if (error.message === 'SESSION_FORBIDDEN') {
+      return res.status(403).json({ message: 'Нет доступа к этой тестовой сессии.' });
+    }
     if (error.message === 'SESSION_BUSY') {
       return res.status(409).json({ message: 'Агент ещё отвечает. Подождите.' });
     }
@@ -2610,6 +2798,62 @@ function createBotAdminRouter(db) {
     return res.status(500).json({ message: 'Не удалось получить ответ агента поддержки.' });
   }
 
+  function canSeeAllTestHistory(req) {
+    return actorHasPermission(db, getSessionActor(req), 'ai_customer_test_history');
+  }
+
+  function parseAllUsersFlag(value) {
+    const raw = String(value ?? '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+  }
+
+  router.get('/api/ai/test-sessions', requireRight(db, 'ai_customer_test'), (req, res) => {
+    try {
+      const allowAnyUser = canSeeAllTestHistory(req);
+      const allUsers = parseAllUsersFlag(req.query.all);
+      const sessions = listCustomerTestSessions(db, {
+        userId: resolveKnowledgeActorUserId(req),
+        agentKind: req.query.agent_kind,
+        allUsers,
+        allowAnyUser,
+      });
+      return res.json({ sessions, all_users: Boolean(allUsers && allowAnyUser) });
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
+  router.delete('/api/ai/test-sessions/:id', requireRight(db, 'ai_customer_test'), (req, res) => {
+    try {
+      const deleted = deleteCustomerTestSession(db, req.params.id, {
+        userId: resolveKnowledgeActorUserId(req),
+        allowAnyUser: canSeeAllTestHistory(req),
+      });
+      if (!deleted) {
+        return res.status(404).json({ message: 'Сессия не найдена.' });
+      }
+      return res.json({ ok: true });
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
+  router.post('/api/ai/test-sessions/clear', requireRight(db, 'ai_customer_test'), express.json(), (req, res) => {
+    try {
+      const allowAnyUser = canSeeAllTestHistory(req);
+      const allUsers = parseAllUsersFlag(req.body?.all ?? req.query.all);
+      const result = clearCustomerTestSessions(db, {
+        userId: resolveKnowledgeActorUserId(req),
+        agentKind: req.body?.agent_kind ?? req.query.agent_kind,
+        allUsers,
+        allowAnyUser,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (error) {
+      return sendCustomerTestError(res, error);
+    }
+  });
+
   router.get('/api/ai/customer-test-session', requireRight(db, 'ai_customer_test'), async (req, res) => {
     try {
       const result = await loadCustomerTestSession({
@@ -2617,6 +2861,7 @@ function createBotAdminRouter(db) {
         userId: resolveKnowledgeActorUserId(req),
         sessionId: req.query.session_id,
         requireTicket: false,
+        allowAnyUser: canSeeAllTestHistory(req),
       });
       return res.json(result);
     } catch (error) {
@@ -2633,6 +2878,7 @@ function createBotAdminRouter(db) {
         ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
         clientPhone: parseOptionalTestPhone(req.body?.client_phone),
         reset: Boolean(req.body?.reset),
+        allowAnyUser: canSeeAllTestHistory(req),
       });
       return res.json(result);
     } catch (error) {
@@ -2666,6 +2912,7 @@ function createBotAdminRouter(db) {
         files,
         ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
         clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+        allowAnyUser: canSeeAllTestHistory(req),
       });
       return res.json(result);
     } catch (error) {
@@ -2680,6 +2927,7 @@ function createBotAdminRouter(db) {
         userId: resolveKnowledgeActorUserId(req),
         sessionId: req.query.session_id,
         requireTicket: false,
+        allowAnyUser: canSeeAllTestHistory(req),
       });
       return res.json(result);
     } catch (error) {
@@ -2696,6 +2944,7 @@ function createBotAdminRouter(db) {
         ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
         clientPhone: parseOptionalTestPhone(req.body?.client_phone),
         reset: Boolean(req.body?.reset),
+        allowAnyUser: canSeeAllTestHistory(req),
       });
       return res.json(result);
     } catch (error) {
@@ -2729,6 +2978,7 @@ function createBotAdminRouter(db) {
           files,
           ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
           clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+          allowAnyUser: canSeeAllTestHistory(req),
         });
         return res.json(result);
       } catch (error) {

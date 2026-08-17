@@ -163,6 +163,10 @@ function migrateSchema(db) {
   ensureKnowledgeTables(db);
   const { ensureAiPromptsTable } = require('./ai-prompts');
   ensureAiPromptsTable(db);
+  const { ensureAiPromptVariablesTable } = require('./ai-prompt-variables');
+  ensureAiPromptVariablesTable(db);
+  const { ensureAiToolDescriptionsTable } = require('./ai-tool-descriptions');
+  ensureAiToolDescriptionsTable(db);
   const { ensureCustomerTestTables } = require('./customer-agent-sessions');
   ensureCustomerTestTables(db);
   const { ensureTicketAssistTables } = require('./ticket-assist-sessions');

@@ -157,6 +157,26 @@ export type AiPromptType = {
   prompts: AiPrompt[];
 };
 
+export type AiPromptVariable = {
+  id: number;
+  key: string;
+  name: string;
+  source: string;
+  updated_at?: string | null;
+  updated_by?: number | null;
+};
+
+export type AiToolDescription = {
+  name: string;
+  title: string;
+  agents: AiToolAgentSlug[];
+  body: string;
+  default_body: string;
+  is_custom: boolean;
+  updated_at?: string | null;
+  updated_by?: number | null;
+};
+
 export type TicketAiPromptMessageContent =
   | string
   | Array<{
@@ -253,6 +273,7 @@ export type KnowledgeChatMessage = {
   content: string;
   created_at?: string;
   files?: AgentChatFile[];
+  run?: AgentTestRun | null;
 };
 
 export type CustomerTestTicket = {
@@ -299,12 +320,41 @@ export type AgentRunUsage = {
   cache_write_tokens?: number;
 };
 
+export type AgentTestPromptMessage = {
+  role: "user" | "assistant";
+  content: TicketAiPromptMessageContent;
+};
+
+export type AgentTestPromptTool = {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+};
+
+export type AgentTestPrompt = {
+  system?: string;
+  tools?: AgentTestPromptTool[];
+  model?: string | null;
+  messages?: AgentTestPromptMessage[];
+};
+
+export type AgentTestRun = AgentTestPrompt & {
+  trace?: AgentTraceStep[];
+  steps?: number | null;
+  usage?: AgentRunUsage | null;
+  stopped?: string | null;
+  replied_to_customer?: boolean;
+  customer_reply?: string | null;
+};
+
 export type CustomerTestSession = {
   session_id: number;
+  user_id?: number | null;
   ticket_id?: number | null;
   client_phone?: string | null;
   ticket?: CustomerTestTicket | null;
   messages: KnowledgeChatMessage[];
+  prompt?: AgentTestPrompt | null;
   reply?: string;
   steps?: number | null;
   usage?: AgentRunUsage | null;
@@ -312,6 +362,18 @@ export type CustomerTestSession = {
   trace?: AgentTraceStep[];
   replied_to_customer?: boolean;
   customer_reply?: string | null;
+};
+
+export type TestAgentSessionSummary = {
+  id: number;
+  user_id?: number | null;
+  ticket_id?: number | null;
+  client_phone?: string | null;
+  agent_kind: "customer" | "employee";
+  title: string;
+  user_name?: string | null;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type TicketAiAssistSession = {

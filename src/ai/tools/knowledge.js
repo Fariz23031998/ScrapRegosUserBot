@@ -11,6 +11,7 @@ const {
   deleteKnowledgeCategory,
 } = require('../../db/knowledge-articles');
 const { createBrowseTools } = require('./browse');
+const { factoryToolDescription } = require('./descriptions');
 
 function mapArticleCategory(article) {
   return {
@@ -40,8 +41,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
   const tools = [
     {
       name: 'search_knowledge',
-      description:
-        `Search the internal knowledge base by keywords (2–6 short terms). Prefer Russian KB wording and synonyms (e.g. «офис адрес контакты»). Do not paste the full customer sentence. Optional category_id limits results. ${categoryLine}`,
+      description: factoryToolDescription('search_knowledge', categoryLine),
       parameters: {
         type: 'object',
         properties: {
@@ -82,7 +82,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     },
     {
       name: 'get_article',
-      description: 'Load a full knowledge-base article by id.',
+      description: factoryToolDescription('get_article'),
       parameters: {
         type: 'object',
         properties: {
@@ -97,7 +97,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     },
     {
       name: 'list_knowledge_categories',
-      description: 'List knowledge-base categories (id, name, tags). Call this before assigning or filtering by category_id.',
+      description: factoryToolDescription('list_knowledge_categories'),
       parameters: { type: 'object', properties: {} },
       execute: async () => ({
         categories: listKnowledgeCategories(db).map(mapCategoryForTool),
@@ -124,7 +124,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
   tools.push(
     {
       name: 'create_article',
-      description: `Create a new knowledge-base article. ${categoryLine}`,
+      description: factoryToolDescription('create_article', categoryLine),
       parameters: {
         type: 'object',
         properties: {
@@ -145,7 +145,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     },
     {
       name: 'update_article',
-      description: `Update an existing knowledge-base article. Omit fields you do not want to change. Locked articles cannot be updated. ${categoryLine}`,
+      description: factoryToolDescription('update_article', categoryLine),
       parameters: {
         type: 'object',
         properties: {
@@ -169,7 +169,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     },
     {
       name: 'delete_article',
-      description: 'Delete a knowledge-base article by id. Locked articles cannot be deleted.',
+      description: factoryToolDescription('delete_article'),
       parameters: {
         type: 'object',
         properties: {
@@ -181,7 +181,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     },
     {
       name: 'create_category',
-      description: 'Create a knowledge-base category.',
+      description: factoryToolDescription('create_category'),
       parameters: {
         type: 'object',
         properties: {
@@ -195,7 +195,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     },
     {
       name: 'update_category',
-      description: 'Update a knowledge-base category. Omit fields you do not want to change.',
+      description: factoryToolDescription('update_category'),
       parameters: {
         type: 'object',
         properties: {
@@ -215,7 +215,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
     },
     {
       name: 'delete_category',
-      description: 'Delete a knowledge-base category by id. Articles in it become uncategorized.',
+      description: factoryToolDescription('delete_category'),
       parameters: {
         type: 'object',
         properties: {
