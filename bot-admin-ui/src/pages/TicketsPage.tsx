@@ -19,6 +19,7 @@ import {
   updateClient,
 } from "../api/tickets";
 import filterFunnelIcon from "../assets/filter-funnel.png";
+import CheckboxSelect from "../components/CheckboxSelect";
 import EntityAvatar from "../components/EntityAvatar";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import Modal from "../components/Modal";
@@ -51,6 +52,8 @@ import {
   hasTicketRecording,
   statusBadgeClass,
   statusLabel,
+  TICKET_STATUS_OPTIONS,
+  parseTicketStatuses,
   technicalSupportDisplay,
   unpaidOrdersHref,
   unpaidOrdersLabel,
@@ -64,7 +67,7 @@ const FILTERS_STORAGE_KEY = "bot-admin.tickets.filters";
 
 type TicketFilters = {
   search: string;
-  status: string;
+  statuses: string[];
   user: string;
   channel: string;
   dateFrom: string;
@@ -78,7 +81,7 @@ function defaultFilters(periodDays?: number): TicketFilters {
   const period = getTicketPeriodDefaults(periodDays);
   return {
     search: "",
-    status: "",
+    statuses: [],
     user: "",
     channel: "",
     dateFrom: period.from,
@@ -107,7 +110,7 @@ function loadFilters(periodDays?: number): LoadedFilters {
       fromStorage: true,
       filters: {
         ...base,
-        status: typeof parsed.status === "string" ? parsed.status : base.status,
+        statuses: parseTicketStatuses(parsed.statuses ?? parsed.status),
         // Empty string is a valid persisted choice ("Все") — do not treat it as missing.
         user:
           parsed.responsibleUserId != null && parsed.responsibleUserId !== ""
@@ -142,7 +145,7 @@ function saveFilters(filters: TicketFilters) {
     localStorage.setItem(
       FILTERS_STORAGE_KEY,
       JSON.stringify({
-        status: filters.status,
+        status: filters.statuses,
         responsibleUserId: filters.user,
         channelId: filters.channel,
         withoutDuplicates: filters.withoutDuplicates,
@@ -160,7 +163,7 @@ function buildListParams(page: number, limit: number, filters: TicketFilters): R
     limit: String(limit),
   };
   if (filters.search) params.q = filters.search;
-  if (filters.status) params.status = filters.status;
+  if (filters.statuses.length) params.status = filters.statuses.join(",");
   if (filters.user) params.responsible_user_id = filters.user;
   if (filters.channel) params.channel_id = filters.channel;
   const fromUnix = datetimeLocalToUnix(filters.dateFrom);
@@ -182,7 +185,7 @@ function regosUserLabel(user: { full_name?: string | null; login?: string | null
 function filtersHaveAdvancedValues(filters: TicketFilters, periodDays?: number) {
   const defaults = defaultFilters(periodDays);
   return (
-    Boolean(filters.status) ||
+    Boolean(filters.statuses.length) ||
     Boolean(filters.user) ||
     Boolean(filters.channel) ||
     filters.dateFrom !== defaults.dateFrom ||
@@ -215,16 +218,12 @@ function TicketFilterFields({
 }: TicketFilterFieldsProps) {
   return (
     <>
-      <label className="ticket-filters__field">
-        <span>Статус</span>
-        <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
-          <option value="">Все</option>
-          <option value="Open">Открыт</option>
-          <option value="Closed">Закрыт</option>
-          <option value="WaitingClient">Ожидание клиента</option>
-          <option value="WaitingStaff">Ожидание сотрудника</option>
-        </select>
-      </label>
+      <CheckboxSelect
+        label="Статус"
+        values={filters.statuses}
+        options={TICKET_STATUS_OPTIONS}
+        onChange={(statuses) => setFilters({ ...filters, statuses })}
+      />
       <label className="ticket-filters__field">
         <span>Ответственный</span>
         <select value={filters.user} onChange={(e) => setFilters({ ...filters, user: e.target.value })}>
@@ -574,6 +573,11 @@ export default function TicketsPage() {
         cell: ({ row }) => userDisplayName(row.original.responsible_user_id, userNames),
       },
       {
+        id: "updated",
+        header: "Обновлён",
+        cell: ({ row }) => formatUnix(row.original.last_update),
+      },
+      {
         id: "created",
         header: "Создан",
         cell: ({ row }) => formatUnix(row.original.created_date),
@@ -783,7 +787,7 @@ export default function TicketsPage() {
             isLoading={ticketsQuery.isPending}
             emptyMessage={
               appliedFilters.search ||
-              appliedFilters.status ||
+              appliedFilters.statuses.length ||
               appliedFilters.user ||
               appliedFilters.channel ||
               appliedFilters.dateFrom ||
@@ -817,7 +821,7 @@ export default function TicketsPage() {
             serverSideSearch
             emptyMessage={
               appliedFilters.search ||
-              appliedFilters.status ||
+              appliedFilters.statuses.length ||
               appliedFilters.user ||
               appliedFilters.channel ||
               appliedFilters.dateFrom ||

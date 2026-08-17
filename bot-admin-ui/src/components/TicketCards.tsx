@@ -121,8 +121,8 @@ export default function TicketCards({
                 <dd>{directionLabel(ticket.direction)}</dd>
               </div>
               <div>
-                <dt>Создан</dt>
-                <dd>{formatUnix(ticket.created_date)}</dd>
+                <dt>Обновлён</dt>
+                <dd>{formatUnix(ticket.last_update)}</dd>
               </div>
             </dl>
 

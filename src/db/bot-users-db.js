@@ -212,10 +212,18 @@ function ensureRegosLinkColumns(db) {
   if (!columnExists(db, 'bot_users', 'regos_full_name')) {
     db.exec('ALTER TABLE bot_users ADD COLUMN regos_full_name TEXT');
   }
+  if (!columnExists(db, 'bot_users', 'regos_client_id')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN regos_client_id INTEGER');
+  }
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_users_regos_user_id
     ON bot_users(regos_user_id)
     WHERE regos_user_id IS NOT NULL
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_bot_users_regos_client_id
+    ON bot_users(regos_client_id)
+    WHERE regos_client_id IS NOT NULL
   `);
 }
 
@@ -345,6 +353,7 @@ function migrateBotUsersSchema(db) {
         regos_user_id INTEGER,
         regos_login TEXT,
         regos_full_name TEXT,
+        regos_client_id INTEGER,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         linked_at TEXT
       );
@@ -765,6 +774,24 @@ function setBotUserRegosLink(db, userId, { regosUserId, regosLogin = null, regos
   return getEmployeeWithRights(db, userId) || getBotUserById(db, userId);
 }
 
+function setBotUserRegosClientId(db, userId, regosClientId) {
+  ensureRegosLinkColumns(db);
+  const user = getBotUserById(db, userId);
+  if (!user) {
+    throw new Error('NOT_FOUND');
+  }
+  if (regosClientId == null || regosClientId === '') {
+    db.prepare('UPDATE bot_users SET regos_client_id = NULL WHERE id = ?').run(userId);
+    return getBotUserById(db, userId);
+  }
+  const id = Number(regosClientId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error('INVALID_REGOS_CLIENT');
+  }
+  db.prepare('UPDATE bot_users SET regos_client_id = ? WHERE id = ?').run(id, userId);
+  return getBotUserById(db, userId);
+}
+
 function getEmployeeWithRights(db, userId) {
   const user = getBotUserById(db, userId);
   if (!user) return null;
@@ -1012,6 +1039,7 @@ module.exports = {
   findBotUserByRegosUserId,
   setBotUserRegosLink,
   clearBotUserRegosLink,
+  setBotUserRegosClientId,
   normalizePhoneKey,
   phonesMatch,
   getBotUsersByPhone,

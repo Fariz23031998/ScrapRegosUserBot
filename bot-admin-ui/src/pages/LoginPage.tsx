@@ -6,7 +6,7 @@ import { useAuth } from "../hooks/useAuth";
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { isAuthenticated, isLoading, refreshSession, firstAllowedPath } = useAuth();
+  const { isAuthenticated, isLoading, refreshSession, firstAllowedPath, webAppDenied } = useAuth();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -37,6 +37,17 @@ export default function LoginPage() {
 
   if (isLoading) return null;
   if (isAuthenticated) return <Navigate to={landingPath} replace />;
+
+  if (webAppDenied) {
+    return (
+      <div className="login-page">
+        <main className="page login-card">
+          <h1>Вход в Bot Admin</h1>
+          <p className="message error">{webAppDenied}</p>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="login-page">

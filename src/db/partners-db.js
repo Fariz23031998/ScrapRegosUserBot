@@ -175,6 +175,8 @@ function migrateSchema(db) {
   ensureTicketAiStateTable(db);
   const { ensureAiCustomerUsageTable } = require('./ai-customer-usage');
   ensureAiCustomerUsageTable(db);
+  const { ensureCustomerMessageClaimsTable } = require('./customer-message-claims');
+  ensureCustomerMessageClaimsTable(db);
 }
 
 const {

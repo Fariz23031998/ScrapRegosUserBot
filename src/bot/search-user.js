@@ -129,7 +129,7 @@ function formatWithExpiry(formatted, dateValue) {
 
 function formatPartner(partner, account = null) {
   const lines = [
-    `🏢 ${bold('Regos')}`,
+    `🏢 ${bold('ROFEEV')}`,
     field('🆔', 'ID', partner.id),
     field('👤', 'Имя', partner.name),
     field('📋', 'Правовой статус', partner.legal_status || '-'),

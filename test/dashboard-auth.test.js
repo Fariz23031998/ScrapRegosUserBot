@@ -16,13 +16,27 @@ const { hasRight } = require('../src/db/user-rights');
 const {
   createDashboardLoginToken,
   consumeDashboardLoginToken,
+  lookupDashboardLoginToken,
+  hasActiveDashboardSession,
+  invalidateDashboardLoginTokensForTelegramId,
+  cleanupDashboardLoginTokens,
   hashToken,
   TOKEN_TTL_MS,
 } = require('../src/admin/dashboard-login-tokens');
 const { createBotAdminRouter } = require('../src/admin/bot-admin');
 const { buildCommandsForTelegramUser } = require('../src/bot/bot-commands');
-const { checkDashboardAccess, buildDashboardLoginUrl } = require('../src/bot/dashboard-bot');
-const { buildSessionCookieAttributes } = require('../src/admin/bot-admin-auth');
+const { checkDashboardAccess, buildDashboardLoginUrl, buildDashboardWebAppUrl } = require('../src/bot/dashboard-bot');
+const {
+  buildSessionCookieAttributes,
+  createSessionToken,
+  parseSessionToken,
+  SESSION_COOKIE,
+} = require('../src/admin/bot-admin-auth');
+const {
+  parseTelegramWebAppInitData,
+  signTelegramWebAppInitData,
+  WEBAPP_AUTH_MAX_AGE_SEC,
+} = require('../src/admin/telegram-webapp-auth');
 
 function makeTempDbPath() {
   return path.join(
@@ -42,16 +56,49 @@ function removeDbFiles(dbPath) {
   }
 }
 
-function request(server, method, urlPath, { headers = {} } = {}) {
+function cookieFromSetCookie(headerValue) {
+  const raw = headerValue;
+  const list = Array.isArray(raw) ? raw : String(raw || '').split(/,(?=\s*[^;=]+=)/);
+  const match = list
+    .map((part) => String(part).trim())
+    .find((part) => part.startsWith(`${SESSION_COOKIE}=`));
+  return match ? match.split(';')[0] : null;
+}
+
+function sessionActorFromSetCookie(headerValue) {
+  const cookieHeader = cookieFromSetCookie(headerValue);
+  if (!cookieHeader) return null;
+  const token = decodeURIComponent(cookieHeader.slice(`${SESSION_COOKIE}=`.length));
+  return parseSessionToken(process.env.BOT_ADMIN_PASSWORD, token);
+}
+
+function telegramCookieHeader(telegramId) {
+  const token = createSessionToken(process.env.BOT_ADMIN_PASSWORD, {
+    type: 'telegram',
+    telegramId,
+  });
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}`;
+}
+
+function request(server, method, urlPath, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const { port } = server.address();
+    const payload =
+      body == null ? null : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+    const reqHeaders = { ...headers };
+    if (payload) {
+      if (!reqHeaders['Content-Type'] && !reqHeaders['content-type']) {
+        reqHeaders['Content-Type'] = 'application/json';
+      }
+      reqHeaders['Content-Length'] = String(payload.length);
+    }
     const req = http.request(
       {
         hostname: '127.0.0.1',
         port,
         path: urlPath,
         method,
-        headers,
+        headers: reqHeaders,
       },
       (res) => {
         const chunks = [];
@@ -66,7 +113,7 @@ function request(server, method, urlPath, { headers = {} } = {}) {
       }
     );
     req.on('error', reject);
-    req.end();
+    req.end(payload);
   });
 }
 
@@ -80,10 +127,12 @@ describe('Telegram dashboard authentication', () => {
       BOT_ADMIN_LOGIN: process.env.BOT_ADMIN_LOGIN,
       BOT_ADMIN_PASSWORD: process.env.BOT_ADMIN_PASSWORD,
       PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL,
+      TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
     };
     process.env.BOT_ADMIN_LOGIN = 'admin';
     process.env.BOT_ADMIN_PASSWORD = 'test-password';
     process.env.PUBLIC_BASE_URL = 'https://example.test';
+    process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token';
   });
 
   after(() => {
@@ -164,12 +213,29 @@ describe('Telegram dashboard authentication', () => {
     assert.equal(stored.telegram_id, telegramId);
     assert.equal(stored.used_at, null);
 
+    const lookedUp = lookupDashboardLoginToken(db, rawToken);
+    assert.equal(lookedUp.telegramId, telegramId);
+    assert.equal(lookedUp.usedAt, null);
+    assert.equal(hasActiveDashboardSession(db, telegramId), false);
+
     const first = consumeDashboardLoginToken(db, rawToken);
     assert.deepEqual(first, { telegramId });
     assert.equal(consumeDashboardLoginToken(db, rawToken), null);
+    assert.equal(hasActiveDashboardSession(db, telegramId), true);
+
+    const usedLookup = lookupDashboardLoginToken(db, rawToken);
+    assert.ok(usedLookup.usedAt);
+
+    cleanupDashboardLoginTokens(db);
+    assert.ok(
+      db
+        .prepare('SELECT token_hash FROM dashboard_login_tokens WHERE token_hash = ?')
+        .get(hashToken(rawToken))
+    );
 
     const expired = createDashboardLoginToken(db, telegramId, { ttlMs: -1000 });
     assert.equal(consumeDashboardLoginToken(db, expired.rawToken), null);
+    assert.equal(lookupDashboardLoginToken(db, expired.rawToken), null);
   });
 
   it('denies access when the dashboard right is missing', () => {
@@ -184,7 +250,7 @@ describe('Telegram dashboard authentication', () => {
     assert.match(access.message, /Доступ запрещён/);
   });
 
-  it('exchanges a valid Telegram token for an admin session cookie', async () => {
+  it('exchanges a valid Telegram token for an admin session cookie and reuses it', async () => {
     const telegramId = 444;
     createLinkedEmployeeWithDashboardRight(telegramId);
     const { rawToken } = createDashboardLoginToken(db, telegramId);
@@ -201,24 +267,79 @@ describe('Telegram dashboard authentication', () => {
     });
 
     try {
-      const ok = await request(
-        server,
-        'GET',
-        `/bot-admin/auth/telegram?token=${encodeURIComponent(rawToken)}`
-      );
+      const authPath = `/bot-admin/auth/telegram?token=${encodeURIComponent(rawToken)}`;
+      const ok = await request(server, 'GET', authPath);
       assert.equal(ok.statusCode, 302);
       assert.equal(ok.headers.location, '/bot-admin/');
       const setCookie = String(ok.headers['set-cookie'] || '');
       assert.match(setCookie, /bot_admin_session=/);
       assert.match(setCookie, /HttpOnly/i);
       assert.match(setCookie, /Secure/i);
+      assert.deepEqual(sessionActorFromSetCookie(ok.headers['set-cookie']), {
+        type: 'telegram',
+        telegramId,
+      });
+      const firstCookie = cookieFromSetCookie(ok.headers['set-cookie']);
 
-      const reuse = await request(
+      const reuseWithoutCookie = await request(server, 'GET', authPath);
+      assert.equal(reuseWithoutCookie.statusCode, 302);
+      assert.equal(reuseWithoutCookie.headers.location, '/bot-admin/');
+      assert.deepEqual(sessionActorFromSetCookie(reuseWithoutCookie.headers['set-cookie']), {
+        type: 'telegram',
+        telegramId,
+      });
+
+      const reuseWithCookie = await request(server, 'GET', authPath, {
+        headers: { Cookie: firstCookie },
+      });
+      assert.equal(reuseWithCookie.statusCode, 302);
+      assert.deepEqual(sessionActorFromSetCookie(reuseWithCookie.headers['set-cookie']), {
+        type: 'telegram',
+        telegramId,
+      });
+
+      invalidateDashboardLoginTokensForTelegramId(db, telegramId);
+      const expiredUnused = createDashboardLoginToken(db, telegramId, { ttlMs: -1000 }).rawToken;
+      const expired = await request(
         server,
         'GET',
-        `/bot-admin/auth/telegram?token=${encodeURIComponent(rawToken)}`
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(expiredUnused)}`
       );
-      assert.equal(reuse.statusCode, 401);
+      assert.equal(expired.statusCode, 401);
+
+      const staleToken = createDashboardLoginToken(db, telegramId).rawToken;
+      const staleAuth = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(staleToken)}`
+      );
+      assert.equal(staleAuth.statusCode, 302);
+      db.prepare(
+        `UPDATE dashboard_login_tokens
+         SET used_at = datetime('now', '-13 hours')
+         WHERE token_hash = ?`
+      ).run(hashToken(staleToken));
+      const staleReuse = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(staleToken)}`
+      );
+      assert.equal(staleReuse.statusCode, 401);
+
+      const otherId = 445;
+      createLinkedEmployeeWithDashboardRight(otherId);
+      const otherToken = createDashboardLoginToken(db, otherId).rawToken;
+      const switched = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(otherToken)}`,
+        { headers: { Cookie: telegramCookieHeader(telegramId) } }
+      );
+      assert.equal(switched.statusCode, 302);
+      assert.deepEqual(sessionActorFromSetCookie(switched.headers['set-cookie']), {
+        type: 'telegram',
+        telegramId: otherId,
+      });
 
       const revokedUser = createEmployeeUser(db, {
         phone: '+998909998877',
@@ -234,6 +355,44 @@ describe('Telegram dashboard authentication', () => {
         `/bot-admin/auth/telegram?token=${encodeURIComponent(revokedToken)}`
       );
       assert.equal(revoked.statusCode, 403);
+
+      const reuseRevokeId = 667;
+      const reuseRevokeUser = createLinkedEmployeeWithDashboardRight(reuseRevokeId);
+      const reuseRevokeToken = createDashboardLoginToken(db, reuseRevokeId).rawToken;
+      const reuseRevokeAuth = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(reuseRevokeToken)}`
+      );
+      assert.equal(reuseRevokeAuth.statusCode, 302);
+      upsertUserRights(db, reuseRevokeUser.id, { open_admin_dashboard: 0 });
+      const reuseRevoked = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(reuseRevokeToken)}`
+      );
+      assert.equal(reuseRevoked.statusCode, 403);
+
+      const logoutId = 668;
+      createLinkedEmployeeWithDashboardRight(logoutId);
+      const logoutToken = createDashboardLoginToken(db, logoutId).rawToken;
+      const logoutAuth = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(logoutToken)}`
+      );
+      assert.equal(logoutAuth.statusCode, 302);
+      const logoutCookie = cookieFromSetCookie(logoutAuth.headers['set-cookie']);
+      const logoutRes = await request(server, 'POST', '/bot-admin/api/logout', {
+        headers: { Cookie: logoutCookie, Accept: 'application/json' },
+      });
+      assert.equal(logoutRes.statusCode, 200);
+      const afterLogout = await request(
+        server,
+        'GET',
+        `/bot-admin/auth/telegram?token=${encodeURIComponent(logoutToken)}`
+      );
+      assert.equal(afterLogout.statusCode, 401);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
@@ -245,6 +404,111 @@ describe('Telegram dashboard authentication', () => {
     assert.match(attrs, /HttpOnly/);
     assert.match(attrs, /SameSite=Lax/);
     assert.ok(TOKEN_TTL_MS > 0);
+    assert.equal(buildDashboardWebAppUrl(), 'https://example.test/bot-admin/');
+    assert.ok(WEBAPP_AUTH_MAX_AGE_SEC > 0);
+  });
+
+  it('validates Telegram Mini App initData HMAC and rejects stale or forged payloads', () => {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const telegramId = 777001;
+    const nowSec = 1_700_000_000;
+    const initData = signTelegramWebAppInitData(
+      {
+        auth_date: String(nowSec),
+        query_id: 'AAE',
+        user: JSON.stringify({ id: telegramId, first_name: 'Dash' }),
+      },
+      botToken
+    );
+
+    assert.deepEqual(parseTelegramWebAppInitData(initData, botToken, { nowSec }), { telegramId });
+
+    const tampered = new URLSearchParams(initData);
+    tampered.set('hash', '0'.repeat(64));
+    assert.equal(parseTelegramWebAppInitData(tampered.toString(), botToken, { nowSec }), null);
+
+    const stale = signTelegramWebAppInitData(
+      {
+        auth_date: String(nowSec - WEBAPP_AUTH_MAX_AGE_SEC - 1),
+        user: JSON.stringify({ id: telegramId, first_name: 'Dash' }),
+      },
+      botToken
+    );
+    assert.equal(parseTelegramWebAppInitData(stale, botToken, { nowSec }), null);
+  });
+
+  it('exchanges Telegram Mini App initData for an admin session cookie', async () => {
+    const telegramId = 777002;
+    createLinkedEmployeeWithDashboardRight(telegramId);
+    const initData = signTelegramWebAppInitData(
+      {
+        auth_date: String(Math.floor(Date.now() / 1000)),
+        user: JSON.stringify({ id: telegramId, first_name: 'Mini' }),
+      },
+      process.env.TELEGRAM_BOT_TOKEN
+    );
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const ok = await request(server, 'POST', '/bot-admin/api/auth/telegram-webapp', {
+        body: { initData },
+      });
+      assert.equal(ok.statusCode, 200);
+      assert.equal(JSON.parse(ok.body).ok, true);
+      assert.deepEqual(sessionActorFromSetCookie(ok.headers['set-cookie']), {
+        type: 'telegram',
+        telegramId,
+      });
+      const cookie = cookieFromSetCookie(ok.headers['set-cookie']);
+
+      const session = await request(server, 'GET', '/bot-admin/api/session', {
+        headers: { Cookie: cookie },
+      });
+      assert.equal(session.statusCode, 200);
+      assert.equal(JSON.parse(session.body).actor.telegramId, telegramId);
+
+      const reuse = await request(server, 'POST', '/bot-admin/api/auth/telegram-webapp', {
+        headers: { Cookie: cookie },
+        body: { initData },
+      });
+      assert.equal(reuse.statusCode, 200);
+      assert.deepEqual(sessionActorFromSetCookie(reuse.headers['set-cookie']), {
+        type: 'telegram',
+        telegramId,
+      });
+
+      const tamperedParams = new URLSearchParams(initData);
+      tamperedParams.set('hash', '0'.repeat(64));
+      const badHash = await request(server, 'POST', '/bot-admin/api/auth/telegram-webapp', {
+        body: { initData: tamperedParams.toString() },
+      });
+      assert.equal(badHash.statusCode, 401);
+
+      const deniedUser = createEmployeeUser(db, {
+        phone: '+998907770003',
+        displayName: 'No Mini',
+        rights: { open_admin_dashboard: 0 },
+      });
+      linkEmployeeTelegram(db, deniedUser.id, 777003, {});
+      const deniedInit = signTelegramWebAppInitData(
+        {
+          auth_date: String(Math.floor(Date.now() / 1000)),
+          user: JSON.stringify({ id: 777003, first_name: 'NoMini' }),
+        },
+        process.env.TELEGRAM_BOT_TOKEN
+      );
+      const denied = await request(server, 'POST', '/bot-admin/api/auth/telegram-webapp', {
+        body: { initData: deniedInit },
+      });
+      assert.equal(denied.statusCode, 403);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('allows employees to log in with per-user credentials and scopes rights', async () => {

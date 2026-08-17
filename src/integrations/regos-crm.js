@@ -96,7 +96,12 @@ async function postRegos(endpoint, request) {
   };
 }
 
-/** For Regos mutators that return an object result (e.g. `{ new_id }`). */
+function parseRegosCreatedId(result) {
+  if (!result || typeof result !== 'object') return null;
+  const raw = result.new_id ?? result.id ?? result.message_id;
+  if (raw == null || raw === '') return null;
+  return String(raw);
+}
 async function postRegosMutation(endpoint, request) {
   const data = await postRegosRaw(endpoint, request);
 
@@ -477,7 +482,7 @@ async function addTicketMessage({
     const data = await postRegosMutation('ChatMessage/Add', request);
     return {
       ok: true,
-      id: data.result.new_id != null ? String(data.result.new_id) : null,
+      id: parseRegosCreatedId(data.result),
       result: data.result,
     };
   } catch (error) {
@@ -694,6 +699,68 @@ async function editClient(clientId, changes = {}) {
 
   const data = await postRegosMutation('Client/Edit', request);
   return { changed: true, result: data.result };
+}
+
+/**
+ * Create a REGOS CRM client (Client/Add).
+ * Returns { id, result }. Throws RegosCrmError when the API rejects the call.
+ */
+async function createClient(input = {}) {
+  const request = {};
+  const name = normalizeOptionalClientString(input.name, { max: 200, field: 'name' });
+  const phone = normalizeOptionalClientString(input.phone, { max: 50, field: 'phone' });
+  const email = normalizeOptionalClientString(input.email, { max: 150, field: 'email' });
+  const description = normalizeOptionalClientString(input.description, {
+    max: 4000,
+    field: 'description',
+  });
+  const externalId = normalizeOptionalClientString(input.external_id, {
+    max: 150,
+    field: 'external_id',
+  });
+  if (name !== undefined) request.name = name;
+  if (phone !== undefined) request.phone = phone;
+  if (email !== undefined) request.email = email;
+  if (description !== undefined) request.description = description;
+  if (externalId !== undefined) request.external_id = externalId;
+
+  if (!request.name && !request.phone) {
+    throw new RegosCrmError('Для создания клиента укажите имя или телефон.', {
+      code: 'BAD_REQUEST',
+      status: 400,
+    });
+  }
+
+  const data = await postRegosMutation('Client/Add', request);
+  const id = Number(data.result?.new_id ?? data.result?.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new RegosCrmError('REGOS не вернул идентификатор созданного клиента.', {
+      code: 'BAD_RESPONSE',
+      status: 502,
+    });
+  }
+  return { id, result: data.result };
+}
+
+/**
+ * Find a unique REGOS client by phone using Client/Get search + phonesEqual.
+ * Returns { status: 'matched'|'none'|'ambiguous', client, candidates }.
+ */
+async function findClientByPhone(phone, { limit = 20 } = {}) {
+  const query = String(phone || '').trim();
+  if (!query) {
+    return { status: 'none', client: null, candidates: [] };
+  }
+  const candidates = (await searchClients(query, { limit })).filter((client) =>
+    phonesEqual(client?.phone, query)
+  );
+  if (candidates.length === 1) {
+    return { status: 'matched', client: candidates[0], candidates };
+  }
+  if (candidates.length === 0) {
+    return { status: 'none', client: null, candidates: [] };
+  }
+  return { status: 'ambiguous', client: null, candidates };
 }
 
 function requirePositiveId(value, field) {
@@ -957,8 +1024,10 @@ function dedupeTickets(tickets, windowMinutes = DEFAULT_DUPLICATE_INTERVAL_MINUT
   }
 
   kept.sort((a, b) => {
-    if (a.created_date !== b.created_date) {
-      return b.created_date - a.created_date;
+    const updateA = Number(a.last_update || a.created_date) || 0;
+    const updateB = Number(b.last_update || b.created_date) || 0;
+    if (updateA !== updateB) {
+      return updateB - updateA;
     }
     return b.id - a.id;
   });
@@ -982,11 +1051,22 @@ function summarizeTickets(tickets) {
   };
 }
 
+const TICKET_STATUSES = ['Open', 'Closed', 'WaitingClient', 'WaitingStaff'];
+
+function parseTicketStatuses(status) {
+  const raw = Array.isArray(status) ? status : String(status || '').split(',');
+  const allowed = new Set(TICKET_STATUSES);
+  return [...new Set(raw.map((item) => String(item || '').trim()).filter((item) => allowed.has(item)))];
+}
+
 function buildTicketFilters({ status, fromDate, toDate, responsibleUserId, channelId } = {}) {
   const filters = [];
+  const statuses = parseTicketStatuses(status);
 
-  if (status) {
-    filters.push({ Field: 'status', Operator: 'equal', Value: String(status) });
+  if (statuses.length === 1) {
+    filters.push({ Field: 'status', Operator: 'equal', Value: statuses[0] });
+  } else if (statuses.length > 1) {
+    filters.push({ Field: 'status', Operator: 'in', Value: statuses.join(',') });
   }
   if (fromDate != null && fromDate !== '') {
     filters.push({ Field: 'from_date', Operator: 'equal', Value: String(fromDate) });
@@ -1111,6 +1191,7 @@ module.exports = {
   RegosCrmError,
   DEFAULT_DUPLICATE_INTERVAL_MINUTES,
   DEFAULT_CHAT_MESSAGE_LIMIT,
+  parseRegosCreatedId,
   postTicketGet,
   postUserGet,
   postChannelGet,
@@ -1136,6 +1217,9 @@ module.exports = {
   searchClients,
   getClientById,
   editClient,
+  createClient,
+  findClientByPhone,
+  phonesEqual,
   createTicket,
   editTicket,
   setTicketStatus,

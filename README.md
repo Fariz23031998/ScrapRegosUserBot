@@ -67,7 +67,7 @@ TELEGRAM_BOT_USERNAME=@YourBot
 
 ### Other integrations (optional)
 
-- **Bot admin panel**: `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (enables `/bot-admin/`). Production UI is the React app in `bot-admin-ui/` — run `npm run bot-admin-ui:build` before (or after) deploying the server so `bot-admin-ui/dist` exists. Password login remains available. Employees with the `open_admin_dashboard` right can also use `/open_dashboard` in Telegram to receive a one-time HTTPS login link (about 5 minutes, single use) built from `PUBLIC_BASE_URL`. Configure technical-support prices and view subscription history under **Техподдержка**.
+- **Bot admin panel**: `BOT_ADMIN_LOGIN`, `BOT_ADMIN_PASSWORD` (enables `/bot-admin/`). Production UI is the React app in `bot-admin-ui/` — run `npm run bot-admin-ui:build` before (or after) deploying the server so `bot-admin-ui/dist` exists. Password login remains available. Employees with the `open_admin_dashboard` right can also use `/open_dashboard` in Telegram to receive an HTTPS login link built from `PUBLIC_BASE_URL` (first open within about 5 minutes; the same link can reopen the panel while the session is active). Configure technical-support prices and view subscription history under **Техподдержка**.
 - **CLICK payments (optional)**: `ENABLE_CLICK_PAYMENT=1` plus `CLICK_MERCHANT_ID`, `CLICK_SERVICE_ID`, `CLICK_MERCHANT_USER_ID`, `CLICK_SECRET_KEY` — see [docs/payme-integration.md](docs/payme-integration.md) and [docs/click-deploy-linux.md](docs/click-deploy-linux.md). With `ENABLE_CLICK_PAYMENT=0` (or blank keys) the bot and server run on Payme only: no CLICK button on the payment page, new orders use the `payme` provider, and `/click/prepare` / `/click/complete` reply with `error: -9`.
 - **Payment links**: `PUBLIC_BASE_URL`, `CLICK_SERVER_PORT` — `PUBLIC_BASE_URL` is required for payment pages, tech-support orders, Telegram dashboard login links, and the public `/prices` page opened by the bot `/prices` command.
 - **Payme receipts**: `PAYME_*`
@@ -92,7 +92,7 @@ npm run bot
 
 Starts the Telegram bot (long-polling). Users share their phone number to register; employees can then search by phone, license code, or API login. Each search queries the portals in real time.
 
-Employees with the `open_admin_dashboard` right see **Open Admin Dashboard** (`/open_dashboard`) in the command menu. The command issues a one-time login link for `/bot-admin/` tied to their Telegram ID (login/password remains a fallback).
+Employees with the `open_admin_dashboard` right see **Open Admin Dashboard** (`/open_dashboard`) in the command menu. The command issues a login link for `/bot-admin/` tied to their Telegram ID. The first open must happen within about 5 minutes; after that the same link can reopen the panel while the session is active (login/password remains a fallback).
 
 ### Technical support subscriptions
 

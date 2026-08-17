@@ -9,6 +9,24 @@ export const STATUS_LABELS: Record<string, string> = {
   WaitingStaff: "Ожидание сотрудника",
 };
 
+export const TICKET_STATUS_OPTIONS = [
+  { value: "Open", label: STATUS_LABELS.Open },
+  { value: "Closed", label: STATUS_LABELS.Closed },
+  { value: "WaitingClient", label: STATUS_LABELS.WaitingClient },
+  { value: "WaitingStaff", label: STATUS_LABELS.WaitingStaff },
+] as const;
+
+const ALLOWED_TICKET_STATUSES = new Set<string>(TICKET_STATUS_OPTIONS.map((option) => option.value));
+
+export function parseTicketStatuses(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+  return [...new Set(raw.map((item) => String(item || "").trim()).filter((item) => ALLOWED_TICKET_STATUSES.has(item)))];
+}
+
 export const DIRECTION_LABELS: Record<string, string> = {
   Inbound: "Входящий",
   Outbound: "Исходящий",

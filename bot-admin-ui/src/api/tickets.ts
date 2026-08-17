@@ -12,6 +12,7 @@ import type {
   TicketFirmLink,
   TicketAiPrompt,
   TicketChatSummary,
+  TelegramTicketSettings,
 } from "../lib/types";
 
 export function listTickets(params: Record<string, string>) {
@@ -176,4 +177,37 @@ export function ticketFileUrl(ticketId: number | string, fileId: number | string
 
 export function ticketEventsUrl() {
   return apiUrl("/bot-admin/api/tickets/events");
+}
+
+export function getTelegramTicketSettings() {
+  return apiFetch<{
+    settings: TelegramTicketSettings;
+    channels: Array<{ id: number; name?: string }>;
+    users: Array<{ id: number; full_name?: string | null; login?: string | null }>;
+  }>("/bot-admin/api/settings/telegram-tickets");
+}
+
+export function saveTelegramTicketSettings(payload: {
+  enabled: boolean;
+  channel_id?: number | null;
+  direction?: string;
+  responsible_user_id?: number | null;
+  participant_user_ids?: number[];
+  subject?: string;
+  fallback_client_id?: number | null;
+}) {
+  return apiFetch<{ ok: boolean; settings: TelegramTicketSettings }>(
+    "/bot-admin/api/settings/telegram-tickets",
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function searchTelegramTicketClients(query: string) {
+  const search = new URLSearchParams({ q: query });
+  return apiFetch<{
+    clients: Array<{ id: number; name?: string | null; phone?: string | null; email?: string | null }>;
+  }>(`/bot-admin/api/settings/telegram-tickets/clients?${search}`);
 }

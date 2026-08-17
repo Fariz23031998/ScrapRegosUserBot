@@ -1,7 +1,12 @@
 const crypto = require('crypto');
+const { SESSION_MAX_AGE_MS } = require('./bot-admin-auth');
 
 const TOKEN_TTL_MS = 5 * 60 * 1000;
 const TOKEN_BYTES = 32;
+
+function sessionMaxAgeSqlModifier() {
+  return `-${Math.floor(SESSION_MAX_AGE_MS / 1000)} seconds`;
+}
 
 function ensureDashboardLoginTokensTable(db) {
   db.exec(`
@@ -16,6 +21,9 @@ function ensureDashboardLoginTokensTable(db) {
   db.exec(
     'CREATE INDEX IF NOT EXISTS idx_dashboard_login_tokens_expires_at ON dashboard_login_tokens(expires_at)'
   );
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_dashboard_login_tokens_telegram_id ON dashboard_login_tokens(telegram_id)'
+  );
 }
 
 function hashToken(rawToken) {
@@ -24,11 +32,12 @@ function hashToken(rawToken) {
 
 function cleanupDashboardLoginTokens(db) {
   ensureDashboardLoginTokensTable(db);
+  const sessionCutoff = sessionMaxAgeSqlModifier();
   db.prepare(
     `DELETE FROM dashboard_login_tokens
-     WHERE used_at IS NOT NULL
-        OR datetime(expires_at) <= datetime('now')`
-  ).run();
+     WHERE (used_at IS NULL AND datetime(expires_at) <= datetime('now'))
+        OR (used_at IS NOT NULL AND datetime(used_at) <= datetime('now', ?))`
+  ).run(sessionCutoff);
 }
 
 function createDashboardLoginToken(db, telegramId, { ttlMs = TOKEN_TTL_MS } = {}) {
@@ -49,6 +58,67 @@ function createDashboardLoginToken(db, telegramId, { ttlMs = TOKEN_TTL_MS } = {}
   ).run(tokenHash, Number(telegramId), expiresAt);
 
   return { rawToken, expiresAt, ttlMs };
+}
+
+function mapTokenRow(row) {
+  if (!row) return null;
+  return {
+    telegramId: Number(row.telegram_id),
+    usedAt: row.used_at || null,
+    expiresAt: row.expires_at,
+  };
+}
+
+/**
+ * Look up a login token without consuming it.
+ * Returns null if the hash is unknown (including after cleanup).
+ */
+function lookupDashboardLoginToken(db, rawToken) {
+  const token = String(rawToken || '').trim();
+  if (!token) return null;
+
+  ensureDashboardLoginTokensTable(db);
+  cleanupDashboardLoginTokens(db);
+
+  const row = db
+    .prepare(
+      `SELECT telegram_id, expires_at, used_at
+       FROM dashboard_login_tokens
+       WHERE token_hash = ?`
+    )
+    .get(hashToken(token));
+
+  return mapTokenRow(row);
+}
+
+function hasActiveDashboardSession(db, telegramId) {
+  const id = Number(telegramId);
+  if (!Number.isFinite(id)) return false;
+
+  ensureDashboardLoginTokensTable(db);
+  const row = db
+    .prepare(
+      `SELECT 1 AS ok
+       FROM dashboard_login_tokens
+       WHERE telegram_id = ?
+         AND used_at IS NOT NULL
+         AND datetime(used_at) > datetime('now', ?)
+       LIMIT 1`
+    )
+    .get(id, sessionMaxAgeSqlModifier());
+
+  return Boolean(row);
+}
+
+function invalidateDashboardLoginTokensForTelegramId(db, telegramId) {
+  const id = Number(telegramId);
+  if (!Number.isFinite(id)) return 0;
+
+  ensureDashboardLoginTokensTable(db);
+  const result = db
+    .prepare('DELETE FROM dashboard_login_tokens WHERE telegram_id = ?')
+    .run(id);
+  return result.changes;
 }
 
 /**
@@ -105,6 +175,9 @@ module.exports = {
   TOKEN_TTL_MS,
   ensureDashboardLoginTokensTable,
   createDashboardLoginToken,
+  lookupDashboardLoginToken,
+  hasActiveDashboardSession,
+  invalidateDashboardLoginTokensForTelegramId,
   consumeDashboardLoginToken,
   cleanupDashboardLoginTokens,
   hashToken,

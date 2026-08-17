@@ -11,12 +11,18 @@ const { sendChatActionSafe } = require('./telegram-safe');
 const ACCESS_DENIED = 'Доступ запрещён. Нет права на открытие админ-панели.';
 const NOT_CONFIGURED =
   'Админ-панель не настроена. Задайте BOT_ADMIN_LOGIN, BOT_ADMIN_PASSWORD и PUBLIC_BASE_URL.';
-const LINK_SENT = 'Ссылка для входа в админ-панель (одноразовая, действует несколько минут):';
+const LINK_SENT = 'Ссылка для входа в админ-панель:';
+
+function buildDashboardWebAppUrl() {
+  const base = getPublicBaseUrl();
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/bot-admin/`;
+}
 
 function buildDashboardLoginUrl(rawToken) {
   const base = getPublicBaseUrl();
   if (!base || !rawToken) return null;
-  return `${base}/bot-admin/auth/telegram?token=${encodeURIComponent(rawToken)}`;
+  return `${base.replace(/\/+$/, '')}/bot-admin/auth/telegram?token=${encodeURIComponent(rawToken)}`;
 }
 
 function checkDashboardAccess(db, botUser) {
@@ -56,7 +62,8 @@ function registerDashboardHandlers(bot, { db, getBotUser, sendRegisterPrompt }) 
       await sendChatActionSafe(bot, msg.chat.id);
       const { rawToken } = createDashboardLoginToken(db, telegramId);
       const url = buildDashboardLoginUrl(rawToken);
-      if (!url) {
+      const webAppUrl = buildDashboardWebAppUrl();
+      if (!url || !webAppUrl) {
         await bot.sendMessage(msg.chat.id, NOT_CONFIGURED);
         return;
       }
@@ -64,10 +71,13 @@ function registerDashboardHandlers(bot, { db, getBotUser, sendRegisterPrompt }) 
       const ttlMinutes = Math.max(1, Math.round(TOKEN_TTL_MS / 60000));
       await bot.sendMessage(
         msg.chat.id,
-        `${LINK_SENT}\nДействует ${ttlMinutes} мин.`,
+        `${LINK_SENT}\nMini App открывается без одноразовой ссылки. Браузерная ссылка: первое открытие — в течение ${ttlMinutes} мин; пока сессия активна, той же ссылкой можно снова открыть панель.`,
         {
           reply_markup: {
-            inline_keyboard: [[{ text: 'Open Admin Dashboard', url }]],
+            inline_keyboard: [
+              [{ text: 'Open in Telegram', web_app: { url: webAppUrl } }],
+              [{ text: 'Open Admin Dashboard', url }],
+            ],
           },
         }
       );
@@ -82,6 +92,7 @@ module.exports = {
   registerDashboardHandlers,
   checkDashboardAccess,
   buildDashboardLoginUrl,
+  buildDashboardWebAppUrl,
   ACCESS_DENIED,
   NOT_CONFIGURED,
 };

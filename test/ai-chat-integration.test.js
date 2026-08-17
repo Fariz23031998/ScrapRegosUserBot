@@ -70,6 +70,7 @@ const {
   handleCustomerChatMessage,
   previewCustomerAgentPrompt,
   resetCustomerAgentLocks,
+  pickTriggerMessage,
 } = require('../src/ai/customer-agent');
 const { runKbAgent } = require('../src/ai/kb-agent');
 const {
@@ -87,6 +88,7 @@ const {
   runTicketAssistAgent,
   resetTicketAssistLocks,
 } = require('../src/ai/customer-assist-agent');
+const { upsertTelegramTicketSession } = require('../src/db/telegram-ticket-sessions');
 const { createRegosTicketWebhookHandler } = require('../src/integrations/regos-ticket-webhook');
 const { upsertTicketSummary } = require('../src/db/ticket-summaries');
 const { setTicketAiStopped, getCustomerReplyCount, isTicketAiStopped, incrementCustomerReplyCount } = require('../src/db/ticket-ai-state');
@@ -917,6 +919,45 @@ describe('customer agent handler', () => {
     assert.deepEqual(participants, [{ ticketId: 42, userId: aiAuthorId }]);
   });
 
+  it('forceHandle still respects test mode for non-employee clients', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: true, model: 'gpt-4o-mini' });
+    const sent = [];
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      forceHandle: true,
+      payload: {
+        id: '9',
+        text: 'Сколько стоит?',
+        author_entity_type: 'Client',
+        message_type: 'Regular',
+      },
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998909999999' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            { id: '9', author_entity_type: 'Client', message_type: 'Regular', text: 'Сколько стоит?' },
+          ],
+        }),
+        addTicketMessage: async (payload) => {
+          sent.push(payload);
+          return { ok: true, id: '10' };
+        },
+        runAgent: async () => ({ content: 'should not run', steps: 1 }),
+      }),
+    });
+    assert.equal(result.handled, false);
+    assert.equal(result.reason, 'test-mode');
+    assert.equal(sent.length, 0);
+  });
+
   it('closes the ticket only after the reply is posted', async () => {
     const database = createDb();
     saveAiSettings(database, { enabled: true, testMode: false, model: 'gpt-4o-mini' });
@@ -1602,6 +1643,220 @@ describe('customer agent handler', () => {
     assert.equal(sent.length, 1);
   });
 
+  it('skips a second process after in-memory locks are cleared', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false });
+    const sent = [];
+    let runs = 0;
+    const deps = withWriteDeps({
+      findTicketByChatId: async () => ({
+        id: 42,
+        status: 'Open',
+        client: { phone: '+998901112233' },
+      }),
+      getTicketMessages: async () => ({
+        total: 1,
+        result: [{ id: '9', author_entity_type: 'Client', message_type: 'Regular', text: 'Привет' }],
+      }),
+      addTicketMessage: async (payload) => {
+        sent.push(payload);
+        return { ok: true };
+      },
+      runAgent: async () => {
+        runs += 1;
+        return { content: 'Ответ', steps: 1 };
+      },
+      provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+    });
+    const first = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps,
+    });
+    resetCustomerAgentLocks();
+    const second = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps,
+    });
+    assert.equal(first.handled, true);
+    assert.equal(second.handled, false);
+    assert.equal(second.reason, 'already-processed');
+    assert.equal(sent.length, 1);
+    assert.equal(runs, 1);
+  });
+
+  it('resolves a voice payload without id to the REGOS message with the same file', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false });
+    const sent = [];
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: null,
+      payload: {
+        author_entity_type: 'Client',
+        message_type: 'Regular',
+        file_ids: [1841],
+      },
+      forceHandle: true,
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            {
+              id: 'voice-1',
+              author_entity_type: 'Client',
+              message_type: 'Regular',
+              file_ids: [1841],
+            },
+          ],
+        }),
+        getChatFilesByIds: async () => [
+          { id: 1841, name: 'voice.ogg', extension: 'ogg', mime_type: 'audio/ogg' },
+        ],
+        transcribeChatAudio: async () => ({ text: 'салом' }),
+        addTicketMessage: async (payload) => {
+          sent.push(payload);
+          return { ok: true };
+        },
+        runAgent: async () => ({ content: 'Жавоб', steps: 1 }),
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      }),
+    });
+    assert.equal(result.handled, true);
+    assert.equal(sent.length, 1);
+
+    resetCustomerAgentLocks();
+    const second = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: 'voice-1',
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            {
+              id: 'voice-1',
+              author_entity_type: 'Client',
+              message_type: 'Regular',
+              file_ids: [1841],
+            },
+          ],
+        }),
+        getChatFilesByIds: async () => [],
+        addTicketMessage: async (payload) => {
+          sent.push(payload);
+          return { ok: true };
+        },
+        runAgent: async () => ({ content: 'Иккинчи жавоб', steps: 1 }),
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      }),
+    });
+    assert.equal(second.handled, false);
+    assert.equal(second.reason, 'already-processed');
+    assert.equal(sent.length, 1);
+  });
+
+  it('retries after a failed send because the claim is released', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false });
+    const sent = [];
+    let shouldFail = true;
+    let runs = 0;
+    const deps = withWriteDeps({
+      findTicketByChatId: async () => ({
+        id: 42,
+        status: 'Open',
+        client: { phone: '+998901112233' },
+      }),
+      getTicketMessages: async () => ({
+        total: 1,
+        result: [{ id: '9', author_entity_type: 'Client', message_type: 'Regular', text: 'Привет' }],
+      }),
+      addTicketMessage: async (payload) => {
+        if (shouldFail) {
+          shouldFail = false;
+          throw new Error('send failed');
+        }
+        sent.push(payload);
+        return { ok: true };
+      },
+      runAgent: async () => {
+        runs += 1;
+        return { content: 'Ответ', steps: 1 };
+      },
+      provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+    });
+    const failed = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps,
+    });
+    resetCustomerAgentLocks();
+    const retry = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps,
+    });
+    assert.equal(failed.handled, false);
+    assert.equal(failed.reason, 'send-failed');
+    assert.equal(retry.handled, true);
+    assert.equal(sent.length, 1);
+    assert.equal(runs, 2);
+  });
+
+  it('sends the REGOS reply to the linked Telegram session', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false });
+    upsertTelegramTicketSession(database, {
+      telegramId: 9001,
+      ticketId: 42,
+      chatId: 'chat-42',
+      clientId: 7,
+    });
+    const telegram = [];
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [{ id: '9', author_entity_type: 'Client', message_type: 'Regular', text: 'Привет' }],
+        }),
+        addTicketMessage: async () => ({ ok: true }),
+        sendTelegramCustomerReply: async (telegramId, text) => {
+          telegram.push({ telegramId, text });
+        },
+        runAgent: async () => ({ content: 'Ответ в Telegram', steps: 1 }),
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      }),
+    });
+    assert.equal(result.handled, true);
+    assert.equal(result.telegram_sent, true);
+    assert.deepEqual(telegram, [{ telegramId: 9001, text: 'Ответ в Telegram' }]);
+  });
+
   it('skips a client message that already has an AI reply after it', async () => {
     const database = createDb();
     saveAiSettings(database, { enabled: true, testMode: false });
@@ -1972,6 +2227,34 @@ describe('customer agent handler', () => {
     assert.match(history[1].content, /\[изображение: shot\.png #101\]/);
     assert.match(history[1].content, /Описание: скрин ошибки/);
     assert.match(history[2].content, /ещё вопрос/);
+  });
+});
+
+describe('customer message claims', () => {
+  const {
+    claimCustomerMessage,
+    isCustomerMessageClaimed,
+    releaseCustomerMessageClaim,
+    claimCustomerChat,
+    releaseCustomerChat,
+  } = require('../src/db/customer-message-claims');
+
+  it('lets only the first claim win and can be released', () => {
+    const database = createDb();
+    assert.equal(claimCustomerMessage(database, 'chat-1', '9'), true);
+    assert.equal(claimCustomerMessage(database, 'chat-1', '9'), false);
+    assert.equal(isCustomerMessageClaimed(database, 'chat-1', '9'), true);
+    assert.equal(releaseCustomerMessageClaim(database, 'chat-1', '9'), true);
+    assert.equal(isCustomerMessageClaimed(database, 'chat-1', '9'), false);
+    assert.equal(claimCustomerMessage(database, 'chat-1', '9'), true);
+  });
+
+  it('lets only one process lock a chat at a time', () => {
+    const database = createDb();
+    assert.equal(claimCustomerChat(database, 'chat-1'), true);
+    assert.equal(claimCustomerChat(database, 'chat-1'), false);
+    assert.equal(releaseCustomerChat(database, 'chat-1'), true);
+    assert.equal(claimCustomerChat(database, 'chat-1'), true);
   });
 });
 

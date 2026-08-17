@@ -88,7 +88,7 @@ function formatTariffInfoMessage(overview, calc, { apiLogin = null } = {}) {
 
   lines.push('');
   if (calc?.ok) {
-    lines.push(field('🧮', 'Расчётная стоимость (regos.uz/price)', `${formatAmountUz(calc.total)}/мес`));
+    lines.push(field('🧮', 'Расчётная стоимость (прайс ROFEEV)', `${formatAmountUz(calc.total)}/мес`));
     if (calc.lines?.length > 1) {
       for (const line of calc.lines) {
         if (line.key === 'base') {
@@ -101,7 +101,7 @@ function formatTariffInfoMessage(overview, calc, { apiLogin = null } = {}) {
       }
     }
   } else {
-    lines.push(field('🧮', 'Расчётная стоимость (regos.uz/price)', 'не удалось рассчитать'));
+    lines.push(field('🧮', 'Расчётная стоимость (прайс ROFEEV)', 'не удалось рассчитать'));
   }
 
   return lines.join('\n');

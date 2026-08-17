@@ -32,7 +32,8 @@ function buildCommandsForTelegramUser(db, telegramId) {
   const user = getBotUserByTelegramId(db, telegramId);
   if (!isLinkedEmployee(user)) {
     return [
-      { command: 'start', description: 'Проверить неоплаченные заказы' },
+      { command: 'start', description: 'Начать / привязать профиль' },
+      { command: 'my_unpaid_orders', description: 'Мои неоплаченные заказы' },
       ...PUBLIC_COMMANDS,
     ];
   }

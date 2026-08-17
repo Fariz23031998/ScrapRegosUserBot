@@ -1,15 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getAiSettings, listAiTools, saveAiSettings } from "../api/ai";
-import { getChannelSettings, saveChannelSettings } from "../api/tickets";
+import {
+  getChannelSettings,
+  getTelegramTicketSettings,
+  saveChannelSettings,
+  saveTelegramTicketSettings,
+  searchTelegramTicketClients,
+} from "../api/tickets";
 import EntityCards from "../components/EntityCards";
 import GroupTopicTestModal from "../components/GroupTopicTestModal";
 import LoadingState from "../components/LoadingState";
+import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
 import ToolTestModal from "../components/ToolTestModal";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
-import type { AiAgentTool, AiGroupTopic, AiPromptSlug, AiSettings, AiToolAgentSlug, AiToolSchema, ChannelSetting } from "../lib/types";
+import type {
+  AiAgentTool,
+  AiGroupTopic,
+  AiPromptSlug,
+  AiSettings,
+  AiToolAgentSlug,
+  AiToolSchema,
+  ChannelSetting,
+  TelegramTicketSettings,
+} from "../lib/types";
 
 const CUSTOM_MODEL = "__custom__";
 const DEFAULT_AGENT_MODEL = "__default__";
@@ -19,13 +35,26 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Gemini",
 };
 
-type SettingsTab = "ai" | "tools" | "channels";
+type SettingsTab = "ai" | "tools" | "channels" | "telegram";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
   { id: "ai", title: "AI" },
   { id: "tools", title: "Инструменты" },
   { id: "channels", title: "Каналы" },
+  { id: "telegram", title: "Telegram" },
 ];
+
+function emptyTelegramTicketSettings(): TelegramTicketSettings {
+  return {
+    enabled: false,
+    channel_id: null,
+    direction: "Inbound",
+    responsible_user_id: null,
+    participant_user_ids: [],
+    subject: "Вопрос из Telegram",
+    fallback_client_id: null,
+  };
+}
 
 const AGENT_TITLES: Record<AiPromptSlug, string> = {
   customer: "Агент поддержки",
@@ -136,6 +165,17 @@ export default function SettingsPage() {
   const [clearGeminiApiKey, setClearGeminiApiKey] = useState(false);
   const [groupTestOpen, setGroupTestOpen] = useState(false);
   const [toolTestName, setToolTestName] = useState<string | null>(null);
+  const [telegramDraft, setTelegramDraft] = useState<TelegramTicketSettings | null>(null);
+  const [fallbackClientQuery, setFallbackClientQuery] = useState("");
+  const [fallbackClients, setFallbackClients] = useState<
+    Array<{ id: number; name?: string | null; phone?: string | null; email?: string | null }>
+  >([]);
+  const [selectedFallbackClient, setSelectedFallbackClient] = useState<{
+    id: number;
+    name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  } | null>(null);
 
   function applyLoadedSettings(data: AiSettings) {
     setAiDraft(data);
@@ -179,6 +219,43 @@ export default function SettingsPage() {
     queryFn: listAiTools,
     enabled: tab === "tools",
   });
+
+  const telegramQuery = useQuery({
+    queryKey: ["telegram-ticket-settings"],
+    queryFn: async () => {
+      const data = await getTelegramTicketSettings();
+      setTelegramDraft(data.settings || emptyTelegramTicketSettings());
+      if (data.settings?.fallback_client_id) {
+        setSelectedFallbackClient({ id: data.settings.fallback_client_id });
+      } else {
+        setSelectedFallbackClient(null);
+      }
+      return data;
+    },
+    enabled: tab === "telegram" || Boolean(telegramDraft),
+  });
+
+  useEffect(() => {
+    const query = fallbackClientQuery.trim();
+    if (query.length < 2) {
+      setFallbackClients([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void searchTelegramTicketClients(query)
+        .then((data) => {
+          if (!cancelled) setFallbackClients(data.clients || []);
+        })
+        .catch(() => {
+          if (!cancelled) setFallbackClients([]);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [fallbackClientQuery]);
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -251,9 +328,34 @@ export default function SettingsPage() {
     onError: (error: Error) => setMessage({ text: error.message, type: "error" }),
   });
 
+  const saveTelegramMutation = useMutation({
+    mutationFn: () => {
+      const settings = telegramDraft || emptyTelegramTicketSettings();
+      return saveTelegramTicketSettings({
+        enabled: settings.enabled,
+        channel_id: settings.channel_id,
+        direction: settings.direction,
+        responsible_user_id: settings.responsible_user_id,
+        participant_user_ids: settings.participant_user_ids || [],
+        subject: settings.subject,
+        fallback_client_id: settings.fallback_client_id,
+      });
+    },
+    onSuccess: (data) => {
+      setTelegramDraft(data.settings || emptyTelegramTicketSettings());
+      setMessage({ text: "Настройки Telegram-тикетов сохранены.", type: "success" });
+      void queryClient.invalidateQueries({ queryKey: ["telegram-ticket-settings"] });
+    },
+    onError: (error: Error) => setMessage({ text: error.message, type: "error" }),
+  });
+
   const channels = draft.length ? draft : query.data?.channels || [];
   const canEdit = hasPermission("settings_edit");
   const ai = aiDraft || aiQuery.data;
+  const telegram = telegramDraft;
+  const telegramChannels = telegramQuery.data?.channels || [];
+  const telegramUsers = telegramQuery.data?.users || [];
+  const showAiSave = tab === "ai" || tab === "tools";
   const savedTopics = (aiQuery.data?.group_topics || []).filter((topic) => String(topic.key || "").trim());
   const canTestGroup = Boolean(canEdit && aiQuery.data?.group_chat_id && savedTopics.length);
   const suggestedModels =
@@ -286,7 +388,6 @@ export default function SettingsPage() {
       }
     }
   }
-  const showAiSave = tab === "ai" || tab === "tools";
 
   function updateMode(channelId: number, value: ChannelSetting["interaction_mode"]) {
     setDraft((prev) =>
@@ -387,6 +488,16 @@ export default function SettingsPage() {
               className="btn-primary"
               onClick={() => saveMutation.mutate()}
               disabled={saveMutation.isPending}
+            >
+              Сохранить
+            </button>
+          ) : null}
+          {canEdit && tab === "telegram" ? (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => saveTelegramMutation.mutate()}
+              disabled={saveTelegramMutation.isPending || !telegram}
             >
               Сохранить
             </button>
@@ -1119,6 +1230,200 @@ export default function SettingsPage() {
                 </tbody>
               </table>
             </div>
+          )
+        ) : null}
+
+        {tab === "telegram" ? (
+          telegramQuery.isLoading && !telegram ? (
+            <LoadingState />
+          ) : !telegram ? (
+            <p className="empty-state">Не удалось загрузить настройки Telegram-тикетов.</p>
+          ) : (
+            <form className="stack-form settings-form" onSubmit={(event) => event.preventDefault()}>
+              <label className="field-checkbox">
+                <input
+                  type="checkbox"
+                  checked={telegram.enabled}
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    setTelegramDraft({ ...telegram, enabled: event.target.checked })
+                  }
+                />
+                <span>Принимать вопросы клиентов в Telegram и создавать тикеты REGOS</span>
+              </label>
+              <label>
+                Канал REGOS
+                <select
+                  value={telegram.channel_id == null ? "" : String(telegram.channel_id)}
+                  disabled={!canEdit}
+                  required={telegram.enabled}
+                  onChange={(event) =>
+                    setTelegramDraft({
+                      ...telegram,
+                      channel_id: event.target.value ? Number(event.target.value) : null,
+                    })
+                  }
+                >
+                  <option value="">Выберите канал</option>
+                  {telegramChannels.map((channel) => (
+                    <option key={channel.id} value={channel.id}>
+                      {channel.name || `Канал #${channel.id}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Направление
+                <select
+                  value={telegram.direction || "Inbound"}
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    setTelegramDraft({ ...telegram, direction: event.target.value })
+                  }
+                >
+                  <option value="Inbound">Входящий</option>
+                  <option value="Outbound">Исходящий</option>
+                </select>
+              </label>
+              <label>
+                Ответственный
+                <select
+                  value={
+                    telegram.responsible_user_id == null
+                      ? ""
+                      : String(telegram.responsible_user_id)
+                  }
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    setTelegramDraft({
+                      ...telegram,
+                      responsible_user_id: event.target.value
+                        ? Number(event.target.value)
+                        : null,
+                    })
+                  }
+                >
+                  <option value="">Автоматически</option>
+                  {telegramUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.full_name || user.login || `ID ${user.id}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="field">
+                <span>Участники тикета</span>
+                <TicketParticipantsPicker
+                  users={telegramUsers}
+                  value={telegram.participant_user_ids || []}
+                  onChange={(ids) =>
+                    setTelegramDraft({ ...telegram, participant_user_ids: ids })
+                  }
+                  disabled={!canEdit}
+                />
+              </div>
+              <label>
+                Тема тикета по умолчанию
+                <input
+                  value={telegram.subject || ""}
+                  maxLength={300}
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    setTelegramDraft({ ...telegram, subject: event.target.value })
+                  }
+                />
+              </label>
+              <div className="field">
+                <span>Fallback-клиент REGOS</span>
+                <p className="hint">
+                  Используется, если клиента с телефоном из Telegram не удалось найти или создать.
+                </p>
+                <div className="firm-search-row">
+                  <input
+                    value={fallbackClientQuery}
+                    disabled={!canEdit}
+                    onChange={(event) => setFallbackClientQuery(event.target.value)}
+                    placeholder="Имя, телефон или ID"
+                  />
+                </div>
+                {fallbackClientQuery.trim().length >= 2 && !fallbackClients.length ? (
+                  <p className="firm-search-status">Клиенты не найдены.</p>
+                ) : null}
+                <div className="firm-search-results">
+                  {fallbackClients.map((client) => (
+                    <button
+                      key={client.id}
+                      type="button"
+                      className="firm-search-result"
+                      disabled={!canEdit}
+                      onClick={() => {
+                        setSelectedFallbackClient(client);
+                        setTelegramDraft({ ...telegram, fallback_client_id: client.id });
+                        setFallbackClientQuery("");
+                        setFallbackClients([]);
+                      }}
+                    >
+                      <strong>{client.name || `Клиент #${client.id}`}</strong>
+                      <span className="firm-search-result__meta">
+                        {[client.phone, client.email].filter(Boolean).join(" · ") ||
+                          `ID ${client.id}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                {selectedFallbackClient || telegram.fallback_client_id ? (
+                  <div className="firm-selected">
+                    <div className="firm-selected__body">
+                      <strong>
+                        {selectedFallbackClient?.name ||
+                          `Клиент #${telegram.fallback_client_id}`}
+                      </strong>
+                      <span>
+                        {[selectedFallbackClient?.phone, selectedFallbackClient?.email]
+                          .filter(Boolean)
+                          .join(" · ") || `ID ${telegram.fallback_client_id}`}
+                      </span>
+                    </div>
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={() => {
+                          setSelectedFallbackClient(null);
+                          setTelegramDraft({ ...telegram, fallback_client_id: null });
+                        }}
+                      >
+                        Очистить
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {canEdit ? (
+                  <label>
+                    Или укажите ID клиента
+                    <input
+                      type="number"
+                      min={1}
+                      value={telegram.fallback_client_id ?? ""}
+                      onChange={(event) => {
+                        const raw = event.target.value.trim();
+                        const id = raw ? Number(raw) : null;
+                        setTelegramDraft({
+                          ...telegram,
+                          fallback_client_id:
+                            id != null && Number.isInteger(id) && id > 0 ? id : null,
+                        });
+                        if (id != null && Number.isInteger(id) && id > 0) {
+                          setSelectedFallbackClient({ id });
+                        } else {
+                          setSelectedFallbackClient(null);
+                        }
+                      }}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            </form>
           )
         ) : null}
       </section>

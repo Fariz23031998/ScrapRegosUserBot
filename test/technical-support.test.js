@@ -298,7 +298,7 @@ describe('Technical support subscriptions', () => {
     });
     assert.equal(label, `Есть платные подписки ТП\n📅 До: ${expectedDate}`);
 
-    const message = `${EXPIRED_MESSAGE}\n\nRegos\nID: 1`;
+    const message = `${EXPIRED_MESSAGE}\n\nROFEEV\nID: 1`;
     const without = message.startsWith(`${EXPIRED_MESSAGE}\n\n`)
       ? message.slice(`${EXPIRED_MESSAGE}\n\n`.length)
       : message;

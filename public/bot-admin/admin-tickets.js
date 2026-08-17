@@ -1329,6 +1329,7 @@ function renderTicketsTable() {
           <th>Статус</th>
           <th>Направление</th>
           <th>Ответственный</th>
+          <th>Обновлён</th>
           <th>Создан</th>
           <th>Ссылка на запись</th>
           <th>Длительность звонка</th>
@@ -1354,6 +1355,7 @@ function renderTicketsTable() {
             </td>
             <td data-label="Направление">${escapeHtml(directionLabel(ticket.direction))}</td>
             <td data-label="Ответственный">${escapeHtml(userLabel(ticket.responsible_user_id))}</td>
+            <td class="cell-nowrap" data-label="Обновлён">${escapeHtml(formatUnix(ticket.last_update))}</td>
             <td class="cell-nowrap" data-label="Создан">${escapeHtml(formatUnix(ticket.created_date))}</td>
             <td data-label="Ссылка на запись">${
               getRecordingUrl(ticket)

@@ -164,6 +164,22 @@ describe('addTicketMessage', () => {
       author_entity_id: 27,
     });
   });
+
+  it('reads ChatMessage/Add id when new_id is missing', async () => {
+    global.fetch = async () => ({
+      ok: true,
+      async json() {
+        return { ok: true, result: { id: 1841 } };
+      },
+    });
+
+    const result = await addTicketMessage({
+      chatId: 'chat-uuid-1',
+      fileIds: [99],
+      authorEntityId: 27,
+    });
+    assert.equal(result.id, '1841');
+  });
 });
 
 describe('POST /bot-admin/api/tickets/:id/messages', () => {

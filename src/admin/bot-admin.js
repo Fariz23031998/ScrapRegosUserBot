@@ -38,7 +38,16 @@ const {
   requireRight,
   requireAnyRight,
 } = require('./bot-admin-auth');
-const { consumeDashboardLoginToken } = require('./dashboard-login-tokens');
+const {
+  consumeDashboardLoginToken,
+  lookupDashboardLoginToken,
+  hasActiveDashboardSession,
+  invalidateDashboardLoginTokensForTelegramId,
+} = require('./dashboard-login-tokens');
+const {
+  getTelegramBotToken,
+  parseTelegramWebAppInitData,
+} = require('./telegram-webapp-auth');
 const { hasRight, isLinkedEmployee } = require('../db/user-rights');
 const { getBotUserByTelegramId } = require('../db/bot-users-db');
 const {
@@ -133,6 +142,11 @@ const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
 const { loadAiSettings, saveAiSettings, serializeAiSettings } = require('../ai/settings');
+const {
+  loadTelegramTicketSettings,
+  saveTelegramTicketSettings,
+  serializeTelegramTicketSettings,
+} = require('../bot/telegram-ticket-settings');
 
 function isAiCredentialError(error) {
   const message = String(error?.message || '');
@@ -918,21 +932,76 @@ function createBotAdminRouter(db) {
     }
 
     const rawToken = String(req.query.token || '').trim();
-    const consumed = consumeDashboardLoginToken(db, rawToken);
-    if (!consumed) {
-      return res.status(401).send('Ссылка недействительна или уже использована. Запросите новую через /open_dashboard.');
+    const lookedUp = lookupDashboardLoginToken(db, rawToken);
+    if (!lookedUp) {
+      return res.status(401).send(
+        'Ссылка недействительна или срок её действия истёк. Запросите новую через /open_dashboard.'
+      );
     }
 
-    const botUser = getBotUserByTelegramId(db, consumed.telegramId);
+    const telegramId = lookedUp.telegramId;
+    const botUser = getBotUserByTelegramId(db, telegramId);
     if (
       !isLinkedEmployee(botUser) ||
-      !hasRight(db, consumed.telegramId, 'open_admin_dashboard')
+      !hasRight(db, telegramId, 'open_admin_dashboard')
     ) {
       return res.status(403).send('Доступ запрещён. Нет права на открытие админ-панели.');
     }
 
+    const actor = getSessionActor(req);
+    const cookieMatches =
+      actor?.type === 'telegram' && Number(actor.telegramId) === Number(telegramId);
+    const canReuse = cookieMatches || hasActiveDashboardSession(db, telegramId);
+
+    if (canReuse) {
+      if (!lookedUp.usedAt) {
+        consumeDashboardLoginToken(db, rawToken);
+      }
+      setSessionCookie(res, creds, { type: 'telegram', telegramId });
+      return res.redirect('/bot-admin/');
+    }
+
+    const consumed = consumeDashboardLoginToken(db, rawToken);
+    if (!consumed) {
+      return res.status(401).send(
+        'Ссылка недействительна или срок её действия истёк. Запросите новую через /open_dashboard.'
+      );
+    }
+
     setSessionCookie(res, creds, { type: 'telegram', telegramId: consumed.telegramId });
     return res.redirect('/bot-admin/');
+  });
+
+  router.post('/api/auth/telegram-webapp', express.json(), (req, res) => {
+    const creds = getAdminCredentials();
+    if (!creds) {
+      return res.status(503).json({
+        message:
+          'Admin credentials are not configured. Set BOT_ADMIN_LOGIN and BOT_ADMIN_PASSWORD in .env and restart the server.',
+      });
+    }
+
+    const botToken = getTelegramBotToken();
+    if (!botToken) {
+      return res.status(503).json({ message: 'Не задан TELEGRAM_BOT_TOKEN.' });
+    }
+
+    const parsed = parseTelegramWebAppInitData(req.body?.initData, botToken);
+    if (!parsed) {
+      return res.status(401).json({ message: 'Данные Telegram недействительны или устарели.' });
+    }
+
+    const { telegramId } = parsed;
+    const botUser = getBotUserByTelegramId(db, telegramId);
+    if (
+      !isLinkedEmployee(botUser) ||
+      !hasRight(db, telegramId, 'open_admin_dashboard')
+    ) {
+      return res.status(403).json({ message: 'Доступ запрещён. Нет права на открытие админ-панели.' });
+    }
+
+    setSessionCookie(res, creds, { type: 'telegram', telegramId });
+    return res.json({ ok: true });
   });
 
   router.get('/api/session', (req, res) => {
@@ -1099,6 +1168,10 @@ function createBotAdminRouter(db) {
   });
 
   router.post('/api/logout', (req, res) => {
+    const actor = getSessionActor(req);
+    if (actor?.type === 'telegram' && actor.telegramId) {
+      invalidateDashboardLoginTokensForTelegramId(db, actor.telegramId);
+    }
     clearSessionCookie(res);
     return res.json({ ok: true });
   });
@@ -1731,6 +1804,129 @@ function createBotAdminRouter(db) {
         }
         console.error('Save channel settings error:', error);
         return res.status(500).json({ message: 'Не удалось сохранить настройки каналов.' });
+      }
+    }
+  );
+
+  router.get('/api/settings/telegram-tickets', requireRight(db, 'settings_read'), async (_req, res) => {
+    try {
+      const settings = serializeTelegramTicketSettings(loadTelegramTicketSettings(db));
+      let channels = [];
+      let users = [];
+      try {
+        channels = (await fetchAllChannels())
+          .map(mapRegosChannelSummary)
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
+      } catch (error) {
+        console.error('Load telegram-ticket channels error:', error);
+      }
+      try {
+        users = (await fetchAllUsers())
+          .map((user) => ({
+            id: user.id,
+            full_name: user.full_name || null,
+            login: user.login || null,
+            first_name: user.first_name || null,
+            last_name: user.last_name || null,
+          }))
+          .sort((a, b) =>
+            String(a.full_name || a.login || '').localeCompare(
+              String(b.full_name || b.login || ''),
+              'ru'
+            )
+          );
+      } catch (error) {
+        console.error('Load telegram-ticket users error:', error);
+      }
+      return res.json({ settings, channels, users });
+    } catch (error) {
+      console.error('Load telegram ticket settings error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить настройки Telegram-тикетов.' });
+    }
+  });
+
+  router.put(
+    '/api/settings/telegram-tickets',
+    requireRight(db, 'settings_edit'),
+    express.json(),
+    (req, res) => {
+      try {
+        const before = loadTelegramTicketSettings(db);
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const saved = saveTelegramTicketSettings(db, {
+          enabled: body.enabled,
+          channelId: body.channel_id ?? body.channelId,
+          direction: body.direction,
+          responsibleUserId: body.responsible_user_id ?? body.responsibleUserId,
+          participantUserIds: body.participant_user_ids ?? body.participantUserIds,
+          subject: body.subject,
+          fallbackClientId: body.fallback_client_id ?? body.fallbackClientId,
+        });
+        auditAdminChange(db, req, {
+          entityType: 'telegram_ticket_settings',
+          entityId: null,
+          action: 'update',
+          summary: 'Обновлены настройки Telegram-тикетов',
+          details: buildAuditDetails({
+            before: serializeTelegramTicketSettings(before),
+            after: serializeTelegramTicketSettings(saved),
+          }),
+        });
+        return res.json({
+          ok: true,
+          settings: serializeTelegramTicketSettings(saved),
+        });
+      } catch (error) {
+        if (
+          error.message === 'TELEGRAM_TICKET_CHANNEL_REQUIRED' ||
+          error.message === 'INVALID_TELEGRAM_TICKET_CHANNEL' ||
+          error.message === 'INVALID_TELEGRAM_TICKET_DIRECTION' ||
+          error.message === 'INVALID_TELEGRAM_TICKET_RESPONSIBLE' ||
+          error.message === 'INVALID_TELEGRAM_TICKET_PARTICIPANTS' ||
+          error.message === 'INVALID_TELEGRAM_TICKET_SUBJECT' ||
+          error.message === 'INVALID_TELEGRAM_TICKET_FALLBACK_CLIENT'
+        ) {
+          const messages = {
+            TELEGRAM_TICKET_CHANNEL_REQUIRED: 'Укажите канал REGOS для Telegram-тикетов.',
+            INVALID_TELEGRAM_TICKET_CHANNEL: 'Некорректный канал REGOS.',
+            INVALID_TELEGRAM_TICKET_DIRECTION: 'Направление должно быть Inbound или Outbound.',
+            INVALID_TELEGRAM_TICKET_RESPONSIBLE: 'Некорректный ответственный пользователь.',
+            INVALID_TELEGRAM_TICKET_PARTICIPANTS: 'Некорректный список участников.',
+            INVALID_TELEGRAM_TICKET_SUBJECT: 'Некорректная тема тикета.',
+            INVALID_TELEGRAM_TICKET_FALLBACK_CLIENT: 'Некорректный fallback-клиент.',
+          };
+          return res.status(400).json({ message: messages[error.message] || 'Некорректные настройки.' });
+        }
+        console.error('Save telegram ticket settings error:', error);
+        return res.status(500).json({ message: 'Не удалось сохранить настройки Telegram-тикетов.' });
+      }
+    }
+  );
+
+  router.get(
+    '/api/settings/telegram-tickets/clients',
+    requireRight(db, 'settings_read'),
+    async (req, res) => {
+      try {
+        const query = String(req.query.q || '').trim();
+        if (query.length < 2) {
+          return res.json({ clients: [] });
+        }
+        const clients = await searchClients(query, { limit: 20 });
+        return res.json({
+          clients: clients.map((client) => ({
+            id: client.id,
+            name: client.name || null,
+            phone: client.phone || null,
+            email: client.email || null,
+          })),
+        });
+      } catch (error) {
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        console.error('Search telegram-ticket clients error:', error);
+        return res.status(500).json({ message: 'Не удалось найти клиентов REGOS.' });
       }
     }
   );
@@ -3038,6 +3234,13 @@ function createBotAdminRouter(db) {
         if (fileIds.length) {
           payload.file_ids = fileIds;
         }
+        ticketEventHub.publish({
+          type: 'chat_changed',
+          chat_id: chatId,
+          message_id: created.id != null ? String(created.id) : null,
+          source_action: 'ChatMessageAdded',
+          occurred_at: new Date().toISOString(),
+        });
         return res.status(201).json(payload);
       } catch (error) {
         if (error instanceof RegosCrmError) {
@@ -3558,7 +3761,7 @@ function createBotAdminRouter(db) {
       const ticketsPromise = fetchAllTickets({
         search: q || undefined,
         filters: filters.length ? filters : undefined,
-        sort_orders: [{ column: 'created_date', direction: 'DESC' }],
+        sort_orders: [{ column: 'last_update', direction: 'DESC' }],
       });
       const activeTicketPromise = activeForUserId
         ? findLatestTicketForResponsibleUser(activeForUserId).then((latest) =>

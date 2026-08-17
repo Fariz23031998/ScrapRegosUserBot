@@ -28,6 +28,16 @@ const {
 } = require('../../src/bot/technical-support-bot');
 const { registerTariffInfoHandlers } = require('../../src/bot/tariff-info-bot');
 const { registerPricesHandlers } = require('../../src/bot/prices-bot');
+const { handleCustomerQuestionMessage } = require('../../src/bot/customer-question-bot');
+const {
+  ensureCustomerRegosOnStart,
+  MSG_CLIENT_NOT_REGISTERED,
+  REGISTER_KEYBOARD,
+} = require('../../src/bot/customer-start-bot');
+const {
+  loadTelegramTicketSettings,
+  isTelegramTicketConfigured,
+} = require('../../src/bot/telegram-ticket-settings');
 const { formatUnpaidOrdersBlock } = require('../../src/bot/bot-format');
 const { enrichOrderParties } = require('../../src/bot/order-parties');
 const { sendChatActionSafe } = require('../../src/bot/telegram-safe');
@@ -63,27 +73,14 @@ function buildHelpText(telegramId) {
   return [SEARCH_HELP, '', ...commandLines].join('\n');
 }
 
-const REGISTER_PROMPT = [
-  'Бот поиска пользователей Regos',
-  '',
-  'Нажмите кнопку ниже и отправьте свой номер телефона.',
-  'После этого бот покажет доступные действия.',
-].join('\n');
-
 const REGISTER_SUCCESS = 'Регистрация успешна. Теперь вы можете выполнять поиск.';
 const CUSTOMER_NO_ORDERS = 'По вашему номеру не найдено неоплаченных заказов.';
-const CUSTOMER_ONLY_MODE_TEXT = 'Доступ только к оплате. Отправьте /start для проверки заказов.';
+const CUSTOMER_ONLY_MODE_TEXT =
+  'Напишите вопрос в поддержку или отправьте /my_unpaid_orders для проверки заказов.';
+const CUSTOMER_START_HINT = 'Неоплаченные заказы: /my_unpaid_orders';
 const PHONE_ALREADY_LINKED = 'Номер уже привязан к другому аккаунту Telegram.';
 const EMPLOYEE_NOT_CONFIGURED =
   'Ваш номер не найден среди сотрудников. Обратитесь к администратору для добавления в систему.';
-
-const REGISTER_KEYBOARD = {
-  reply_markup: {
-    keyboard: [[{ text: '📱 Отправить номер телефона', request_contact: true }]],
-    resize_keyboard: true,
-    one_time_keyboard: true,
-  },
-};
 
 const REMOVE_KEYBOARD = {
   reply_markup: {
@@ -94,7 +91,7 @@ const REMOVE_KEYBOARD = {
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 
 function sendRegisterPrompt(chatId) {
-  return bot.sendMessage(chatId, REGISTER_PROMPT, REGISTER_KEYBOARD);
+  return bot.sendMessage(chatId, MSG_CLIENT_NOT_REGISTERED, REGISTER_KEYBOARD);
 }
 
 function splitTelegramMessage(text, maxLength = TELEGRAM_MAX_MESSAGE_LENGTH) {
@@ -172,8 +169,31 @@ async function sendCustomerPaymentLinks(chatId, phone) {
   await sendBotMessage(chatId, unpaidBlock, withHtml(REMOVE_KEYBOARD));
 }
 
+async function sendCustomerStartFollowUp(chatId) {
+  const lines = [CUSTOMER_START_HINT];
+  if (isTelegramTicketConfigured(loadTelegramTicketSettings(db))) {
+    lines.push(
+      'Можете написать вопрос — бот создаст обращение в поддержку.'
+    );
+  }
+  await sendBotMessage(chatId, lines.join('\n'), REMOVE_KEYBOARD);
+}
+
+async function sendCustomerStartFlow(msg, botUser, { alreadyRegistered = false } = {}) {
+  await ensureCustomerRegosOnStart({
+    bot,
+    msg,
+    botUser,
+    db,
+    alreadyRegistered,
+    onReady: async () => {
+      await sendCustomerStartFollowUp(msg.chat.id);
+    },
+  });
+}
+
 async function sendEmployeeStartMessage(chatId, telegramId) {
-  const text = `Бот поиска пользователей Regos\n\n${buildHelpText(telegramId)}`;
+  const text = `Бот поиска пользователей ROFEEV\n\n${buildHelpText(telegramId)}`;
   await sendBotMessage(chatId, text, REMOVE_KEYBOARD);
 }
 
@@ -270,10 +290,28 @@ bot.onText(/\/start/, async (msg) => {
       await sendEmployeeStartMessage(msg.chat.id, msg.from.id);
       return;
     }
-    await sendCustomerPaymentLinks(msg.chat.id, botUser.phone);
+    await sendCustomerStartFlow(msg, botUser, { alreadyRegistered: true });
     return;
   }
   await sendRegisterPrompt(msg.chat.id);
+});
+
+bot.onText(/\/my_unpaid_orders(?:@\w+)?$/i, async (msg) => {
+  const botUser = getBotUser(db, msg.from.id);
+  if (!botUser) {
+    await sendRegisterPrompt(msg.chat.id);
+    return;
+  }
+  if (isLinkedEmployee(botUser)) {
+    await sendBotMessage(
+      msg.chat.id,
+      'Команда /my_unpaid_orders доступна клиентам. Для сотрудников используйте /order или /orders.',
+      REMOVE_KEYBOARD
+    );
+    return;
+  }
+  await syncUserCommands(bot, db, msg.from.id);
+  await sendCustomerPaymentLinks(msg.chat.id, botUser.phone);
 });
 
 bot.onText(/\/help/, async (msg) => {
@@ -282,11 +320,23 @@ bot.onText(/\/help/, async (msg) => {
     await sendRegisterPrompt(msg.chat.id);
     return;
   }
+  await syncUserCommands(bot, db, msg.from.id);
   if (!isLinkedEmployee(botUser)) {
-    await sendCustomerPaymentLinks(msg.chat.id, botUser.phone);
+    const commandLines = getHelpCommandLines(db, msg.from.id);
+    const parts = commandLines.length ? commandLines : [];
+    if (isTelegramTicketConfigured(loadTelegramTicketSettings(db))) {
+      parts.push(
+        '',
+        'Можете написать вопрос — бот создаст обращение в поддержку.'
+      );
+    }
+    await sendBotMessage(
+      msg.chat.id,
+      parts.length ? parts.join('\n') : CUSTOMER_START_HINT,
+      REMOVE_KEYBOARD
+    );
     return;
   }
-  await syncUserCommands(bot, db, msg.from.id);
   await bot.sendMessage(msg.chat.id, buildHelpText(msg.from.id), REMOVE_KEYBOARD);
 });
 
@@ -323,7 +373,7 @@ async function handleIncomingMessage(msg) {
       );
       return;
     }
-    await sendCustomerPaymentLinks(msg.chat.id, registration.user.phone);
+    await sendCustomerStartFlow(msg, registration.user);
     return;
   }
 
@@ -350,6 +400,9 @@ async function handleIncomingMessage(msg) {
         await sendBotMessage(msg.chat.id, EMPLOYEE_NOT_CONFIGURED, REMOVE_KEYBOARD);
         return;
       }
+    }
+    if (await handleCustomerQuestionMessage(bot, msg, botUser, db)) {
+      return;
     }
     await sendBotMessage(msg.chat.id, CUSTOMER_ONLY_MODE_TEXT, REMOVE_KEYBOARD);
     return;

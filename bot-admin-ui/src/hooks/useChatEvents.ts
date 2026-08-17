@@ -26,13 +26,14 @@ export function useChatEvents({
 }: UseChatEventsOptions) {
   const onChatChangedRef = useRef(onChatChanged);
   const onChatWritingRef = useRef(onChatWriting);
+  const chatIdRef = useRef(chatId);
   onChatChangedRef.current = onChatChanged;
   onChatWritingRef.current = onChatWriting;
+  chatIdRef.current = chatId;
 
   useEffect(() => {
-    if (!enabled || !chatId) return;
+    if (!enabled) return;
     const source = new EventSource(ticketEventsUrl(), { withCredentials: true });
-    const expectedChatId = String(chatId);
 
     source.onmessage = (messageEvent) => {
       let event: ChatStreamEvent;
@@ -42,7 +43,8 @@ export function useChatEvents({
         return;
       }
       if (!event || typeof event !== "object") return;
-      if (String(event.chat_id || "") !== expectedChatId) return;
+      const expectedChatId = String(chatIdRef.current || "");
+      if (!expectedChatId || String(event.chat_id || "") !== expectedChatId) return;
 
       if (event.type === "chat_changed") {
         onChatChangedRef.current(event);
@@ -56,5 +58,5 @@ export function useChatEvents({
     return () => {
       source.close();
     };
-  }, [enabled, chatId]);
+  }, [enabled]);
 }

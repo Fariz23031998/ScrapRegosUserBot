@@ -13,6 +13,14 @@ export function login(login: string, password: string) {
   });
 }
 
+export function loginTelegramWebApp(initData: string) {
+  return apiFetch<{ ok: boolean }>("/bot-admin/api/auth/telegram-webapp", {
+    method: "POST",
+    body: JSON.stringify({ initData }),
+    skipAuthRedirect: true,
+  });
+}
+
 export function logout() {
   return apiFetch<{ ok: boolean }>("/bot-admin/api/logout", { method: "POST", skipAuthRedirect: true });
 }

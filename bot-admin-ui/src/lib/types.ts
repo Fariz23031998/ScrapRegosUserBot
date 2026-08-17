@@ -129,6 +129,16 @@ export type AiSettings = {
   gemini_api_key_source?: "database" | "env" | "none" | string;
 };
 
+export type TelegramTicketSettings = {
+  enabled: boolean;
+  channel_id: number | null;
+  direction: string;
+  responsible_user_id: number | null;
+  participant_user_ids: number[];
+  subject: string;
+  fallback_client_id: number | null;
+};
+
 export type AiPrompt = {
   id: number | null;
   type: AiPromptSlug;
@@ -437,6 +447,7 @@ export type Ticket = {
   direction?: string;
   responsible_user_id?: number;
   created_date?: number;
+  last_update?: number;
   sla_breached?: boolean;
   rating?: number | null;
   fields?: TicketField[];
@@ -456,7 +467,6 @@ export type Ticket = {
 };
 
 export type TicketDetail = Ticket & {
-  last_update?: number;
   participant_user_ids?: number[];
   chat_id?: string | null;
   external_dialog_id?: string | null;

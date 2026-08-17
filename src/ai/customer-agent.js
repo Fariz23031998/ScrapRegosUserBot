@@ -31,7 +31,18 @@ const {
 const { formatAudioTranscript, transcribeChatAudio } = require('./transcribe');
 const { formatImageCaption } = require('./image-caption');
 const { extractionsByFileId } = require('../db/chat-file-extractions');
+const {
+  claimCustomerMessage,
+  isCustomerMessageClaimed,
+  releaseCustomerMessageClaim,
+  claimCustomerChat,
+  releaseCustomerChat,
+} = require('../db/customer-message-claims');
 const { knowledgeCategoryContext } = require('../db/knowledge-articles');
+const {
+  getTelegramTicketSessionByTicketId,
+  getTelegramTicketSessionByChatId,
+} = require('../db/telegram-ticket-sessions');
 
 const inflightChats = new Set();
 const pendingCustomerChats = new Map();
@@ -57,18 +68,20 @@ function cleanupProcessedMessages(nowMs = Date.now()) {
   }
 }
 
-function markCustomerMessageProcessed(chatId, messageId) {
+function markCustomerMessageProcessed(chatId, messageId, db) {
   const id = String(messageId || '').trim();
   if (!id) return;
   cleanupProcessedMessages();
   processedCustomerMessages.set(processedMessageKey(chatId, id), Date.now());
+  if (db) claimCustomerMessage(db, chatId, id);
 }
 
-function isCustomerMessageProcessed(chatId, messageId) {
+function isCustomerMessageProcessed(chatId, messageId, db) {
   const id = String(messageId || '').trim();
   if (!id) return false;
   cleanupProcessedMessages();
-  return processedCustomerMessages.has(processedMessageKey(chatId, id));
+  if (processedCustomerMessages.has(processedMessageKey(chatId, id))) return true;
+  return isCustomerMessageClaimed(db, chatId, id);
 }
 
 function isClientRegularMessage(message) {
@@ -113,19 +126,40 @@ function lastUnansweredClientRegular(messages) {
   return null;
 }
 
+function payloadLooksLikeMessage(payload) {
+  return Boolean(
+    payload &&
+      (payload.author_entity_type ||
+        payload.text ||
+        payload.message_type ||
+        (Array.isArray(payload.file_ids) && payload.file_ids.length))
+  );
+}
+
+function findMessageByFileIds(messages, fileIds) {
+  const wanted = new Set((Array.isArray(fileIds) ? fileIds : []).map((id) => String(id)));
+  if (!wanted.size) return null;
+  const matches = (messages || []).filter((item) => {
+    const ids = Array.isArray(item?.file_ids) ? item.file_ids : [];
+    return ids.some((id) => wanted.has(String(id)));
+  });
+  return matches.at(-1) || null;
+}
+
 function pickTriggerMessage(messages, messageId, payload) {
   if (messageId) {
     const found = (messages || []).find((item) => String(item.id) === String(messageId));
     if (found) return found;
   }
-  if (
-    payload &&
-    (payload.author_entity_type ||
-      payload.text ||
-      payload.message_type ||
-      (Array.isArray(payload.file_ids) && payload.file_ids.length))
-  ) {
-    return payload;
+  if (payloadLooksLikeMessage(payload)) {
+    if (payload.id) {
+      const found = (messages || []).find((item) => String(item.id) === String(payload.id));
+      if (found) return found;
+    }
+    const byFiles = findMessageByFileIds(messages, payload.file_ids);
+    if (byFiles) return byFiles;
+    if (payload.id) return payload;
+    return (messages || []).filter(isClientRegularMessage).at(-1) || payload;
   }
   // Webhooks for staff/system messages often omit author fields. Never guess
   // "the last client message" in that case — that re-answers the same question
@@ -417,7 +451,10 @@ async function loadCustomerAgentChatContext({
     getTicketMessages,
   });
   const trigger = resolveCustomerTrigger(messages, messageId, payload);
-  if (trigger && !messages.some((item) => String(item.id) === String(trigger.id))) {
+  if (
+    trigger?.id &&
+    !messages.some((item) => String(item.id) === String(trigger.id))
+  ) {
     messages = [...messages, trigger];
   }
 
@@ -557,18 +594,48 @@ function auditAiEvent(db, { ticketId, action, summary, details }) {
   }
 }
 
+async function deliverCustomerReplyToTelegram(db, { ticket, chatId, reply, deps = {} } = {}) {
+  const text = String(reply || '').trim();
+  if (!db || !text) return { sent: false, reason: 'no-reply' };
+  const session =
+    getTelegramTicketSessionByTicketId(db, ticket?.id) ||
+    getTelegramTicketSessionByChatId(db, chatId || ticket?.chat_id);
+  if (!session?.telegramId) return { sent: false, reason: 'no-session' };
+
+  const send =
+    deps.sendTelegramCustomerReply ||
+    (async (telegramId, body) => {
+      const { getOutboundBot } = require('../bot/payment-notification');
+      const bot = getOutboundBot();
+      if (!bot) throw new Error('no_bot');
+      await bot.sendMessage(telegramId, body);
+    });
+
+  try {
+    await send(session.telegramId, text);
+    return { sent: true, telegramId: session.telegramId };
+  } catch (error) {
+    console.error(
+      `[ai] failed to send customer reply to Telegram ticket=${ticket?.id}:`,
+      error.message || error
+    );
+    return { sent: false, reason: 'send-failed' };
+  }
+}
+
 async function handleCustomerChatMessage({
   db,
   chatId,
   messageId,
   payload,
+  forceHandle = false,
   deps = {},
 } = {}) {
   const id = String(chatId || '').trim();
   if (!id) return { handled: false, reason: 'no-chat' };
   if (inflightChats.has(id)) {
-    if (isClientRegularMessage(payload) || isSystemMessage(payload)) {
-      pendingCustomerChats.set(id, { messageId, payload });
+    if (forceHandle || isClientRegularMessage(payload) || isSystemMessage(payload)) {
+      pendingCustomerChats.set(id, { messageId, payload, forceHandle });
     }
     return { handled: false, reason: 'busy' };
   }
@@ -582,7 +649,14 @@ async function handleCustomerChatMessage({
   }
 
   inflightChats.add(id);
+  let chatLocked = false;
   try {
+    if (db) {
+      chatLocked = claimCustomerChat(db, id);
+      if (!chatLocked) {
+        return { handled: false, reason: 'busy' };
+      }
+    }
     const findTicket = deps.findTicketByChatId || require('../integrations/regos-crm').findTicketByChatId;
     const addTicketMessage = deps.addTicketMessage || require('../integrations/regos-crm').addTicketMessage;
     const ensureParticipant =
@@ -608,13 +682,15 @@ async function handleCustomerChatMessage({
       deps,
     });
     if (!trigger) return { handled: false, reason: 'message-not-found' };
-    if (isCustomerMessageProcessed(id, trigger.id)) {
+    if (isCustomerMessageProcessed(id, trigger.id, db)) {
       return { handled: false, reason: 'already-processed' };
     }
 
     const gate = evaluateCustomerMessageGateWithDb(db, {
       settings,
-      message: trigger,
+      message: forceHandle
+        ? { ...trigger, author_entity_type: 'Client', message_type: 'Regular' }
+        : trigger,
       ticket,
       chatId: id,
     });
@@ -666,7 +742,7 @@ async function handleCustomerChatMessage({
     }
 
     if (hasReplyAfterTrigger(messages, trigger, authorEntityId)) {
-      markCustomerMessageProcessed(id, trigger.id);
+      markCustomerMessageProcessed(id, trigger.id, db);
       console.info(`[ai] skip customer message: already-replied chat=${id} ticket=${ticket.id}`);
       auditAiEvent(db, {
         ticketId: ticket.id,
@@ -681,7 +757,7 @@ async function handleCustomerChatMessage({
     const { incrementCustomerReplyCount, setTicketAiStopped } = require('../db/ticket-ai-state');
     const clientKey = resolveCustomerUsageKey(ticket, id);
     if (inflightClients.has(clientKey)) {
-      pendingClientWork.set(clientKey, { db, chatId: id, messageId, payload, deps });
+      pendingClientWork.set(clientKey, { db, chatId: id, messageId, payload, forceHandle, deps });
       return { handled: false, reason: 'busy' };
     }
     inflightClients.add(clientKey);
@@ -701,106 +777,140 @@ async function handleCustomerChatMessage({
         return { handled: false, reason: quota.reason };
       }
 
-      const history = await buildCustomerModelMessages({
-        messages,
-        trigger,
-        filesById,
-        download,
-        transcribe,
-        transcribeModel: settings.transcribeModel,
-        historyLimit: settings.historyLimit,
-        db,
-        ticketId: ticket.id,
-      });
-      if (!history.length) return { handled: false, reason: 'empty-history' };
+      const claimed = db && String(trigger.id || '').trim() ? claimCustomerMessage(db, id, trigger.id) : true;
+      if (!claimed) {
+        markCustomerMessageProcessed(id, trigger.id, db);
+        return { handled: false, reason: 'already-processed' };
+      }
 
-      let closeRequested = false;
-      const setTicketStatus =
-        deps.setTicketStatus || require('../integrations/regos-crm').setTicketStatus;
-
-      const result = await run({
-        provider,
-        providerName: settings.provider,
-        model,
-        system: buildCustomerSystemPrompt(db),
-        messages: prependUserContext(history, buildCustomerContextContent(db, ticket)),
-        promptCacheKey: buildPromptCacheKey('customer', ticket.id),
-        tools: filterEnabledTools(
-          createCustomerTools({
-            db,
-            ticket,
-            chatId: id,
-            filesById,
-            deps: {
-              ...deps,
-              transcribeModel: settings.transcribeModel,
-              onTicketClose: () => {
-                closeRequested = true;
-              },
-            },
-          }),
-          settings.disabledAgentTools,
-          'customer',
-        ),
-        reasoningEffort: settings.reasoningEffort,
-        hasVision: historyHasVisionParts(history),
-        hasAudio: historyHasAudioTranscript(history),
-      });
-
-      const reply = truncateText(result.content);
-      if (!reply) return { handled: false, reason: 'empty-reply' };
+      const releaseClaim = () => {
+        if (claimed && db) releaseCustomerMessageClaim(db, id, trigger.id);
+      };
 
       try {
-        await addTicketMessage({
-          chatId: id,
-          text: reply,
-          authorEntityType: 'User',
-          authorEntityId,
-        });
-      } catch (error) {
-        console.error(`[ai] failed to send reply to ticket ${ticket.id}:`, error);
-        auditAiEvent(db, {
+        const history = await buildCustomerModelMessages({
+          messages,
+          trigger,
+          filesById,
+          download,
+          transcribe,
+          transcribeModel: settings.transcribeModel,
+          historyLimit: settings.historyLimit,
+          db,
           ticketId: ticket.id,
-          action: 'ai_skip',
-          summary: `AI не смог отправить ответ в тикет #${ticket.id}`,
-          details: { reason: 'send-failed', model },
         });
-        return { handled: false, reason: 'send-failed' };
-      }
+        if (!history.length) {
+          releaseClaim();
+          return { handled: false, reason: 'empty-history' };
+        }
 
-      recordCustomerUsage(db, { ticketId: ticket.id, clientKey });
-      const nextCount = incrementCustomerReplyCount(db, ticket.id);
-      const perTicket = Number(settings.customerRepliesPerTicket);
-      if (Number.isInteger(perTicket) && perTicket > 0 && nextCount >= perTicket) {
-        setTicketAiStopped(db, ticket.id, true);
-      }
+        let closeRequested = false;
+        const setTicketStatus =
+          deps.setTicketStatus || require('../integrations/regos-crm').setTicketStatus;
 
-      let closed = false;
-      if (closeRequested) {
+        const result = await run({
+          provider,
+          providerName: settings.provider,
+          model,
+          system: buildCustomerSystemPrompt(db),
+          messages: prependUserContext(history, buildCustomerContextContent(db, ticket)),
+          promptCacheKey: buildPromptCacheKey('customer', ticket.id),
+          tools: filterEnabledTools(
+            createCustomerTools({
+              db,
+              ticket,
+              chatId: id,
+              filesById,
+              deps: {
+                ...deps,
+                transcribeModel: settings.transcribeModel,
+                onTicketClose: () => {
+                  closeRequested = true;
+                },
+              },
+            }),
+            settings.disabledAgentTools,
+            'customer',
+          ),
+          reasoningEffort: settings.reasoningEffort,
+          hasVision: historyHasVisionParts(history),
+          hasAudio: historyHasAudioTranscript(history),
+        });
+
+        const reply = truncateText(result.content);
+        if (!reply) {
+          releaseClaim();
+          return { handled: false, reason: 'empty-reply' };
+        }
+
         try {
-          await setTicketStatus(ticket.id, 'Closed');
-          closed = true;
+          await addTicketMessage({
+            chatId: id,
+            text: reply,
+            authorEntityType: 'User',
+            authorEntityId,
+          });
         } catch (error) {
-          console.error(`[ai] failed to close ticket ${ticket.id}:`, error);
+          releaseClaim();
+          console.error(`[ai] failed to send reply to ticket ${ticket.id}:`, error);
           auditAiEvent(db, {
             ticketId: ticket.id,
             action: 'ai_skip',
-            summary: `AI не смог закрыть тикет #${ticket.id}`,
-            details: { reason: 'close-failed', model },
+            summary: `AI не смог отправить ответ в тикет #${ticket.id}`,
+            details: { reason: 'send-failed', model },
           });
+          return { handled: false, reason: 'send-failed' };
         }
-      }
 
-      markCustomerMessageProcessed(id, trigger.id);
-      auditAiEvent(db, {
-        ticketId: ticket.id,
-        action: 'ai_reply',
-        summary: closed
-          ? `AI ответил и закрыл тикет #${ticket.id}`
-          : `AI ответил в тикет #${ticket.id}`,
-        details: { model, provider: settings.provider, steps: result.steps, closed },
-      });
-      return { handled: true, reason: null, reply, closed };
+        recordCustomerUsage(db, { ticketId: ticket.id, clientKey });
+        const nextCount = incrementCustomerReplyCount(db, ticket.id);
+        const perTicket = Number(settings.customerRepliesPerTicket);
+        if (Number.isInteger(perTicket) && perTicket > 0 && nextCount >= perTicket) {
+          setTicketAiStopped(db, ticket.id, true);
+        }
+
+        let closed = false;
+        if (closeRequested) {
+          try {
+            await setTicketStatus(ticket.id, 'Closed');
+            closed = true;
+          } catch (error) {
+            console.error(`[ai] failed to close ticket ${ticket.id}:`, error);
+            auditAiEvent(db, {
+              ticketId: ticket.id,
+              action: 'ai_skip',
+              summary: `AI не смог закрыть тикет #${ticket.id}`,
+              details: { reason: 'close-failed', model },
+            });
+          }
+        }
+
+        markCustomerMessageProcessed(id, trigger.id, db);
+        const telegram = await deliverCustomerReplyToTelegram(db, {
+          ticket,
+          chatId: id,
+          reply,
+          deps,
+        });
+        auditAiEvent(db, {
+          ticketId: ticket.id,
+          action: 'ai_reply',
+          summary: closed
+            ? `AI ответил и закрыл тикет #${ticket.id}`
+            : `AI ответил в тикет #${ticket.id}`,
+          details: {
+            model,
+            provider: settings.provider,
+            steps: result.steps,
+            closed,
+            telegram_sent: Boolean(telegram.sent),
+          },
+        });
+        return { handled: true, reason: null, reply, closed, telegram_sent: Boolean(telegram.sent) };
+      } catch (error) {
+        releaseClaim();
+        throw error;
+      }
     } finally {
       inflightClients.delete(clientKey);
       const pendingClient = pendingClientWork.get(clientKey);
@@ -814,6 +924,7 @@ async function handleCustomerChatMessage({
       }
     }
   } finally {
+    if (chatLocked) releaseCustomerChat(db, id);
     inflightChats.delete(id);
     const pending = pendingCustomerChats.get(id);
     if (pending) {
@@ -824,6 +935,7 @@ async function handleCustomerChatMessage({
           chatId: id,
           messageId: pending.messageId,
           payload: pending.payload,
+          forceHandle: pending.forceHandle,
           deps,
         }).catch((error) => {
           console.error('[ai] customer agent failed', error);
@@ -853,7 +965,12 @@ module.exports = {
   buildCustomerContextContent,
   buildCustomerModelMessages,
   loadCustomerAgentChatContext,
+  resolveCustomerTrigger,
+  pickTriggerMessage,
   formatMessageText,
   resetCustomerAgentLocks,
   resolveAiAuthorUserId,
+  markCustomerMessageProcessed,
+  isCustomerMessageProcessed,
+  deliverCustomerReplyToTelegram,
 };
