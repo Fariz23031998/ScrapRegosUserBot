@@ -27,6 +27,15 @@ export function parseTicketStatuses(value: unknown): string[] {
   return [...new Set(raw.map((item) => String(item || "").trim()).filter((item) => ALLOWED_TICKET_STATUSES.has(item)))];
 }
 
+export function parseTicketIds(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string" || typeof value === "number"
+      ? String(value).split(",")
+      : [];
+  return [...new Set(raw.map((item) => String(item ?? "").trim()).filter(Boolean))];
+}
+
 export const DIRECTION_LABELS: Record<string, string> = {
   Inbound: "Входящий",
   Outbound: "Исходящий",

@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Bot, BotOff, FileText, MessageSquare, Paperclip } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  BotOff,
+  CircleX,
+  FileText,
+  MessageSquare,
+  Paperclip,
+  Pencil,
+  ShoppingCart,
+  Sparkles,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -1198,6 +1209,7 @@ export default function TicketDetailPage() {
   const { hasPermission } = useAuth();
   useUiPreferences();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const isMobile = useMediaQuery("(max-width: 960px)");
   const [view, setView] = useState<ChatViewMode>("chat");
   const [editOpen, setEditOpen] = useState(false);
@@ -1315,9 +1327,35 @@ export default function TicketDetailPage() {
   const canEditTickets = hasPermission("tickets_edit");
   const canEditClosedTickets = hasPermission("tickets_edit_closed");
   const canViewAiPrompt = hasPermission("tickets_ai_prompt");
-  const canShowEdit =
-    canEditTickets && !(ticket && String(ticket.status || "") === "Closed" && !canEditClosedTickets);
+  const isClosed = String(ticket?.status || "") === "Closed";
+  const canShowEdit = canEditTickets && !(ticket && isClosed && !canEditClosedTickets);
+  const canCloseTicket = Boolean(ticket) && canEditTickets && !isClosed;
   const aiStopped = Boolean(ticket?.local?.ai_stopped);
+
+  const closeTicketMutation = useMutation({
+    mutationFn: () => updateTicket(ticketId, { status: "Closed" }),
+    onSuccess: (data) => {
+      setSuccess("Тикет закрыт.");
+      setError("");
+      void queryClient.setQueryData(["ticket", ticketId], { ticket: data.ticket });
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+    onError: (err: Error) => {
+      setError(err.message || "Не удалось закрыть тикет.");
+      setSuccess("");
+    },
+  });
+
+  async function handleCloseTicket() {
+    const ok = await confirm({
+      title: "Закрыть тикет",
+      message: "Закрыть этот тикет?",
+      confirmLabel: "Закрыть",
+    });
+    if (!ok) return;
+    closeTicketMutation.mutate();
+  }
 
   const stopAiMutation = useMutation({
     mutationFn: (stopped: boolean) => setTicketAiStopped(ticketId, stopped),
@@ -2039,25 +2077,51 @@ export default function TicketDetailPage() {
           <div className="card-toolbar">
             <h2>Детали</h2>
             <div className="card-toolbar-right">
+              {canCloseTicket ? (
+                <button
+                  type="button"
+                  className="btn-secondary btn-icon"
+                  aria-label="Закрыть тикет"
+                  title="Закрыть тикет"
+                  disabled={closeTicketMutation.isPending}
+                  onClick={() => void handleCloseTicket()}
+                >
+                  <CircleX size={18} aria-hidden="true" />
+                </button>
+              ) : null}
               {canViewAiPrompt ? (
-                <button type="button" className="btn-secondary btn-sm" onClick={() => setAiPromptOpen(true)}>
-                  Промпт ИИ
+                <button
+                  type="button"
+                  className="btn-secondary btn-icon"
+                  aria-label="Промпт ИИ"
+                  title="Промпт ИИ"
+                  onClick={() => setAiPromptOpen(true)}
+                >
+                  <Sparkles size={18} aria-hidden="true" />
                 </button>
               ) : null}
               {canShowEdit ? (
-                <button type="button" className="btn-secondary btn-sm" onClick={() => setEditOpen(true)}>
-                  Изменить
+                <button
+                  type="button"
+                  className="btn-secondary btn-icon"
+                  aria-label="Изменить"
+                  title="Изменить"
+                  onClick={() => setEditOpen(true)}
+                >
+                  <Pencil size={18} aria-hidden="true" />
                 </button>
               ) : null}
               <button
                 type="button"
-                className="btn-primary btn-sm"
+                className="btn-primary btn-icon"
+                aria-label="Создать заказ"
+                title="Создать заказ"
                 onClick={() => {
                   setError("");
                   setOrderOpen(true);
                 }}
               >
-                Создать заказ
+                <ShoppingCart size={18} aria-hidden="true" />
               </button>
             </div>
           </div>

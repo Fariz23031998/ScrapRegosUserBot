@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const { openDb } = require('../src/db/partners-db');
-const { createEmployeeUser } = require('../src/db/bot-users-db');
+const { createEmployeeUser, setBotUserRegosLink } = require('../src/db/bot-users-db');
 const { loadAiSettings, saveAiSettings, serializeAiSettings, resolveAgentModel } = require('../src/ai/settings');
 const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_TEST_PROMPT_SUFFIX, CUSTOMER_ASSIST_PROMPT_SUFFIX, KB_SYSTEM_PROMPT, TICKET_SUMMARY_SYSTEM_PROMPT } = require('../src/ai/default-prompts');
 const { getProvider, registerProvider, listProviders } = require('../src/ai/providers/registry');
@@ -2314,6 +2314,7 @@ describe('customer agent prompt preview', () => {
     assert.ok(toolNames.includes('search_chat_history'));
     assert.ok(toolNames.includes('read_chat_image'));
     assert.ok(toolNames.includes('transcribe_chat_audio'));
+    assert.ok(toolNames.includes('update_ticket'));
     assert.equal(
       preview.tools.every((tool) => tool.execute == null),
       true
@@ -2585,6 +2586,147 @@ describe('close_ticket tool', () => {
     }).find((tool) => tool.name === 'close_ticket');
     assert.deepEqual(await already.execute(), { ok: true, already_closed: true });
     assert.equal(closed, 'unchanged');
+  });
+});
+
+describe('update_ticket tool', () => {
+  function findUpdateTicket(database, ticket, deps = {}) {
+    return createCustomerTools({ db: database, ticket, deps }).find((tool) => tool.name === 'update_ticket');
+  }
+
+  it('rejects a missing ticket and an empty patch', async () => {
+    const database = createDb();
+    const missing = findUpdateTicket(database);
+    assert.deepEqual(await missing.execute({ subject: 'Тема' }), { ok: false, error: 'missing_ticket' });
+
+    const empty = findUpdateTicket(database, { id: 42, status: 'Open' });
+    assert.deepEqual(await empty.execute({}), { ok: false, error: 'no_fields' });
+  });
+
+  it('updates subject and description via editTicket', async () => {
+    const database = createDb();
+    let edited = null;
+    const tool = findUpdateTicket(database, { id: 42, status: 'Open' }, {
+      editTicket: async (ticketId, changes) => {
+        edited = { ticketId, changes };
+        return { changed: true };
+      },
+    });
+    const result = await tool.execute({ subject: ' Новая тема ', description: ' Подробности ' });
+    assert.deepEqual(result, {
+      ok: true,
+      changed: { subject: 'Новая тема', description: 'Подробности' },
+    });
+    assert.deepEqual(edited, {
+      ticketId: 42,
+      changes: { subject: ' Новая тема ', description: ' Подробности ' },
+    });
+  });
+
+  it('maps Russian status labels and assigns responsible from employee_id', async () => {
+    const database = createDb();
+    const employee = createEmployeeUser(database, {
+      phone: '+998901119901',
+      displayName: 'Firuz',
+    });
+    setBotUserRegosLink(database, employee.id, { regosUserId: 31 });
+
+    let statusCall = null;
+    let responsibleCall = null;
+    const tool = findUpdateTicket(database, { id: 42, status: 'Open' }, {
+      setTicketStatus: async (ticketId, status) => {
+        statusCall = { ticketId, status };
+        return { ok: true };
+      },
+      setTicketResponsible: async (ticketId, userId) => {
+        responsibleCall = { ticketId, userId };
+        return { ok: true };
+      },
+    });
+    const result = await tool.execute({ status: 'Ожидание клиента', employee_id: employee.id });
+    assert.deepEqual(result, {
+      ok: true,
+      changed: { responsible_user_id: 31, status: 'WaitingClient' },
+    });
+    assert.deepEqual(statusCall, { ticketId: 42, status: 'WaitingClient' });
+    assert.deepEqual(responsibleCall, { ticketId: 42, userId: 31 });
+  });
+
+  it('rejects invalid status and missing REGOS user id', async () => {
+    const database = createDb();
+    const tool = findUpdateTicket(database, { id: 42, status: 'Open' }, {
+      setTicketStatus: async () => {
+        throw new Error('must not set status');
+      },
+      setTicketResponsible: async () => {
+        throw new Error('must not set responsible');
+      },
+    });
+    assert.deepEqual(await tool.execute({ status: 'Unknown' }), { ok: false, error: 'invalid_status' });
+    assert.deepEqual(await tool.execute({ employee_id: 999 }), { ok: false, error: 'missing_regos_user_id' });
+  });
+
+  it('replaces participants and keeps the AI author', async () => {
+    const database = createDb();
+    const employee = createEmployeeUser(database, {
+      phone: '+998901119902',
+      displayName: 'Alisher',
+    });
+    setBotUserRegosLink(database, employee.id, { regosUserId: 44 });
+
+    let participantsCall = null;
+    const tool = findUpdateTicket(database, { id: 42, status: 'Open' }, {
+      resolveAiAuthorUserId: () => 99,
+      setTicketParticipants: async (ticketId, ids, options) => {
+        participantsCall = { ticketId, ids, options };
+        return { ok: true };
+      },
+    });
+    const result = await tool.execute({
+      participant_user_ids: [12],
+      participant_employee_ids: [employee.id],
+    });
+    assert.deepEqual(result, {
+      ok: true,
+      changed: { participant_user_ids: [12, 44, 99] },
+    });
+    assert.deepEqual(participantsCall, {
+      ticketId: 42,
+      ids: [12, 44, 99],
+      options: { replaceMode: true },
+    });
+  });
+
+  it('defers Closed when onTicketClose is set and does not call CRM immediately', async () => {
+    const database = createDb();
+    let closed = false;
+    let statusCalled = false;
+    const tool = findUpdateTicket(database, { id: 42, status: 'Open' }, {
+      onTicketClose: () => {
+        closed = true;
+      },
+      setTicketStatus: async () => {
+        statusCalled = true;
+        return { ok: true };
+      },
+    });
+    const result = await tool.execute({ status: 'Closed' });
+    assert.deepEqual(result, { ok: true, changed: { status: 'Closed' } });
+    assert.equal(closed, true);
+    assert.equal(statusCalled, false);
+  });
+
+  it('returns CRM errors instead of throwing', async () => {
+    const database = createDb();
+    const tool = findUpdateTicket(database, { id: 42, status: 'Open' }, {
+      editTicket: async () => {
+        throw new Error('Тема тикета не должна превышать 300 символов.');
+      },
+    });
+    assert.deepEqual(await tool.execute({ subject: 'x'.repeat(301) }), {
+      ok: false,
+      error: 'Тема тикета не должна превышать 300 символов.',
+    });
   });
 });
 
@@ -3311,6 +3453,8 @@ describe('customer test agent', () => {
     let notified = false;
     let assigned = false;
     let closed = false;
+    let edited = false;
+    let participantsSet = false;
     const result = await runCustomerTestAgent({
       db: database,
       userId: 1,
@@ -3339,16 +3483,30 @@ describe('customer test agent', () => {
           closed = true;
           return { ok: true };
         },
+        editTicket: async () => {
+          edited = true;
+          return { ok: true };
+        },
+        setTicketParticipants: async () => {
+          participantsSet = true;
+          return { ok: true };
+        },
         runAgent: async ({ tools, messages }) => {
           const notify = tools.find((tool) => tool.name === 'notify_employee');
           const assign = tools.find((tool) => tool.name === 'assign_responsible');
           const close = tools.find((tool) => tool.name === 'close_ticket');
+          const update = tools.find((tool) => tool.name === 'update_ticket');
           const notifyResult = await notify.execute({ employee_id: 7, message: 'Нужен менеджер' });
           const assignResult = await assign.execute({ regos_user_id: 31 });
           const closeResult = await close.execute();
+          const updateResult = await update.execute({
+            subject: 'Новая тема',
+            participant_user_ids: [7],
+          });
           assert.equal(notifyResult.ok, true);
           assert.equal(assignResult.ok, true);
           assert.equal(closeResult.ok, true);
+          assert.equal(updateResult.ok, true);
           assert.equal(messages.at(-1).content, 'Сколько стоит техподдержка?');
           return {
             content: 'Сейчас посмотрю прайс.',
@@ -3380,6 +3538,8 @@ describe('customer test agent', () => {
     assert.equal(notified, false);
     assert.equal(assigned, false);
     assert.equal(closed, false);
+    assert.equal(edited, false);
+    assert.equal(participantsSet, false);
     assert.equal(result.reply, 'Сейчас посмотрю прайс.');
     assert.equal(result.ticket_id, 42);
     assert.equal(result.client_phone, '+998901112233');

@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getAiSettings, listAiTools, saveAiSettings } from "../api/ai";
+import { getAiSettings, saveAiSettings } from "../api/ai";
+import { getExchangeRate, saveExchangeRate } from "../api/settings";
 import {
   getChannelSettings,
   getTelegramTicketSettings,
@@ -13,16 +14,12 @@ import EntityCards from "../components/EntityCards";
 import GroupTopicTestModal from "../components/GroupTopicTestModal";
 import LoadingState from "../components/LoadingState";
 import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
-import ToolTestModal from "../components/ToolTestModal";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import type {
-  AiAgentTool,
   AiGroupTopic,
   AiPromptSlug,
   AiSettings,
-  AiToolAgentSlug,
-  AiToolSchema,
   ChannelSetting,
   TelegramTicketSettings,
 } from "../lib/types";
@@ -35,13 +32,13 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Gemini",
 };
 
-type SettingsTab = "ai" | "tools" | "channels" | "telegram";
+type SettingsTab = "ai" | "channels" | "telegram" | "currency";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
   { id: "ai", title: "AI" },
-  { id: "tools", title: "Инструменты" },
   { id: "channels", title: "Каналы" },
   { id: "telegram", title: "Telegram" },
+  { id: "currency", title: "Валюта" },
 ];
 
 function emptyTelegramTicketSettings(): TelegramTicketSettings {
@@ -62,70 +59,6 @@ const AGENT_TITLES: Record<AiPromptSlug, string> = {
   kb: "База знаний",
   ticket_summary: "Сводка обращения",
 };
-
-const TOOL_AGENT_SLUGS: AiToolAgentSlug[] = ["customer", "customer_assist", "kb"];
-
-function emptyDisabledAgentTools(): Record<AiToolAgentSlug, string[]> {
-  return { customer: [], customer_assist: [], kb: [] };
-}
-
-function isToolAgentSlug(slug: string): slug is AiToolAgentSlug {
-  return TOOL_AGENT_SLUGS.includes(slug as AiToolAgentSlug);
-}
-
-function toolAgentEnabled(tool: AiAgentTool, slug: AiToolAgentSlug) {
-  if (tool.enabled_agents && slug in tool.enabled_agents) {
-    return tool.enabled_agents[slug] !== false;
-  }
-  return tool.enabled !== false;
-}
-
-function withToolAgentStates(
-  tool: AiAgentTool,
-  nextStates: Partial<Record<AiToolAgentSlug, boolean>>,
-): AiAgentTool {
-  const enabled_agents: Partial<Record<AiToolAgentSlug, boolean>> = {
-    ...(tool.enabled_agents || {}),
-  };
-  for (const slug of tool.agents || []) {
-    if (!isToolAgentSlug(slug)) continue;
-    enabled_agents[slug] = slug in nextStates ? Boolean(nextStates[slug]) : toolAgentEnabled(tool, slug);
-  }
-  const enabled =
-    (tool.agents || []).length > 0 &&
-    (tool.agents || []).every((slug) => !isToolAgentSlug(slug) || enabled_agents[slug] !== false);
-  return { ...tool, enabled, enabled_agents };
-}
-
-function disabledAgentToolsFromRows(tools: AiAgentTool[]): Record<AiToolAgentSlug, string[]> {
-  const next = emptyDisabledAgentTools();
-  for (const tool of tools) {
-    for (const slug of tool.agents || []) {
-      if (!isToolAgentSlug(slug) || toolAgentEnabled(tool, slug)) continue;
-      next[slug].push(tool.name);
-    }
-  }
-  return next;
-}
-
-function fullyDisabledToolNames(tools: AiAgentTool[]): string[] {
-  return tools
-    .filter(
-      (tool) =>
-        (tool.agents || []).length > 0 &&
-        (tool.agents || []).every((slug) => !isToolAgentSlug(slug) || !toolAgentEnabled(tool, slug)),
-    )
-    .map((tool) => tool.name);
-}
-
-const TICKET_REQUIRED_TOOLS = new Set([
-  "search_chat_history",
-  "read_chat_image",
-  "transcribe_chat_audio",
-  "assign_responsible",
-  "close_ticket",
-  "reply_to_customer",
-]);
 
 function emptyTopic(): AiGroupTopic {
   return { key: "", id: "", name: "", when: "" };
@@ -164,8 +97,8 @@ export default function SettingsPage() {
   const [clearOpenaiApiKey, setClearOpenaiApiKey] = useState(false);
   const [clearGeminiApiKey, setClearGeminiApiKey] = useState(false);
   const [groupTestOpen, setGroupTestOpen] = useState(false);
-  const [toolTestName, setToolTestName] = useState<string | null>(null);
   const [telegramDraft, setTelegramDraft] = useState<TelegramTicketSettings | null>(null);
+  const [rateDraft, setRateDraft] = useState("");
   const [fallbackClientQuery, setFallbackClientQuery] = useState("");
   const [fallbackClients, setFallbackClients] = useState<
     Array<{ id: number; name?: string | null; phone?: string | null; email?: string | null }>
@@ -214,12 +147,6 @@ export default function SettingsPage() {
     },
   });
 
-  const toolsSchemaQuery = useQuery({
-    queryKey: ["ai-tool-schemas"],
-    queryFn: listAiTools,
-    enabled: tab === "tools",
-  });
-
   const telegramQuery = useQuery({
     queryKey: ["telegram-ticket-settings"],
     queryFn: async () => {
@@ -233,6 +160,16 @@ export default function SettingsPage() {
       return data;
     },
     enabled: tab === "telegram" || Boolean(telegramDraft),
+  });
+
+  const rateQuery = useQuery({
+    queryKey: ["exchange-rate"],
+    queryFn: async () => {
+      const data = await getExchangeRate();
+      setRateDraft(String(data.usd_uzs_rate));
+      return data;
+    },
+    enabled: tab === "currency" || Boolean(rateDraft),
   });
 
   useEffect(() => {
@@ -303,8 +240,6 @@ export default function SettingsPage() {
         customer_replies_per_ticket: settings.customer_replies_per_ticket,
         group_chat_id: settings.group_chat_id || "",
         group_topics: settings.group_topics || [],
-        disabled_tools: settings.disabled_tools || [],
-        disabled_agent_tools: settings.disabled_agent_tools || emptyDisabledAgentTools(),
         ignored_customer_messages: settings.ignored_customer_messages || [],
         openai_base_url: settings.openai_base_url || "",
         ...(clearOpenaiApiKey
@@ -349,13 +284,29 @@ export default function SettingsPage() {
     onError: (error: Error) => setMessage({ text: error.message, type: "error" }),
   });
 
+  const saveRateMutation = useMutation({
+    mutationFn: () => {
+      const rate = Number(rateDraft.replace(",", "."));
+      if (!Number.isFinite(rate) || rate <= 0) {
+        throw new Error("Курс должен быть числом больше 0.");
+      }
+      return saveExchangeRate(rate);
+    },
+    onSuccess: (data) => {
+      setRateDraft(String(data.usd_uzs_rate));
+      setMessage({ text: "Курс валют сохранён.", type: "success" });
+      void queryClient.invalidateQueries({ queryKey: ["exchange-rate"] });
+    },
+    onError: (error: Error) => setMessage({ text: error.message, type: "error" }),
+  });
+
   const channels = draft.length ? draft : query.data?.channels || [];
   const canEdit = hasPermission("settings_edit");
   const ai = aiDraft || aiQuery.data;
   const telegram = telegramDraft;
   const telegramChannels = telegramQuery.data?.channels || [];
   const telegramUsers = telegramQuery.data?.users || [];
-  const showAiSave = tab === "ai" || tab === "tools";
+  const showAiSave = tab === "ai";
   const savedTopics = (aiQuery.data?.group_topics || []).filter((topic) => String(topic.key || "").trim());
   const canTestGroup = Boolean(canEdit && aiQuery.data?.group_chat_id && savedTopics.length);
   const suggestedModels =
@@ -367,72 +318,10 @@ export default function SettingsPage() {
   const modelValue = ai && suggestedModels.includes(ai.model) ? ai.model : CUSTOM_MODEL;
   const transcribeValue =
     ai && transcribeModels.includes(ai.transcribe_model || "") ? ai.transcribe_model || "" : CUSTOM_MODEL;
-  const agentTools = ai?.agent_tools || [];
-  const toolSchemasByName = new Map(
-    (toolsSchemaQuery.data?.tools || []).map((tool) => [tool.name, tool] as const),
-  );
-  let toolUnderTest: AiToolSchema | null = null;
-  if (toolTestName) {
-    toolUnderTest = toolSchemasByName.get(toolTestName) || null;
-    if (!toolUnderTest) {
-      const row = agentTools.find((tool) => tool.name === toolTestName);
-      if (row) {
-        toolUnderTest = {
-          name: row.name,
-          title: row.title,
-          description: row.description,
-          agents: row.agents,
-          parameters: { type: "object", properties: {} },
-          requires_ticket: TICKET_REQUIRED_TOOLS.has(row.name),
-        };
-      }
-    }
-  }
 
   function updateMode(channelId: number, value: ChannelSetting["interaction_mode"]) {
     setDraft((prev) =>
       prev.map((item) => (item.id === channelId ? { ...item, interaction_mode: value } : item)),
-    );
-  }
-
-  function applyToolRows(agent_tools: AiAgentTool[]) {
-    if (!ai) return;
-    setAiDraft({
-      ...ai,
-      agent_tools,
-      disabled_agent_tools: disabledAgentToolsFromRows(agent_tools),
-      disabled_tools: fullyDisabledToolNames(agent_tools),
-    });
-  }
-
-  function setToolEnabled(toolName: string, enabled: boolean) {
-    applyToolRows(
-      (ai?.agent_tools || []).map((tool) => {
-        if (tool.name !== toolName) return tool;
-        const nextStates = Object.fromEntries(
-          (tool.agents || []).filter(isToolAgentSlug).map((slug) => [slug, enabled]),
-        ) as Partial<Record<AiToolAgentSlug, boolean>>;
-        return withToolAgentStates(tool, nextStates);
-      }),
-    );
-  }
-
-  function setToolAgentEnabled(toolName: string, slug: AiToolAgentSlug, enabled: boolean) {
-    applyToolRows(
-      (ai?.agent_tools || []).map((tool) =>
-        tool.name === toolName ? withToolAgentStates(tool, { [slug]: enabled }) : tool,
-      ),
-    );
-  }
-
-  function setAllToolsEnabled(enabled: boolean) {
-    applyToolRows(
-      (ai?.agent_tools || []).map((tool) => {
-        const nextStates = Object.fromEntries(
-          (tool.agents || []).filter(isToolAgentSlug).map((slug) => [slug, enabled]),
-        ) as Partial<Record<AiToolAgentSlug, boolean>>;
-        return withToolAgentStates(tool, nextStates);
-      }),
     );
   }
 
@@ -498,6 +387,16 @@ export default function SettingsPage() {
               className="btn-primary"
               onClick={() => saveTelegramMutation.mutate()}
               disabled={saveTelegramMutation.isPending || !telegram}
+            >
+              Сохранить
+            </button>
+          ) : null}
+          {canEdit && tab === "currency" ? (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => saveRateMutation.mutate()}
+              disabled={saveRateMutation.isPending}
             >
               Сохранить
             </button>
@@ -1056,126 +955,9 @@ export default function SettingsPage() {
                 </p>
               ) : null}
               <p className="muted-copy">
-                <Link to="/prompts">Редактировать системные промпты</Link>
+                <Link to="/prompts">Редактировать промпты и инструменты</Link>
               </p>
             </form>
-          )
-        ) : null}
-
-        {tab === "tools" ? (
-          aiQuery.isLoading ? (
-            <LoadingState />
-          ) : !ai ? (
-            <p className="empty-state">Не удалось загрузить настройки AI.</p>
-          ) : (
-            <div className="settings-tools">
-              <div className="settings-tools__header">
-                <div className="settings-tools__intro">
-                  <p className="muted-copy">
-                    Инструменты можно включать отдельно для каждого агента. Отключённые для агента
-                    инструменты ему не передаются. Проверка ниже вызывает инструмент напрямую (в том
-                    числе отключённые).
-                  </p>
-                  <p className="settings-tools__sandboxes muted-copy">
-                    Песочницы агентов:{" "}
-                    {hasPermission("ai_customer_test") ? (
-                      <>
-                        <Link to="/test-agents">Тест агентов</Link>
-                        {" · "}
-                      </>
-                    ) : null}
-                    {hasPermission("knowledge_read") ? (
-                      <Link to="/knowledge">База знаний</Link>
-                    ) : (
-                      <span>нет доступа к базе знаний</span>
-                    )}
-                    {" · "}
-                    <Link to="/prompts">Описания инструментов — на странице Промпты</Link>
-                  </p>
-                </div>
-                {canEdit && agentTools.length ? (
-                  <div className="settings-tools__actions">
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm"
-                      onClick={() => setAllToolsEnabled(true)}
-                    >
-                      Включить все
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm"
-                      onClick={() => setAllToolsEnabled(false)}
-                    >
-                      Отключить все
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              {!agentTools.length ? (
-                <p className="empty-state">Список инструментов пуст.</p>
-              ) : (
-                <div className="settings-tools__list">
-                  {agentTools.map((tool) => {
-                    const agents = (tool.agents || []).filter(isToolAgentSlug);
-                    const enabledCount = agents.filter((slug) => toolAgentEnabled(tool, slug)).length;
-                    const allEnabled = agents.length > 0 && enabledCount === agents.length;
-                    const mixed = enabledCount > 0 && enabledCount < agents.length;
-                    return (
-                      <div
-                        key={tool.name}
-                        className={`settings-tool-row${enabledCount ? "" : " settings-tool-row--off"}`}
-                      >
-                        <div className="settings-tool-row__main">
-                          <label className="settings-tool-row__toggle field-checkbox">
-                            <input
-                              type="checkbox"
-                              checked={allEnabled}
-                              disabled={!canEdit}
-                              ref={(element) => {
-                                if (element) element.indeterminate = mixed;
-                              }}
-                              onChange={(event) => setToolEnabled(tool.name, event.target.checked)}
-                            />
-                            <span className="settings-tool-row__body">
-                              <strong>{tool.title}</strong>
-                              <small className="settings-tool-row__name">{tool.name}</small>
-                              <span className="muted-copy">{tool.description}</span>
-                            </span>
-                          </label>
-                          {agents.length ? (
-                            <div className="settings-tool-row__agents">
-                              {agents.map((slug) => (
-                                <label key={slug} className="settings-tool-row__agent field-checkbox">
-                                  <input
-                                    type="checkbox"
-                                    checked={toolAgentEnabled(tool, slug)}
-                                    disabled={!canEdit}
-                                    onChange={(event) =>
-                                      setToolAgentEnabled(tool.name, slug, event.target.checked)
-                                    }
-                                  />
-                                  <span>{AGENT_TITLES[slug] || slug}</span>
-                                </label>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                        {canEdit ? (
-                          <button
-                            type="button"
-                            className="btn-secondary btn-sm settings-tool-row__test"
-                            onClick={() => setToolTestName(tool.name)}
-                          >
-                            Проверить
-                          </button>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
           )
         ) : null}
 
@@ -1428,17 +1210,35 @@ export default function SettingsPage() {
             </form>
           )
         ) : null}
+
+        {tab === "currency" ? (
+          rateQuery.isLoading ? (
+            <LoadingState />
+          ) : (
+            <form className="stack-form settings-form" onSubmit={(event) => event.preventDefault()}>
+              <label>
+                1 USD =
+                <div className="exchange-rate-row">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    disabled={!canEdit}
+                    value={rateDraft}
+                    onChange={(event) => setRateDraft(event.target.value)}
+                  />
+                  <span>UZS</span>
+                </div>
+              </label>
+            </form>
+          )
+        ) : null}
       </section>
 
       <GroupTopicTestModal
         open={groupTestOpen}
         topics={savedTopics}
         onClose={() => setGroupTestOpen(false)}
-      />
-      <ToolTestModal
-        open={Boolean(toolTestName)}
-        tool={toolUnderTest}
-        onClose={() => setToolTestName(null)}
       />
     </>
   );

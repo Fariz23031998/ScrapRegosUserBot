@@ -48,6 +48,16 @@ export function saveAiSettings(payload: {
   });
 }
 
+export function saveAiDisabledTools(payload: {
+  disabled_tools: string[];
+  disabled_agent_tools: Partial<Record<AiToolAgentSlug, string[]>>;
+}) {
+  return apiFetch<AiSettings>("/bot-admin/api/settings/ai", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function testAiGroupTopic(payload: { topic_key: string; message: string }) {
   return apiFetch<{ ok: boolean; topic_key: string; topic_name: string }>(
     "/bot-admin/api/settings/ai/group-test",

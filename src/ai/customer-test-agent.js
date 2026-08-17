@@ -104,6 +104,17 @@ function customerTestSandboxDeps({ db, ticket, sessionId, deps = {} } = {}) {
       ticket_id: id,
       status,
     }),
+    editTicket: async (id, changes = {}) => ({
+      ok: true,
+      ticket_id: id,
+      changed: true,
+      ...changes,
+    }),
+    setTicketParticipants: async (id, participantUserIds) => ({
+      ok: true,
+      ticket_id: id,
+      participant_user_ids: participantUserIds,
+    }),
   };
 }
 

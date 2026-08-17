@@ -9,6 +9,7 @@ const SIDE_EFFECT_TOOLS = new Set([
   "send_group_topic_message",
   "assign_responsible",
   "close_ticket",
+  "update_ticket",
   "delete_article",
   "create_article",
   "update_article",

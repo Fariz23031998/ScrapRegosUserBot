@@ -53,6 +53,7 @@ import {
   statusBadgeClass,
   statusLabel,
   TICKET_STATUS_OPTIONS,
+  parseTicketIds,
   parseTicketStatuses,
   technicalSupportDisplay,
   unpaidOrdersHref,
@@ -68,8 +69,8 @@ const FILTERS_STORAGE_KEY = "bot-admin.tickets.filters";
 type TicketFilters = {
   search: string;
   statuses: string[];
-  user: string;
-  channel: string;
+  users: string[];
+  channels: string[];
   dateFrom: string;
   dateTo: string;
   minDuration: string;
@@ -82,8 +83,8 @@ function defaultFilters(periodDays?: number): TicketFilters {
   return {
     search: "",
     statuses: [],
-    user: "",
-    channel: "",
+    users: [],
+    channels: [],
     dateFrom: period.from,
     dateTo: period.to,
     minDuration: "",
@@ -111,19 +112,9 @@ function loadFilters(periodDays?: number): LoadedFilters {
       filters: {
         ...base,
         statuses: parseTicketStatuses(parsed.statuses ?? parsed.status),
-        // Empty string is a valid persisted choice ("Все") — do not treat it as missing.
-        user:
-          parsed.responsibleUserId != null && parsed.responsibleUserId !== ""
-            ? String(parsed.responsibleUserId)
-            : typeof parsed.user === "string"
-              ? parsed.user
-              : "",
-        channel:
-          parsed.channelId != null && parsed.channelId !== ""
-            ? String(parsed.channelId)
-            : typeof parsed.channel === "string"
-              ? parsed.channel
-              : base.channel,
+        // Empty list is a valid persisted choice ("Все") — do not treat it as missing.
+        users: parseTicketIds(parsed.responsibleUserId ?? parsed.user),
+        channels: parseTicketIds(parsed.channelId ?? parsed.channel),
         withoutDuplicates: Boolean(parsed.withoutDuplicates),
         minDuration:
           parsed.minimumCallDuration != null && parsed.minimumCallDuration !== ""
@@ -146,8 +137,8 @@ function saveFilters(filters: TicketFilters) {
       FILTERS_STORAGE_KEY,
       JSON.stringify({
         status: filters.statuses,
-        responsibleUserId: filters.user,
-        channelId: filters.channel,
+        responsibleUserId: filters.users,
+        channelId: filters.channels,
         withoutDuplicates: filters.withoutDuplicates,
         minimumCallDuration: filters.minDuration,
       }),
@@ -164,8 +155,8 @@ function buildListParams(page: number, limit: number, filters: TicketFilters): R
   };
   if (filters.search) params.q = filters.search;
   if (filters.statuses.length) params.status = filters.statuses.join(",");
-  if (filters.user) params.responsible_user_id = filters.user;
-  if (filters.channel) params.channel_id = filters.channel;
+  if (filters.users.length) params.responsible_user_id = filters.users.join(",");
+  if (filters.channels.length) params.channel_id = filters.channels.join(",");
   const fromUnix = datetimeLocalToUnix(filters.dateFrom);
   const toUnix = datetimeLocalToUnix(filters.dateTo);
   if (fromUnix != null) params.from_date = String(fromUnix);
@@ -186,8 +177,8 @@ function filtersHaveAdvancedValues(filters: TicketFilters, periodDays?: number) 
   const defaults = defaultFilters(periodDays);
   return (
     Boolean(filters.statuses.length) ||
-    Boolean(filters.user) ||
-    Boolean(filters.channel) ||
+    Boolean(filters.users.length) ||
+    Boolean(filters.channels.length) ||
     filters.dateFrom !== defaults.dateFrom ||
     filters.dateTo !== defaults.dateTo ||
     Boolean(filters.minDuration) ||
@@ -224,28 +215,24 @@ function TicketFilterFields({
         options={TICKET_STATUS_OPTIONS}
         onChange={(statuses) => setFilters({ ...filters, statuses })}
       />
-      <label className="ticket-filters__field">
-        <span>Ответственный</span>
-        <select value={filters.user} onChange={(e) => setFilters({ ...filters, user: e.target.value })}>
-          <option value="">Все</option>
-          {users.map((user) => (
-            <option key={user.id} value={user.id}>
-              {regosUserLabel(user)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="ticket-filters__field">
-        <span>Канал</span>
-        <select value={filters.channel} onChange={(e) => setFilters({ ...filters, channel: e.target.value })}>
-          <option value="">Все</option>
-          {channels.map((channel) => (
-            <option key={channel.id} value={channel.id}>
-              {channel.name || `ID ${channel.id}`}
-            </option>
-          ))}
-        </select>
-      </label>
+      <CheckboxSelect
+        label="Ответственный"
+        values={filters.users}
+        options={users.map((user) => ({
+          value: String(user.id),
+          label: regosUserLabel(user),
+        }))}
+        onChange={(nextUsers) => setFilters({ ...filters, users: nextUsers })}
+      />
+      <CheckboxSelect
+        label="Канал"
+        values={filters.channels}
+        options={channels.map((channel) => ({
+          value: String(channel.id),
+          label: channel.name || `ID ${channel.id}`,
+        }))}
+        onChange={(nextChannels) => setFilters({ ...filters, channels: nextChannels })}
+      />
       <label className="ticket-filters__field ticket-filters__field--period">
         <span>Период</span>
         <PeriodFilterButton
@@ -360,8 +347,8 @@ export default function TicketsPage() {
     if (filtersReady) return;
     if (actor?.regosUserId != null) {
       const user = String(actor.regosUserId);
-      setFilters((current) => ({ ...current, user }));
-      setAppliedFilters((current) => ({ ...current, user }));
+      setFilters((current) => ({ ...current, users: [user] }));
+      setAppliedFilters((current) => ({ ...current, users: [user] }));
     }
     setFiltersReady(true);
   }, [actor?.regosUserId, filtersReady]);
@@ -760,7 +747,7 @@ export default function TicketsPage() {
               className="btn-secondary"
               onClick={() => {
                 const next = defaultFilters(ticketPeriodDays);
-                setFilters((current) => ({ ...next, search: current.search, user: current.user }));
+                setFilters((current) => ({ ...next, search: current.search, users: current.users }));
               }}
             >
               Сбросить
@@ -788,8 +775,8 @@ export default function TicketsPage() {
             emptyMessage={
               appliedFilters.search ||
               appliedFilters.statuses.length ||
-              appliedFilters.user ||
-              appliedFilters.channel ||
+              appliedFilters.users.length ||
+              appliedFilters.channels.length ||
               appliedFilters.dateFrom ||
               appliedFilters.dateTo
                 ? "Ничего не найдено. Измените фильтры."
@@ -822,8 +809,8 @@ export default function TicketsPage() {
             emptyMessage={
               appliedFilters.search ||
               appliedFilters.statuses.length ||
-              appliedFilters.user ||
-              appliedFilters.channel ||
+              appliedFilters.users.length ||
+              appliedFilters.channels.length ||
               appliedFilters.dateFrom ||
               appliedFilters.dateTo
                 ? "Ничего не найдено. Измените фильтры."

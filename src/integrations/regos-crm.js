@@ -1059,6 +1059,20 @@ function parseTicketStatuses(status) {
   return [...new Set(raw.map((item) => String(item || '').trim()).filter((item) => allowed.has(item)))];
 }
 
+function parseTicketFilterIds(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(',');
+  return [...new Set(raw.map((item) => String(item || '').trim()).filter(Boolean))];
+}
+
+function pushTicketIdFilter(filters, field, value) {
+  const ids = parseTicketFilterIds(value);
+  if (ids.length === 1) {
+    filters.push({ Field: field, Operator: 'equal', Value: ids[0] });
+  } else if (ids.length > 1) {
+    filters.push({ Field: field, Operator: 'in', Value: ids.join(',') });
+  }
+}
+
 function buildTicketFilters({ status, fromDate, toDate, responsibleUserId, channelId } = {}) {
   const filters = [];
   const statuses = parseTicketStatuses(status);
@@ -1074,20 +1088,8 @@ function buildTicketFilters({ status, fromDate, toDate, responsibleUserId, chann
   if (toDate != null && toDate !== '') {
     filters.push({ Field: 'to_date', Operator: 'equal', Value: String(toDate) });
   }
-  if (responsibleUserId != null && responsibleUserId !== '') {
-    filters.push({
-      Field: 'responsible_user_id',
-      Operator: 'equal',
-      Value: String(responsibleUserId),
-    });
-  }
-  if (channelId != null && channelId !== '') {
-    filters.push({
-      Field: 'channel_id',
-      Operator: 'equal',
-      Value: String(channelId),
-    });
-  }
+  pushTicketIdFilter(filters, 'responsible_user_id', responsibleUserId);
+  pushTicketIdFilter(filters, 'channel_id', channelId);
 
   return filters;
 }

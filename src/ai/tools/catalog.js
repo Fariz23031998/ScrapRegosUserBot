@@ -137,6 +137,12 @@ const AGENT_TOOL_CATALOG = [
     agents: ['customer', 'customer_assist'],
   },
   {
+    name: 'update_ticket',
+    title: 'Изменить тикет',
+    description: 'Изменить тему, статус, ответственного, участников или описание текущего обращения.',
+    agents: ['customer', 'customer_assist'],
+  },
+  {
     name: 'read_chat_image',
     title: 'Читать изображение',
     description: 'Загрузить изображение из чата по file_id для анализа.',

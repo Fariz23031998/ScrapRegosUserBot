@@ -57,6 +57,7 @@ export default function UsersPage() {
   const [search, setSearch] = useState("");
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedUser, setSelectedUser] = useState<BotUser | null>(null);
+  const [regosUserId, setRegosUserId] = useState("");
   const [modalError, setModalError] = useState("");
 
   const rightsQuery = useQuery({ queryKey: ["rights-meta"], queryFn: getRightsMeta });
@@ -219,6 +220,7 @@ export default function UsersPage() {
     setModalError("");
     setModalMode(mode);
     setSelectedUser(user || null);
+    setRegosUserId(user?.regos_user_id != null ? String(user.regos_user_id) : "");
   }
 
   async function handleDelete(id: number) {
@@ -257,6 +259,8 @@ export default function UsersPage() {
 
   const users = usersQuery.items;
   const total = usersQuery.total;
+  const regosUsers = regosQuery.data?.users || [];
+  const selectedRegosInList = regosUsers.some((user) => String(user.id) === regosUserId);
 
   function userDisplayName(user: BotUser): string {
     if (role === "customer") {
@@ -444,9 +448,14 @@ export default function UsersPage() {
           </label>
           <label>
             REGOS
-            <select name="regos_user_id" defaultValue={selectedUser?.regos_user_id ? String(selectedUser.regos_user_id) : ""}>
+            <select name="regos_user_id" value={regosUserId} onChange={(event) => setRegosUserId(event.target.value)}>
               <option value="">— Не связан —</option>
-              {(regosQuery.data?.users || []).map((user) => (
+              {regosUserId && !selectedRegosInList ? (
+                <option value={regosUserId}>
+                  {selectedUser?.regos_full_name || selectedUser?.regos_login || `ID ${regosUserId}`}
+                </option>
+              ) : null}
+              {regosUsers.map((user) => (
                 <option key={user.id} value={user.id}>
                   {formatRegosLabel(user)}
                 </option>
@@ -461,10 +470,7 @@ export default function UsersPage() {
               const matches = matchRegosByPhone(phone);
               if (!matches.length) window.alert("По этому телефону пользователь REGOS не найден.");
               else if (matches.length > 1) window.alert(`Найдено несколько (${matches.length}). Выберите вручную.`);
-              else {
-                const select = document.querySelector('select[name="regos_user_id"]') as HTMLSelectElement;
-                if (select) select.value = String(matches[0].id);
-              }
+              else setRegosUserId(String(matches[0].id));
             }}
           >
             Найти по телефону

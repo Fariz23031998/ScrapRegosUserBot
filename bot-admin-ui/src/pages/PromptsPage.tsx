@@ -15,6 +15,7 @@ import {
   saveAiToolDescription,
   testAiPromptVariable,
 } from "../api/ai";
+import AgentToolsPanel from "../components/AgentToolsPanel";
 import LoadingState from "../components/LoadingState";
 import Modal from "../components/Modal";
 import { useConfirm } from "../contexts/ConfirmContext";
@@ -24,7 +25,6 @@ import type {
   AiPromptSlug,
   AiPromptType,
   AiPromptVariable,
-  AiToolAgentSlug,
   AiToolDescription,
 } from "../lib/types";
 
@@ -34,12 +34,6 @@ const PROMPT_TABS: Array<{ slug: AiPromptSlug; title: string }> = [
   { slug: "kb", title: "База знаний" },
   { slug: "ticket_summary", title: "Сводка обращения" },
 ];
-
-const TOOL_AGENT_TITLES: Record<AiToolAgentSlug, string> = {
-  customer: "Агент поддержки",
-  customer_assist: "Агент поддержки (сотрудник)",
-  kb: "База знаний",
-};
 
 type PageTab = "prompts" | "tools";
 
@@ -351,7 +345,7 @@ export default function PromptsPage() {
 
   return (
     <section className="page page--prompts">
-      <div className="role-tabs" role="tablist" aria-label="Разделы промптов">
+      <div className="role-tabs" role="tablist" aria-label="Промпты и инструменты">
         <button
           type="button"
           className={`role-tab${pageTab === "prompts" ? " role-tab--active" : ""}`}
@@ -501,53 +495,12 @@ export default function PromptsPage() {
       </section>
         </>
       ) : (
-        <section className="card">
-          <div className="card-toolbar">
-            <h2>Описания инструментов</h2>
-          </div>
-          <p className="muted-copy">
-            Этот текст передаётся модели как описание функции. Можно вставлять те же переменные{" "}
-            <code>{"{{key}}"}</code>, что и в системных промптах.
-          </p>
-          {toolsQuery.isLoading ? (
-            <LoadingState />
-          ) : !tools.length ? (
-            <p className="empty-state">Список инструментов пуст.</p>
-          ) : (
-            <ul className="knowledge-list">
-              {tools.map((tool) => (
-                <li key={tool.name} className="knowledge-list__item">
-                  <div className="knowledge-list__title">
-                    <strong>{tool.title}</strong>
-                    <span className="badge badge--muted">{tool.name}</span>
-                    {tool.is_custom ? <span className="badge badge--ok">Изменено</span> : null}
-                  </div>
-                  <p className="muted-copy">
-                    {(tool.agents || []).map((slug) => TOOL_AGENT_TITLES[slug] || slug).join(" · ")}
-                  </p>
-                  <p className="prompt-preview">{preview(tool.body)}</p>
-                  {canEdit ? (
-                    <div className="cell-actions">
-                      <button type="button" className="btn-secondary" onClick={() => openEditTool(tool)}>
-                        Изменить
-                      </button>
-                      {tool.is_custom ? (
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => void handleResetTool(tool)}
-                          disabled={resetToolMutation.isPending}
-                        >
-                          Сбросить
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <AgentToolsPanel
+          descriptions={tools}
+          onEditDescription={openEditTool}
+          onResetDescription={(tool) => void handleResetTool(tool)}
+          resetPending={resetToolMutation.isPending}
+        />
       )}
 
       <Modal

@@ -38,6 +38,8 @@ const DEFAULT_TOOL_DESCRIPTIONS = {
   assign_responsible: 'Assign a REGOS user as the ticket responsible. The employee must have regos_user_id.',
   close_ticket:
     'Close the current support ticket. Use when the client request is fully resolved and no follow-up is needed. Do not close if you are waiting for data, escalated to staff, or still troubleshooting.',
+  update_ticket:
+    'Update the current ticket. Omit fields you do not want to change. Fields: subject (max 300), description, status (Open, WaitingClient, WaitingStaff, Closed; Russian labels also accepted), employee_id or responsible_user_id, participant_employee_ids or participant_user_ids (replaces the list). Use get_employee first. Prefer close_ticket when the request is fully resolved.',
   read_chat_image:
     'Load a chat image by file_id so you can see it. Use for older screenshots listed as [изображение: … #id]. Does not work for audio or video.',
   transcribe_chat_audio:
