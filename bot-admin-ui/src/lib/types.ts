@@ -664,3 +664,149 @@ export type PriceItem = {
   name_uz?: string;
   prices?: PriceValues;
 };
+
+export type CatalogImage = {
+  id: number;
+  url: string;
+  original_name?: string;
+  mime?: string;
+  sort_order?: number;
+};
+
+export type CatalogCategory = {
+  id: number;
+  name: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CatalogDevice = {
+  id: number;
+  name: string;
+  description?: string;
+  category_id?: number | null;
+  category?: { id: number; name: string } | null;
+  images?: CatalogImage[];
+  cost_amount?: number | null;
+  cost_currency?: string | null;
+  cost_uzs?: number | null;
+  cost_usd?: number | null;
+  price_uzs?: number | null;
+  price_usd?: number | null;
+  display_price_uzs?: number | null;
+  display_price_usd?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CatalogService = {
+  id: number;
+  name: string;
+  description?: string;
+  category_id?: number | null;
+  category?: { id: number; name: string } | null;
+  images?: CatalogImage[];
+  cost_amount?: number | null;
+  cost_currency?: string | null;
+  cost_uzs?: number | null;
+  cost_usd?: number | null;
+  price_uzs?: number | null;
+  price_usd?: number | null;
+  display_price_uzs?: number | null;
+  display_price_usd?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type TaskCategory = {
+  id: number;
+  name: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type TaskEmployee = {
+  id: number;
+  name: string;
+  display_name?: string | null;
+  phone?: string | null;
+  job_title?: string | null;
+};
+
+export type TaskClient = {
+  id: number;
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+};
+
+export type TaskMoneyTotals = {
+  cost_uzs: number;
+  cost_usd: number;
+  price_uzs: number;
+  price_usd: number;
+};
+
+export type TaskDeviceLine = {
+  id?: number;
+  task_id?: number;
+  device_id: number;
+  device_name?: string;
+  description?: string;
+  images?: CatalogImage[];
+  action: "install" | "repair" | string;
+  action_label?: string;
+  notes?: string;
+  sort_order?: number;
+  cost_amount?: number | null;
+  cost_currency?: string | null;
+  cost_uzs?: number | null;
+  cost_usd?: number | null;
+  price_uzs?: number | null;
+  price_usd?: number | null;
+  display_price_uzs?: number | null;
+  display_price_usd?: number | null;
+};
+
+export type TaskServiceLine = {
+  id?: number;
+  task_id?: number;
+  service_id: number;
+  service_name?: string;
+  description?: string;
+  images?: CatalogImage[];
+  notes?: string;
+  sort_order?: number;
+  cost_amount?: number | null;
+  cost_currency?: string | null;
+  cost_uzs?: number | null;
+  cost_usd?: number | null;
+  price_uzs?: number | null;
+  price_usd?: number | null;
+  display_price_uzs?: number | null;
+  display_price_usd?: number | null;
+};
+
+export type FieldTask = {
+  id: number;
+  title: string;
+  status: "new" | "in_progress" | "done" | string;
+  status_label?: string;
+  notes?: string;
+  address?: string;
+  category_id?: number | null;
+  category?: { id: number; name: string } | null;
+  regos_client_id?: number | null;
+  client_name?: string;
+  client_phone?: string;
+  manager_user_id?: number | null;
+  manager?: { id: number; name: string } | null;
+  technician_user_id?: number | null;
+  technician?: { id: number; name: string } | null;
+  devices: TaskDeviceLine[];
+  services?: TaskServiceLine[];
+  totals?: TaskMoneyTotals;
+  created_at?: string;
+  updated_at?: string;
+};
+

@@ -222,6 +222,7 @@ const {
 } = require('../db/ticket-summaries');
 const { resolveTicketClientId } = require('../ai/ticket-period');
 const { createKnowledgeMcpRouter } = require('../mcp/knowledge-mcp');
+const { registerTaskRoutes } = require('./tasks-admin');
 const { getTicketRecordingUrl } = require('./ticket-recording');
 const {
   summarizeByDuration,
@@ -941,6 +942,7 @@ function createBotAdminRouter(db) {
   });
 
   router.use(createKnowledgeMcpRouter(db));
+  registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails });
 
   router.get('/auth/telegram', (req, res) => {
     const creds = getAdminCredentials();

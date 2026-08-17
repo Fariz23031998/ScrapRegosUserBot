@@ -8,6 +8,9 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { to: "/tickets", label: "Тикеты", permission: "tickets_read" },
+  { to: "/tasks", label: "Задачи", permission: "tasks_read" },
+  { to: "/devices", label: "Устройства", permission: "devices_read" },
+  { to: "/services", label: "Услуги", permission: "services_read" },
   { to: "/orders", label: "Заказы", permission: "orders_read" },
   { to: "/order-logs", label: "Журнал заказов", permission: "order_logs_read" },
   { to: "/logs", label: "Журнал", permission: "logs_read" },
@@ -16,7 +19,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/prices", label: "Прайс", permission: "prices_read" },
   { to: "/knowledge", label: "База знаний", permission: "knowledge_read" },
   { to: "/test-agents", label: "Тест агентов", permission: "ai_customer_test" },
-  { to: "/prompts", label: "Промпты", permission: "settings_read" },
+  { to: "/prompts", label: "Промпты и Инструменты", permission: "settings_read" },
   { to: "/settings", label: "Настройки", permission: "settings_read" },
 ];
 

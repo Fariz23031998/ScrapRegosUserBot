@@ -13,6 +13,10 @@ const OrderLogsPage = lazy(() => import("./pages/OrderLogsPage"));
 const LogsPage = lazy(() => import("./pages/LogsPage"));
 const TicketsPage = lazy(() => import("./pages/TicketsPage"));
 const TicketDetailPage = lazy(() => import("./pages/TicketDetailPage"));
+const TasksPage = lazy(() => import("./pages/TasksPage"));
+const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
+const DevicesPage = lazy(() => import("./pages/DevicesPage"));
+const ServicesPage = lazy(() => import("./pages/ServicesPage"));
 const TechnicalSupportPage = lazy(() => import("./pages/TechnicalSupportPage"));
 const PricesPage = lazy(() => import("./pages/PricesPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
@@ -102,6 +106,44 @@ export default function App() {
               element={
                 <SuspensePage>
                   <TicketDetailPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
+          <Route element={<ProtectedRoute permission="tasks_read" />}>
+            <Route
+              path="tasks"
+              element={
+                <SuspensePage>
+                  <TasksPage />
+                </SuspensePage>
+              }
+            />
+            <Route
+              path="tasks/:id"
+              element={
+                <SuspensePage>
+                  <TaskDetailPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
+          <Route element={<ProtectedRoute permission="devices_read" />}>
+            <Route
+              path="devices"
+              element={
+                <SuspensePage>
+                  <DevicesPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
+          <Route element={<ProtectedRoute permission="services_read" />}>
+            <Route
+              path="services"
+              element={
+                <SuspensePage>
+                  <ServicesPage />
                 </SuspensePage>
               }
             />

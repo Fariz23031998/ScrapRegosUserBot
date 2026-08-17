@@ -1,0 +1,296 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import {
+  createTask,
+  listTaskCategories,
+  listTaskEmployees,
+  searchTaskClients,
+  updateTask,
+  type TaskPayload,
+} from "../api/tasks";
+import Modal from "./Modal";
+import type { FieldTask, TaskCategory, TaskClient } from "../lib/types";
+
+const TASK_STATUSES = [
+  { value: "new", label: "Новая" },
+  { value: "in_progress", label: "В работе" },
+  { value: "done", label: "Выполнена" },
+] as const;
+
+type TaskEditor = {
+  id?: number;
+  title: string;
+  status: string;
+  category_id: string;
+  notes: string;
+  address: string;
+  manager_user_id: string;
+  technician_user_id: string;
+  client: TaskClient | null;
+  clientQuery: string;
+};
+
+function emptyEditor(): TaskEditor {
+  return {
+    title: "",
+    status: "new",
+    category_id: "",
+    notes: "",
+    address: "",
+    manager_user_id: "",
+    technician_user_id: "",
+    client: null,
+    clientQuery: "",
+  };
+}
+
+function editorFromTask(task: FieldTask): TaskEditor {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status || "new",
+    category_id: task.category_id ? String(task.category_id) : "",
+    notes: task.notes || "",
+    address: task.address || "",
+    manager_user_id: task.manager_user_id ? String(task.manager_user_id) : "",
+    technician_user_id: task.technician_user_id ? String(task.technician_user_id) : "",
+    client: task.regos_client_id
+      ? {
+          id: task.regos_client_id,
+          name: task.client_name || null,
+          phone: task.client_phone || null,
+        }
+      : null,
+    clientQuery: "",
+  };
+}
+
+export default function TaskEditorModal({
+  open,
+  task,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  task?: FieldTask | null;
+  categories: TaskCategory[];
+  onClose: () => void;
+  onSaved: (saved: FieldTask) => void;
+}) {
+  const [editor, setEditor] = useState<TaskEditor>(() => (task ? editorFromTask(task) : emptyEditor()));
+  const [formError, setFormError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setEditor(task ? editorFromTask(task) : emptyEditor());
+    setFormError("");
+  }, [open, task?.id]);
+
+  const employeesQuery = useQuery({
+    queryKey: ["task-employees"],
+    queryFn: listTaskEmployees,
+    enabled: open,
+  });
+  const clientQueryValue = editor.clientQuery || "";
+  const clientsQuery = useQuery({
+    queryKey: ["task-clients", clientQueryValue],
+    queryFn: () => searchTaskClients(clientQueryValue),
+    enabled: open && !editor.client && clientQueryValue.trim().length >= 2,
+  });
+  const categoriesQuery = useQuery({
+    queryKey: ["task-categories"],
+    queryFn: listTaskCategories,
+    enabled: open && !categories.length,
+  });
+
+  const employees = employeesQuery.data?.employees || [];
+  const clients = clientsQuery.data?.clients || [];
+  const categoryOptions = categories.length ? categories : categoriesQuery.data?.categories || [];
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: { id?: number; body: TaskPayload }) => {
+      if (payload.id) return updateTask(payload.id, payload.body);
+      return createTask(payload.body);
+    },
+    onSuccess: (data) => onSaved(data.task),
+    onError: (error: Error) => setFormError(error.message),
+  });
+
+  function buildPayload(current: TaskEditor): TaskPayload {
+    return {
+      title: current.title.trim(),
+      status: current.status,
+      notes: current.notes.trim(),
+      address: current.address.trim(),
+      category_id: current.category_id ? Number(current.category_id) : null,
+      manager_user_id: current.manager_user_id ? Number(current.manager_user_id) : null,
+      technician_user_id: current.technician_user_id ? Number(current.technician_user_id) : null,
+      regos_client_id: current.client?.id ?? null,
+      client_name: current.client?.name || "",
+      client_phone: current.client?.phone || "",
+    };
+  }
+
+  return (
+    <Modal
+      open={open}
+      title={editor.id ? "Редактирование задачи" : "Новая задача"}
+      onClose={onClose}
+      size="wide"
+    >
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setFormError("");
+          saveMutation.mutate({ id: editor.id, body: buildPayload(editor) });
+        }}
+      >
+        <label>
+          Название
+          <input
+            required
+            maxLength={200}
+            value={editor.title}
+            onChange={(event) => setEditor((prev) => ({ ...prev, title: event.target.value }))}
+          />
+        </label>
+        <div className="filters-grid">
+          <label>
+            Категория
+            <select
+              value={editor.category_id}
+              onChange={(event) => setEditor((prev) => ({ ...prev, category_id: event.target.value }))}
+            >
+              <option value="">Без категории</option>
+              {categoryOptions.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Статус
+            <select
+              value={editor.status}
+              onChange={(event) => setEditor((prev) => ({ ...prev, status: event.target.value }))}
+            >
+              {TASK_STATUSES.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="field">
+          <span>Клиент REGOS</span>
+          {editor.client ? (
+            <div className="firm-selected">
+              <div className="firm-selected__body">
+                <strong>{editor.client.name || `Клиент #${editor.client.id}`}</strong>
+                <span>{editor.client.phone || `ID ${editor.client.id}`}</span>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => setEditor((prev) => ({ ...prev, client: null, clientQuery: "" }))}
+              >
+                Сбросить
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="firm-search-row">
+                <input
+                  value={editor.clientQuery}
+                  onChange={(event) => setEditor((prev) => ({ ...prev, clientQuery: event.target.value }))}
+                  placeholder="Имя, телефон или email"
+                />
+              </div>
+              {clientQueryValue.trim().length >= 2 && !clients.length && !clientsQuery.isFetching ? (
+                <p className="firm-search-status">Клиенты не найдены.</p>
+              ) : null}
+              <div className="firm-search-results">
+                {clients.map((client) => (
+                  <button
+                    key={client.id}
+                    type="button"
+                    className="firm-search-result"
+                    onClick={() => setEditor((prev) => ({ ...prev, client, clientQuery: "" }))}
+                  >
+                    <strong>{client.name || `Клиент #${client.id}`}</strong>
+                    <span className="firm-search-result__meta">
+                      {[client.phone, client.email].filter(Boolean).join(" · ") || `ID ${client.id}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <label>
+          Адрес
+          <input
+            maxLength={500}
+            value={editor.address}
+            onChange={(event) => setEditor((prev) => ({ ...prev, address: event.target.value }))}
+          />
+        </label>
+        <label>
+          Заметки
+          <textarea
+            rows={3}
+            maxLength={5000}
+            value={editor.notes}
+            onChange={(event) => setEditor((prev) => ({ ...prev, notes: event.target.value }))}
+          />
+        </label>
+        <div className="filters-grid">
+          <label>
+            Менеджер
+            <select
+              value={editor.manager_user_id}
+              onChange={(event) => setEditor((prev) => ({ ...prev, manager_user_id: event.target.value }))}
+            >
+              <option value="">Не назначен</option>
+              {employees.map((employee) => (
+                <option key={employee.id} value={employee.id}>
+                  {employee.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Техник
+            <select
+              value={editor.technician_user_id}
+              onChange={(event) => setEditor((prev) => ({ ...prev, technician_user_id: event.target.value }))}
+            >
+              <option value="">Не назначен</option>
+              {employees.map((employee) => (
+                <option key={employee.id} value={employee.id}>
+                  {employee.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {formError ? <p className="message error">{formError}</p> : null}
+        <div className="form-actions">
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            Отмена
+          </button>
+          <button type="submit" className="btn-primary" disabled={saveMutation.isPending}>
+            Сохранить
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export { emptyEditor, editorFromTask };
+export type { TaskEditor };

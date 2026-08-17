@@ -169,6 +169,54 @@ const RIGHTS = {
     column: 'prompt_variables_create',
     label: 'Админ: промпты — создание переменных',
   },
+  tasks_read: {
+    column: 'tasks_read',
+    label: 'Админ: задачи — просмотр',
+  },
+  tasks_create: {
+    column: 'tasks_create',
+    label: 'Админ: задачи — создание',
+  },
+  tasks_edit: {
+    column: 'tasks_edit',
+    label: 'Админ: задачи — изменение',
+  },
+  tasks_delete: {
+    column: 'tasks_delete',
+    label: 'Админ: задачи — удаление',
+  },
+  devices_read: {
+    column: 'devices_read',
+    label: 'Админ: устройства — просмотр',
+  },
+  devices_create: {
+    column: 'devices_create',
+    label: 'Админ: устройства — создание',
+  },
+  devices_edit: {
+    column: 'devices_edit',
+    label: 'Админ: устройства — изменение',
+  },
+  devices_delete: {
+    column: 'devices_delete',
+    label: 'Админ: устройства — удаление',
+  },
+  services_read: {
+    column: 'services_read',
+    label: 'Админ: услуги — просмотр',
+  },
+  services_create: {
+    column: 'services_create',
+    label: 'Админ: услуги — создание',
+  },
+  services_edit: {
+    column: 'services_edit',
+    label: 'Админ: услуги — изменение',
+  },
+  services_delete: {
+    column: 'services_delete',
+    label: 'Админ: услуги — удаление',
+  },
 };
 
 /** Admin UI section permission keys returned by /api/session. */
@@ -208,6 +256,18 @@ const ADMIN_PERMISSION_KEYS = [
   'ai_customer_test',
   'ai_customer_test_history',
   'prompt_variables_create',
+  'tasks_read',
+  'tasks_create',
+  'tasks_edit',
+  'tasks_delete',
+  'devices_read',
+  'devices_create',
+  'devices_edit',
+  'devices_delete',
+  'services_read',
+  'services_create',
+  'services_edit',
+  'services_delete',
 ];
 
 function hasRight(db, telegramId, rightKey) {

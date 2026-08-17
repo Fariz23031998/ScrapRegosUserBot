@@ -181,6 +181,12 @@ function migrateSchema(db) {
   ensureAiCustomerUsageTable(db);
   const { ensureCustomerMessageClaimsTable } = require('./customer-message-claims');
   ensureCustomerMessageClaimsTable(db);
+  const { ensureDeviceTables } = require('./devices');
+  ensureDeviceTables(db);
+  const { ensureServiceTables } = require('./services');
+  ensureServiceTables(db);
+  const { ensureTaskTables } = require('./tasks');
+  ensureTaskTables(db);
 }
 
 const {

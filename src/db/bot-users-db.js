@@ -52,6 +52,18 @@ const DEFAULT_RIGHTS = {
   ai_customer_test: 0,
   ai_customer_test_history: 0,
   prompt_variables_create: 0,
+  tasks_read: 0,
+  tasks_create: 0,
+  tasks_edit: 0,
+  tasks_delete: 0,
+  devices_read: 0,
+  devices_create: 0,
+  devices_edit: 0,
+  devices_delete: 0,
+  services_read: 0,
+  services_create: 0,
+  services_edit: 0,
+  services_delete: 0,
 };
 
 const RIGHTS_COLUMNS = Object.keys(DEFAULT_RIGHTS);
@@ -89,6 +101,18 @@ const ADMIN_RIGHTS_COLUMNS = [
   'ai_customer_test',
   'ai_customer_test_history',
   'prompt_variables_create',
+  'tasks_read',
+  'tasks_create',
+  'tasks_edit',
+  'tasks_delete',
+  'devices_read',
+  'devices_create',
+  'devices_edit',
+  'devices_delete',
+  'services_read',
+  'services_create',
+  'services_edit',
+  'services_delete',
 ];
 
 function normalizePhoneKey(phone) {
