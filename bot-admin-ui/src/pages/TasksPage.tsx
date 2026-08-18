@@ -1,12 +1,14 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   createTaskCategory,
   deleteTask,
   deleteTaskCategory,
   listTaskCategories,
+  listTaskLocations,
   listTasks,
   updateTaskCategory,
 } from "../api/tasks";
@@ -21,7 +23,7 @@ import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { useUiPreferences } from "../hooks/useUiPreferences";
-import type { FieldTask, TaskCategory } from "../lib/types";
+import type { FieldTask, TaskCategory, TaskLocation } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
 
 const TASK_STATUSES = [
@@ -39,27 +41,29 @@ function taskClientLabel(task: FieldTask): string {
 }
 
 function taskDevicesSummary(task: FieldTask): string {
-  const install = task.devices.filter((line) => line.action === "install").map((line) => line.device_name).filter(Boolean);
-  const repair = task.devices.filter((line) => line.action === "repair").map((line) => line.device_name).filter(Boolean);
-  const parts: string[] = [];
-  if (install.length) parts.push(`Установка: ${install.join(", ")}`);
-  if (repair.length) parts.push(`Ремонт: ${repair.join(", ")}`);
-  return parts.join(" · ") || "—";
+  const names = (task.devices || []).map((line) => line.device_name).filter(Boolean);
+  return names.join(", ") || "—";
 }
 
 function TaskFilterFields({
   categoryId,
+  locationId,
   status,
   categories,
+  locations,
   onCategoryChange,
+  onLocationChange,
   onStatusChange,
   showActions,
   onApply,
 }: {
   categoryId: string;
+  locationId: string;
   status: string;
   categories: TaskCategory[];
+  locations: TaskLocation[];
   onCategoryChange: (value: string) => void;
+  onLocationChange: (value: string) => void;
   onStatusChange: (value: string) => void;
   showActions?: boolean;
   onApply?: () => void;
@@ -73,6 +77,17 @@ function TaskFilterFields({
           {categories.map((category) => (
             <option key={category.id} value={category.id}>
               {category.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="ticket-filters__field">
+        <span>Локация</span>
+        <select value={locationId} onChange={(event) => onLocationChange(event.target.value)}>
+          <option value="">Все</option>
+          {locations.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
             </option>
           ))}
         </select>
@@ -108,8 +123,10 @@ export default function TasksPage() {
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  const [locationId, setLocationId] = useState("");
   const [status, setStatus] = useState("");
   const [appliedCategoryId, setAppliedCategoryId] = useState("");
+  const [appliedLocationId, setAppliedLocationId] = useState("");
   const [appliedStatus, setAppliedStatus] = useState("");
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -121,9 +138,13 @@ export default function TasksPage() {
     queryKey: ["task-categories"],
     queryFn: listTaskCategories,
   });
+  const locationsQuery = useQuery({
+    queryKey: ["task-locations"],
+    queryFn: listTaskLocations,
+  });
 
   const tasksQuery = usePagedInfiniteQuery({
-    queryKey: ["tasks", search, appliedStatus, appliedCategoryId],
+    queryKey: ["tasks", search, appliedStatus, appliedCategoryId, appliedLocationId],
     queryFn: (page, pageSize) =>
       listTasks({
         page,
@@ -131,12 +152,14 @@ export default function TasksPage() {
         q: search || undefined,
         status: appliedStatus || undefined,
         category_id: appliedCategoryId || undefined,
+        location_id: appliedLocationId || undefined,
       }),
     getItems: (data) => data.tasks || [],
     getItemId: (task) => task.id,
   });
 
   const categories = categoriesQuery.data?.categories || [];
+  const locations = locationsQuery.data?.locations || [];
 
   function invalidateTasks() {
     void queryClient.invalidateQueries({ queryKey: ["tasks"] });
@@ -172,6 +195,7 @@ export default function TasksPage() {
 
   function applyFilters() {
     setAppliedCategoryId(categoryId);
+    setAppliedLocationId(locationId);
     setAppliedStatus(status);
   }
 
@@ -201,13 +225,15 @@ export default function TasksPage() {
     return hasPermission("tasks_delete") ? (
       <button
         type="button"
-        className="btn-danger"
+        className="btn-danger btn-icon btn-sm"
+        aria-label="Удалить"
+        title="Удалить"
         onClick={(event) => {
           event.stopPropagation();
           void handleDelete(task);
         }}
       >
-        Удалить
+        <Trash2 size={15} aria-hidden="true" />
       </button>
     ) : null;
   }
@@ -227,6 +253,11 @@ export default function TasksPage() {
         id: "category",
         header: "Категория",
         accessorFn: (row) => row.category?.name || "—",
+      },
+      {
+        id: "location",
+        header: "Локация",
+        accessorFn: (row) => row.location?.name || "—",
       },
       {
         id: "client",
@@ -254,6 +285,11 @@ export default function TasksPage() {
         accessorFn: (row) => row.status_label || row.status,
       },
       {
+        id: "action",
+        header: "Тип",
+        accessorFn: (row) => row.action_label || "—",
+      },
+      {
         id: "updated_at",
         header: "Обновлено",
         accessorFn: (row) => formatDateTime(row.updated_at),
@@ -275,7 +311,9 @@ export default function TasksPage() {
   const tasks = tasksQuery.items;
   const total = tasksQuery.total;
   const emptyMessage =
-    search || appliedStatus || appliedCategoryId ? "Ничего не найдено. Измените фильтры." : "Задач пока нет.";
+    search || appliedStatus || appliedCategoryId || appliedLocationId
+      ? "Ничего не найдено. Измените фильтры."
+      : "Задач пока нет.";
 
   return (
     <section className="card">
@@ -298,20 +336,24 @@ export default function TasksPage() {
         search={search}
         onSearchChange={setSearch}
         searchPlaceholder="Поиск по задаче, клиенту, устройству…"
-        filtersActive={Boolean(appliedStatus || appliedCategoryId)}
+        filtersActive={Boolean(appliedStatus || appliedCategoryId || appliedLocationId)}
         filtersModalOpen={filtersModalOpen}
         onFiltersModalOpenChange={setFiltersModalOpen}
         onApplyFilters={applyFilters}
         onResetFilters={() => {
           setCategoryId("");
+          setLocationId("");
           setStatus("");
         }}
         desktopFilters={
           <TaskFilterFields
             categoryId={categoryId}
+            locationId={locationId}
             status={status}
             categories={categories}
+            locations={locations}
             onCategoryChange={setCategoryId}
+            onLocationChange={setLocationId}
             onStatusChange={setStatus}
             showActions
             onApply={applyFilters}
@@ -320,9 +362,12 @@ export default function TasksPage() {
         sheetFilters={
           <TaskFilterFields
             categoryId={categoryId}
+            locationId={locationId}
             status={status}
             categories={categories}
+            locations={locations}
             onCategoryChange={setCategoryId}
+            onLocationChange={setLocationId}
             onStatusChange={setStatus}
           />
         }
@@ -336,8 +381,13 @@ export default function TasksPage() {
             emptyMessage={emptyMessage}
             getKey={(task) => String(task.id)}
             getTitle={(task) => task.title}
-            getSubtitle={(task) => [task.status_label, task.category?.name].filter(Boolean).join(" · ")}
+            getSubtitle={(task) =>
+              [task.action_label, task.status_label, task.location?.name, task.category?.name]
+                .filter(Boolean)
+                .join(" · ")
+            }
             getFields={(task) => [
+              { label: "Локация", value: task.location?.name || "—" },
               { label: "Клиент", value: taskClientLabel(task) },
               { label: "Менеджер", value: task.manager?.name || "—" },
               { label: "Техник", value: task.technician?.name || "—" },
@@ -410,20 +460,24 @@ export default function TasksPage() {
                     <div className="cell-actions">
                       <button
                         type="button"
-                        className="btn-secondary btn-sm"
+                        className="btn-secondary btn-icon btn-sm"
+                        aria-label="Изменить"
+                        title="Изменить"
                         onClick={() => {
                           setCategoryFormError("");
                           setCategoryEditor(category);
                         }}
                       >
-                        Изменить
+                        <Pencil size={15} aria-hidden="true" />
                       </button>
                       <button
                         type="button"
-                        className="btn-danger btn-sm"
+                        className="btn-danger btn-icon btn-sm"
+                        aria-label="Удалить"
+                        title="Удалить"
                         onClick={() => void handleDeleteCategory(category)}
                       >
-                        Удалить
+                        <Trash2 size={15} aria-hidden="true" />
                       </button>
                     </div>
                   ) : null}

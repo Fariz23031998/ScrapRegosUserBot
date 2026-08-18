@@ -4,12 +4,14 @@ import {
   createTask,
   listTaskCategories,
   listTaskEmployees,
+  listTaskLocations,
   searchTaskClients,
   updateTask,
   type TaskPayload,
 } from "../api/tasks";
 import Modal from "./Modal";
 import type { FieldTask, TaskCategory, TaskClient } from "../lib/types";
+import { parseDisplayCurrency, type MoneyCurrency } from "../lib/money";
 
 const TASK_STATUSES = [
   { value: "new", label: "Новая" },
@@ -17,15 +19,29 @@ const TASK_STATUSES = [
   { value: "done", label: "Выполнена" },
 ] as const;
 
+const TASK_ACTIONS = [
+  { value: "install", label: "Установка" },
+  { value: "repair", label: "Ремонт" },
+] as const;
+
+const TASK_CURRENCIES = [
+  { value: "", label: "Обе валюты" },
+  { value: "UZS", label: "UZS" },
+  { value: "USD", label: "USD" },
+] as const;
+
 type TaskEditor = {
   id?: number;
   title: string;
   status: string;
+  action: string;
   category_id: string;
+  location_id: string;
   notes: string;
   address: string;
   manager_user_id: string;
   technician_user_id: string;
+  currency: "" | MoneyCurrency;
   client: TaskClient | null;
   clientQuery: string;
 };
@@ -34,11 +50,14 @@ function emptyEditor(): TaskEditor {
   return {
     title: "",
     status: "new",
+    action: "",
     category_id: "",
+    location_id: "",
     notes: "",
     address: "",
     manager_user_id: "",
     technician_user_id: "",
+    currency: "",
     client: null,
     clientQuery: "",
   };
@@ -49,11 +68,14 @@ function editorFromTask(task: FieldTask): TaskEditor {
     id: task.id,
     title: task.title,
     status: task.status || "new",
+    action: task.action || "",
     category_id: task.category_id ? String(task.category_id) : "",
+    location_id: task.location_id ? String(task.location_id) : "",
     notes: task.notes || "",
     address: task.address || "",
     manager_user_id: task.manager_user_id ? String(task.manager_user_id) : "",
     technician_user_id: task.technician_user_id ? String(task.technician_user_id) : "",
+    currency: parseDisplayCurrency(task.currency) || "",
     client: task.regos_client_id
       ? {
           id: task.regos_client_id,
@@ -103,10 +125,16 @@ export default function TaskEditorModal({
     queryFn: listTaskCategories,
     enabled: open && !categories.length,
   });
+  const locationsQuery = useQuery({
+    queryKey: ["task-locations"],
+    queryFn: listTaskLocations,
+    enabled: open,
+  });
 
   const employees = employeesQuery.data?.employees || [];
   const clients = clientsQuery.data?.clients || [];
   const categoryOptions = categories.length ? categories : categoriesQuery.data?.categories || [];
+  const locations = locationsQuery.data?.locations || [];
 
   const saveMutation = useMutation({
     mutationFn: (payload: { id?: number; body: TaskPayload }) => {
@@ -121,11 +149,14 @@ export default function TaskEditorModal({
     return {
       title: current.title.trim(),
       status: current.status,
+      action: current.action,
       notes: current.notes.trim(),
       address: current.address.trim(),
       category_id: current.category_id ? Number(current.category_id) : null,
+      location_id: current.location_id ? Number(current.location_id) : null,
       manager_user_id: current.manager_user_id ? Number(current.manager_user_id) : null,
       technician_user_id: current.technician_user_id ? Number(current.technician_user_id) : null,
+      currency: parseDisplayCurrency(current.currency),
       regos_client_id: current.client?.id ?? null,
       client_name: current.client?.name || "",
       client_phone: current.client?.phone || "",
@@ -143,6 +174,14 @@ export default function TaskEditorModal({
         className="stack-form"
         onSubmit={(event) => {
           event.preventDefault();
+          if (!TASK_ACTIONS.some((item) => item.value === editor.action)) {
+            setFormError("Выберите тип задачи: установка или ремонт.");
+            return;
+          }
+          if (!editor.location_id) {
+            setFormError("Выберите локацию.");
+            return;
+          }
           setFormError("");
           saveMutation.mutate({ id: editor.id, body: buildPayload(editor) });
         }}
@@ -158,15 +197,16 @@ export default function TaskEditorModal({
         </label>
         <div className="filters-grid">
           <label>
-            Категория
+            Тип
             <select
-              value={editor.category_id}
-              onChange={(event) => setEditor((prev) => ({ ...prev, category_id: event.target.value }))}
+              required
+              value={editor.action}
+              onChange={(event) => setEditor((prev) => ({ ...prev, action: event.target.value }))}
             >
-              <option value="">Без категории</option>
-              {categoryOptions.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
+              <option value="">Выберите тип</option>
+              {TASK_ACTIONS.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
                 </option>
               ))}
             </select>
@@ -184,7 +224,54 @@ export default function TaskEditorModal({
               ))}
             </select>
           </label>
+          <label>
+            Валюта
+            <select
+              value={editor.currency}
+              onChange={(event) =>
+                setEditor((prev) => ({
+                  ...prev,
+                  currency: parseDisplayCurrency(event.target.value) || "",
+                }))
+              }
+            >
+              {TASK_CURRENCIES.map((item) => (
+                <option key={item.value || "both"} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
+        <label>
+          Категория
+          <select
+            value={editor.category_id}
+            onChange={(event) => setEditor((prev) => ({ ...prev, category_id: event.target.value }))}
+          >
+            <option value="">Без категории</option>
+            {categoryOptions.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Локация
+          <select
+            required
+            value={editor.location_id}
+            onChange={(event) => setEditor((prev) => ({ ...prev, location_id: event.target.value }))}
+          >
+            <option value="">Выберите локацию</option>
+            {locations.map((location) => (
+              <option key={location.id} value={location.id}>
+                {location.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="field">
           <span>Клиент REGOS</span>
           {editor.client ? (

@@ -70,9 +70,17 @@ export default function MoneyFields({
   );
 }
 
-export function MoneyCell({ primary, muted }: { primary: string; muted?: string }) {
+export function MoneyCell({
+  primary,
+  muted,
+  className,
+}: {
+  primary: string;
+  muted?: string;
+  className?: string;
+}) {
   return (
-    <div className="money-pair">
+    <div className={className ? `money-pair ${className}` : "money-pair"}>
       <div>{primary}</div>
       {muted ? <div className="money-pair__muted">{muted}</div> : null}
     </div>

@@ -1,4 +1,5 @@
 const { getUsdUzsRate, normalizeMoneyInput, presentMoneyFields } = require('./money');
+const { normalizeCatalogStaffInput, presentCatalogStaffFields } = require('./catalog-staff');
 const { attachCatalogImages, deleteCatalogImagesForEntity, ensureCatalogImageTables } = require('./catalog-images');
 const {
   appendCategoryFilter,
@@ -11,6 +12,7 @@ const MAX_NAME = 200;
 const MAX_DESCRIPTION = 2000;
 const DEVICE_SELECT = `
   d.id, d.name, d.description, d.cost_amount, d.cost_currency, d.price_uzs, d.price_usd,
+  d.manager_sale_percent, d.technician_score,
   d.category_id, d.created_at, d.updated_at, c.name AS category_name
 `;
 
@@ -41,6 +43,8 @@ function ensureDeviceTables(db) {
   ensureColumn(db, 'devices', 'cost_currency', "TEXT NOT NULL DEFAULT 'UZS'");
   ensureColumn(db, 'devices', 'price_uzs', 'REAL');
   ensureColumn(db, 'devices', 'price_usd', 'REAL');
+  ensureColumn(db, 'devices', 'manager_sale_percent', 'REAL NOT NULL DEFAULT 0');
+  ensureColumn(db, 'devices', 'technician_score', 'REAL NOT NULL DEFAULT 0');
   db.exec(`
     UPDATE devices
     SET price_uzs = 0
@@ -57,6 +61,7 @@ function mapDevice(row, rate) {
     description: row.description || '',
     ...mapCategoryFields(row),
     ...presentMoneyFields(row, rate),
+    ...presentCatalogStaffFields(row),
     images: [],
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -73,6 +78,7 @@ function normalizeDeviceInput(db, input = {}) {
     description: description || null,
     category_id: resolveCatalogCategoryId(db, 'device', input.category_id),
     ...normalizeMoneyInput(input),
+    ...normalizeCatalogStaffInput(input),
   };
 }
 
@@ -138,8 +144,9 @@ function createDevice(db, input) {
   const result = db
     .prepare(
       `INSERT INTO devices (
-         name, description, category_id, cost_amount, cost_currency, price_uzs, price_usd, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+         name, description, category_id, cost_amount, cost_currency, price_uzs, price_usd,
+         manager_sale_percent, technician_score, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
     )
     .run(
       device.name,
@@ -148,7 +155,9 @@ function createDevice(db, input) {
       device.cost_amount,
       device.cost_currency,
       device.price_uzs,
-      device.price_usd
+      device.price_usd,
+      device.manager_sale_percent,
+      device.technician_score
     );
   return getDevice(db, Number(result.lastInsertRowid));
 }
@@ -164,11 +173,15 @@ function updateDevice(db, id, input = {}) {
     cost_currency: input.cost_currency != null ? input.cost_currency : current.cost_currency,
     price_uzs: input.price_uzs !== undefined ? input.price_uzs : current.price_uzs,
     price_usd: input.price_usd !== undefined ? input.price_usd : current.price_usd,
+    manager_sale_percent:
+      input.manager_sale_percent !== undefined ? input.manager_sale_percent : current.manager_sale_percent,
+    technician_score: input.technician_score !== undefined ? input.technician_score : current.technician_score,
   });
   db.prepare(
     `UPDATE devices
      SET name = ?, description = ?, category_id = ?, cost_amount = ?, cost_currency = ?,
-         price_uzs = ?, price_usd = ?, updated_at = datetime('now')
+         price_uzs = ?, price_usd = ?, manager_sale_percent = ?, technician_score = ?,
+         updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     device.name,
@@ -178,6 +191,8 @@ function updateDevice(db, id, input = {}) {
     device.cost_currency,
     device.price_uzs,
     device.price_usd,
+    device.manager_sale_percent,
+    device.technician_score,
     current.id
   );
   return getDevice(db, current.id);

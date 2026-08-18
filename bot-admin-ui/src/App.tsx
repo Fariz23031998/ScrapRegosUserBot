@@ -15,6 +15,7 @@ const TicketsPage = lazy(() => import("./pages/TicketsPage"));
 const TicketDetailPage = lazy(() => import("./pages/TicketDetailPage"));
 const TasksPage = lazy(() => import("./pages/TasksPage"));
 const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
+const TaskRefundPage = lazy(() => import("./pages/TaskRefundPage"));
 const DevicesPage = lazy(() => import("./pages/DevicesPage"));
 const ServicesPage = lazy(() => import("./pages/ServicesPage"));
 const TechnicalSupportPage = lazy(() => import("./pages/TechnicalSupportPage"));
@@ -116,6 +117,14 @@ export default function App() {
               element={
                 <SuspensePage>
                   <TasksPage />
+                </SuspensePage>
+              }
+            />
+            <Route
+              path="tasks/:id/refund"
+              element={
+                <SuspensePage>
+                  <TaskRefundPage />
                 </SuspensePage>
               }
             />

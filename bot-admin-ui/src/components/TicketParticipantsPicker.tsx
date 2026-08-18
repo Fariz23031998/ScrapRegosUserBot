@@ -14,6 +14,8 @@ export type TicketParticipantsPickerProps = {
   value: number[];
   onChange: (ids: number[]) => void;
   disabled?: boolean;
+  label?: string;
+  emptyLabel?: string;
 };
 
 function userLabel(user: TicketParticipantUser): string {
@@ -40,6 +42,8 @@ export default function TicketParticipantsPicker({
   value,
   onChange,
   disabled = false,
+  label = "Участники",
+  emptyLabel = "Участники не выбраны.",
 }: TicketParticipantsPickerProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -83,10 +87,10 @@ export default function TicketParticipantsPicker({
 
   return (
     <div className="field ticket-participants-picker">
-      <span>Участники</span>
+      <span>{label}</span>
       <div className="ticket-participants-picker__selected">
         {selectedUsers.length === 0 ? (
-          <p className="ticket-participants-picker__empty">Участники не выбраны.</p>
+          <p className="ticket-participants-picker__empty">{emptyLabel}</p>
         ) : (
           <ul className="ticket-participants-picker__chips">
             {selectedUsers.map((user) => (

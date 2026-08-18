@@ -13,6 +13,7 @@ import {
 import EntityCards from "../components/EntityCards";
 import GroupTopicTestModal from "../components/GroupTopicTestModal";
 import LoadingState from "../components/LoadingState";
+import SettingsLocationsTab from "../components/SettingsLocationsTab";
 import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -32,13 +33,14 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Gemini",
 };
 
-type SettingsTab = "ai" | "channels" | "telegram" | "currency";
+type SettingsTab = "ai" | "channels" | "telegram" | "currency" | "locations";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
   { id: "ai", title: "AI" },
   { id: "channels", title: "Каналы" },
   { id: "telegram", title: "Telegram" },
   { id: "currency", title: "Валюта" },
+  { id: "locations", title: "Локации и оплата" },
 ];
 
 function emptyTelegramTicketSettings(): TelegramTicketSettings {
@@ -1210,6 +1212,8 @@ export default function SettingsPage() {
             </form>
           )
         ) : null}
+
+        {tab === "locations" ? <SettingsLocationsTab canEdit={canEdit} /> : null}
 
         {tab === "currency" ? (
           rateQuery.isLoading ? (

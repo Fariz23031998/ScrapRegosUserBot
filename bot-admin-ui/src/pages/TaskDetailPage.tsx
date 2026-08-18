@@ -1,27 +1,42 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { ArrowLeft, Eye, Minus, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { deleteDeviceImage, listDeviceCategories, listDevices, uploadDeviceImages } from "../api/devices";
-import { deleteServiceImage, listServiceCategories, listServices, uploadServiceImages } from "../api/services";
+import { listDeviceCategories, listDevices } from "../api/devices";
+import { listServiceCategories, listServices } from "../api/services";
 import { getExchangeRate } from "../api/settings";
 import {
   addTaskDevice,
   addTaskService,
+  applyTaskDiscount,
   deleteTaskDevice,
+  deleteTaskPayment,
   deleteTaskService,
   getTask,
   listTaskCategories,
+  updateTaskDevice,
+  updateTaskService,
 } from "../api/tasks";
 import CatalogImageGallery, { CatalogThumb } from "../components/CatalogImageGallery";
 import LoadingState from "../components/LoadingState";
+import Modal from "../components/Modal";
 import { MoneyCell } from "../components/MoneyFields";
 import SearchField from "../components/SearchField";
 import TaskEditorModal from "../components/TaskEditorModal";
+import TaskPaymentModal from "../components/TaskPaymentModal";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { DEFAULT_USD_UZS_RATE, catalogPriceLines, formatMoneyLine } from "../lib/money";
+import {
+  DEFAULT_USD_UZS_RATE,
+  cartOperationPriceLines,
+  catalogPriceLines,
+  formatMoneyLine,
+  hasCartDiscount,
+  parseDisplayCurrency,
+  totalsPriceLines,
+  type MoneyCurrency,
+} from "../lib/money";
 import type {
   CatalogCategory,
   CatalogDevice,
@@ -29,13 +44,32 @@ import type {
   CatalogService,
   FieldTask,
   TaskDeviceLine,
+  TaskPayment,
   TaskServiceLine,
 } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
 
 type CatalogKind = "device" | "service";
-type KindFilter = "all" | CatalogKind;
 type CategoryKey = "all" | `${CatalogKind}:none` | `${CatalogKind}:${number}`;
+
+const MAX_LINE_QUANTITY = 999;
+
+function lineQuantity(value: unknown): number {
+  const qty = Number(value);
+  if (!Number.isFinite(qty) || qty < 1) return 1;
+  return Math.min(MAX_LINE_QUANTITY, Math.trunc(qty));
+}
+
+function discountLabel(line: { discount_type?: string | null; discount_value?: number | null; discount_currency?: string | null }) {
+  if (!line.discount_type || !Number(line.discount_value)) return "";
+  if (line.discount_type === "percent") return `−${Number(line.discount_value)}%`;
+  const currency = line.discount_currency === "USD" ? "USD" : "UZS";
+  return `−${formatMoneyLine(Number(line.discount_value), currency)}`;
+}
+
+function cartLineKey(kind: CatalogKind, id?: number) {
+  return id ? `${kind}:${id}` : "";
+}
 
 type CatalogProduct = {
   kind: CatalogKind;
@@ -133,6 +167,310 @@ function CategoryNavButton({
   );
 }
 
+function QuantityStepper({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: number;
+  disabled?: boolean;
+  onChange: (quantity: number) => void;
+}) {
+  const qty = lineQuantity(value);
+  const [draft, setDraft] = useState(String(qty));
+
+  useEffect(() => {
+    setDraft(String(qty));
+  }, [qty]);
+
+  function commit(raw: string) {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      setDraft(String(qty));
+      return;
+    }
+    const next = Math.min(MAX_LINE_QUANTITY, Math.max(1, Math.trunc(parsed)));
+    setDraft(String(next));
+    if (next !== qty) onChange(next);
+  }
+
+  return (
+    <div className="task-qty">
+      <button
+        type="button"
+        className="task-qty__btn"
+        aria-label="Уменьшить количество"
+        title="Уменьшить"
+        disabled={disabled || qty <= 1}
+        onClick={() => onChange(qty - 1)}
+      >
+        <Minus size={14} aria-hidden="true" />
+      </button>
+      <input
+        className="task-qty__input"
+        type="number"
+        min={1}
+        max={MAX_LINE_QUANTITY}
+        inputMode="numeric"
+        aria-label="Количество"
+        value={draft}
+        disabled={disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => commit(draft)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit(draft);
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="task-qty__btn"
+        aria-label="Увеличить количество"
+        title="Увеличить"
+        disabled={disabled || qty >= MAX_LINE_QUANTITY}
+        onClick={() => onChange(qty + 1)}
+      >
+        <Plus size={14} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+function DiscountBar({
+  disabled,
+  hasSelection,
+  lockedCurrency,
+  onApplySelected,
+  onApplyAll,
+  onClear,
+}: {
+  disabled?: boolean;
+  hasSelection: boolean;
+  lockedCurrency?: "UZS" | "USD" | null;
+  onApplySelected: (payload: { type: "percent" | "amount"; value: number; currency: "UZS" | "USD" }) => void;
+  onApplyAll: (payload: { type: "percent" | "amount"; value: number; currency: "UZS" | "USD" }) => void;
+  onClear: () => void;
+}) {
+  const [type, setType] = useState<"percent" | "amount">("percent");
+  const [value, setValue] = useState("");
+  const [currency, setCurrency] = useState<"UZS" | "USD">(lockedCurrency || "UZS");
+
+  useEffect(() => {
+    if (lockedCurrency) setCurrency(lockedCurrency);
+  }, [lockedCurrency]);
+
+  function parsed() {
+    const amount = Number(value.replace(",", "."));
+    if (!Number.isFinite(amount) || amount < 0) return null;
+    if (type === "percent" && amount > 100) return null;
+    return { type, value: amount, currency: lockedCurrency || currency };
+  }
+
+  return (
+    <div className="task-discount">
+      <div className="task-discount__row">
+        <label>
+          Скидка
+          <select
+            value={type}
+            disabled={disabled}
+            onChange={(event) => setType(event.target.value === "amount" ? "amount" : "percent")}
+          >
+            <option value="percent">Процент</option>
+            <option value="amount">Сумма</option>
+          </select>
+        </label>
+        <label>
+          Значение
+          <input
+            type="number"
+            min={0}
+            max={type === "percent" ? 100 : undefined}
+            step="any"
+            value={value}
+            disabled={disabled}
+            onChange={(event) => setValue(event.target.value)}
+            placeholder={type === "percent" ? "0–100" : "0"}
+          />
+        </label>
+        {type === "amount" && !lockedCurrency ? (
+          <label>
+            Валюта
+            <select
+              value={currency}
+              disabled={disabled}
+              onChange={(event) => setCurrency(event.target.value === "USD" ? "USD" : "UZS")}
+            >
+              <option value="UZS">UZS</option>
+              <option value="USD">USD</option>
+            </select>
+          </label>
+        ) : null}
+      </div>
+      <div className="task-discount__actions">
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={disabled || !hasSelection || parsed() == null}
+          onClick={() => {
+            const payload = parsed();
+            if (payload) onApplySelected(payload);
+          }}
+        >
+          К выбранным
+        </button>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={disabled || parsed() == null}
+          onClick={() => {
+            const payload = parsed();
+            if (payload) onApplyAll(payload);
+          }}
+        >
+          Ко всем
+        </button>
+        <button type="button" className="btn-secondary btn-sm" disabled={disabled} onClick={onClear}>
+          Сбросить
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CartLine({
+  images,
+  alt,
+  title,
+  badge,
+  description,
+  notes,
+  price,
+  originalPrice,
+  discountText,
+  quantity,
+  selected,
+  canEdit,
+  removing,
+  updating,
+  onToggleSelected,
+  onQuantityChange,
+  onRemove,
+}: {
+  images?: CatalogImage[];
+  alt: string;
+  title: string;
+  badge?: string;
+  description?: string;
+  notes?: string;
+  price: { primary: string; muted?: string };
+  originalPrice?: { primary: string; muted?: string } | null;
+  discountText?: string;
+  quantity: number;
+  selected: boolean;
+  canEdit: boolean;
+  removing: boolean;
+  updating: boolean;
+  onToggleSelected: () => void;
+  onQuantityChange: (quantity: number) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <li className={`task-product-card task-product-card--cart${selected ? " is-selected" : ""}`}>
+      {canEdit ? (
+        <label className="task-cart-line__check">
+          <input type="checkbox" checked={selected} onChange={onToggleSelected} />
+        </label>
+      ) : null}
+      <CatalogThumb images={images} alt={alt} />
+      <div className="task-product-card__body">
+        <div className="task-product-card__title-row">
+          <h3>{title}</h3>
+          {badge ? <span className="task-product-card__badge">{badge}</span> : null}
+        </div>
+        {description ? <p className="task-product-card__description">{description}</p> : null}
+        {notes ? <p className="muted-copy">{notes}</p> : null}
+        <div className="task-product-card__price">
+          <span className="task-product-card__total-label">Итого</span>
+          {originalPrice ? (
+            <MoneyCell primary={originalPrice.primary} muted={originalPrice.muted} className="money-pair--old" />
+          ) : null}
+          <MoneyCell primary={price.primary} muted={price.muted} />
+          {discountText ? <span className="task-product-card__discount">{discountText}</span> : null}
+        </div>
+      </div>
+      {canEdit ? (
+        <QuantityStepper value={quantity} disabled={updating || removing} onChange={onQuantityChange} />
+      ) : (
+        <span className="task-qty-read">{`× ${lineQuantity(quantity)}`}</span>
+      )}
+      {canEdit ? (
+        <button
+          type="button"
+          className="btn-danger btn-icon btn-sm"
+          aria-label="Удалить"
+          title="Удалить"
+          onClick={onRemove}
+          disabled={removing || updating}
+        >
+          <Trash2 size={16} aria-hidden="true" />
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
+function ProductPreviewModal({
+  product,
+  rate,
+  displayCurrency,
+  onClose,
+}: {
+  product: CatalogProduct | null;
+  rate: number;
+  displayCurrency: MoneyCurrency | null;
+  onClose: () => void;
+}) {
+  const price = product ? catalogPriceLines(product, rate, displayCurrency) : { primary: "—", muted: "" };
+  return (
+    <Modal
+      open={Boolean(product)}
+      title={product?.name || "Товар"}
+      onClose={onClose}
+      size="wide"
+      className="modal--product-preview"
+      closeOnOverlayClick
+    >
+      {product ? (
+        <div className="task-product-preview">
+          <CatalogImageGallery images={product.images} alt={product.name} variant="compact" />
+          <div className="task-product-preview__body">
+            <div className="task-shop-card__meta">
+              <span className="task-product-card__badge">
+                {product.kind === "device" ? "Устройство" : "Услуга"}
+              </span>
+              {product.category?.name ? (
+                <span className="task-shop-card__category">{product.category.name}</span>
+              ) : null}
+            </div>
+            {product.description ? (
+              <p className="task-product-preview__description">{product.description}</p>
+            ) : (
+              <p className="muted-copy">Нет описания.</p>
+            )}
+            <div className="task-product-preview__price">
+              <span className="task-product-card__total-label">Цена</span>
+              <MoneyCell primary={price.primary} muted={price.muted} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
 export default function TaskDetailPage() {
   const { id } = useParams();
   const taskId = Number(id);
@@ -141,15 +479,20 @@ export default function TaskDetailPage() {
   const queryClient = useQueryClient();
   const isMobile = useMediaQuery("(max-width: 960px)");
   const [editOpen, setEditOpen] = useState(false);
+  const [paymentOpen, setPaymentOpen] = useState(false);
   const [mobileView, setMobileView] = useState<"catalog" | "task">("catalog");
-  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [categoryKey, setCategoryKey] = useState<CategoryKey>("all");
   const [productQuery, setProductQuery] = useState("");
   const [lineError, setLineError] = useState("");
-  const [uploadingKey, setUploadingKey] = useState("");
   const [addingKey, setAddingKey] = useState("");
+  const [updatingLineKey, setUpdatingLineKey] = useState("");
+  const [selectedLineKeys, setSelectedLineKeys] = useState<string[]>([]);
+  const [viewingProduct, setViewingProduct] = useState<CatalogProduct | null>(null);
 
   const canEdit = hasPermission("tasks_edit");
+  const canTakePayment = hasPermission("tasks_payment_create");
+  const canDeletePayment = hasPermission("tasks_payment_delete");
+  const canRefund = canEdit && canTakePayment;
   const validId = Number.isFinite(taskId) && taskId > 0;
 
   const taskQuery = useQuery({
@@ -183,6 +526,7 @@ export default function TaskDetailPage() {
   });
 
   const task = taskQuery.data?.task;
+  const displayCurrency = parseDisplayCurrency(task?.currency);
   const rate = rateQuery.data?.usd_uzs_rate || DEFAULT_USD_UZS_RATE;
   const catalogDevices = devicesQuery.data?.devices || [];
   const catalogServices = servicesQuery.data?.services || [];
@@ -193,11 +537,22 @@ export default function TaskDetailPage() {
     () => toProducts(catalogDevices, catalogServices),
     [catalogDevices, catalogServices],
   );
+  const inTaskQty = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const line of task?.devices || []) {
+      const key = `device:${line.device_id}`;
+      map.set(key, (map.get(key) || 0) + lineQuantity(line.quantity));
+    }
+    for (const line of task?.services || []) {
+      const key = `service:${line.service_id}`;
+      map.set(key, (map.get(key) || 0) + lineQuantity(line.quantity));
+    }
+    return map;
+  }, [task]);
 
   const filteredProducts = useMemo(() => {
     const needle = productQuery.trim().toLowerCase();
     return products.filter((product) => {
-      if (kindFilter !== "all" && product.kind !== kindFilter) return false;
       if (!matchesCategory(product, categoryKey)) return false;
       if (!needle) return true;
       return (
@@ -206,7 +561,7 @@ export default function TaskDetailPage() {
         (product.category?.name || "").toLowerCase().includes(needle)
       );
     });
-  }, [products, kindFilter, categoryKey, productQuery]);
+  }, [products, categoryKey, productQuery]);
 
   function countProducts(kind?: CatalogKind, key: CategoryKey = "all") {
     return products.filter((product) => {
@@ -222,13 +577,8 @@ export default function TaskDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ["services"] });
   }
 
-  function selectKind(next: KindFilter) {
-    setKindFilter(next);
-    setCategoryKey("all");
-  }
-
   const addDeviceMutation = useMutation({
-    mutationFn: (payload: { device_id: number; action: "install" | "repair" }) =>
+    mutationFn: (payload: { device_id: number; action?: "install" | "repair" }) =>
       addTaskDevice(taskId, payload),
     onSuccess: () => {
       setLineError("");
@@ -266,6 +616,71 @@ export default function TaskDetailPage() {
     onError: (error: Error) => setLineError(error.message),
   });
 
+  const updateDeviceMutation = useMutation({
+    mutationFn: (payload: { lineId: number; quantity: number }) =>
+      updateTaskDevice(taskId, payload.lineId, { quantity: payload.quantity }),
+    onSuccess: () => {
+      setLineError("");
+      setUpdatingLineKey("");
+      invalidateTask();
+    },
+    onError: (error: Error) => {
+      setUpdatingLineKey("");
+      setLineError(error.message);
+    },
+  });
+
+  const updateServiceMutation = useMutation({
+    mutationFn: (payload: { lineId: number; quantity: number }) =>
+      updateTaskService(taskId, payload.lineId, { quantity: payload.quantity }),
+    onSuccess: () => {
+      setLineError("");
+      setUpdatingLineKey("");
+      invalidateTask();
+    },
+    onError: (error: Error) => {
+      setUpdatingLineKey("");
+      setLineError(error.message);
+    },
+  });
+
+  const discountMutation = useMutation({
+    mutationFn: (payload: {
+      scope?: "all" | "selected";
+      lines?: Array<{ kind: "device" | "service"; id: number }>;
+      type?: "percent" | "amount" | "none";
+      value?: number;
+      currency?: "UZS" | "USD";
+      clear?: boolean;
+    }) => applyTaskDiscount(taskId, payload),
+    onSuccess: () => {
+      setLineError("");
+      invalidateTask();
+    },
+    onError: (error: Error) => setLineError(error.message),
+  });
+
+  const removePaymentMutation = useMutation({
+    mutationFn: (paymentId: number) => deleteTaskPayment(taskId, paymentId),
+    onSuccess: () => {
+      setLineError("");
+      invalidateTask();
+    },
+    onError: (error: Error) => setLineError(error.message),
+  });
+
+  async function handleRemovePayment(payment: TaskPayment) {
+    const ok = await confirm({
+      message: `Удалить оплату «${payment.payment_type_name}» на ${formatMoneyLine(
+        payment.amount,
+        payment.currency,
+      )}?`,
+      variant: "danger",
+      confirmLabel: "Удалить",
+    });
+    if (ok) removePaymentMutation.mutate(payment.id);
+  }
+
   async function handleRemoveDevice(line: TaskDeviceLine) {
     if (!line.id) return;
     const ok = await confirm({
@@ -286,90 +701,93 @@ export default function TaskDetailPage() {
     if (ok) removeServiceMutation.mutate(line.id);
   }
 
-  function handleAddProduct(product: CatalogProduct, action?: "install" | "repair") {
-    if (!canEdit) return;
+  function handleAddProduct(product: CatalogProduct) {
+    if (!canEdit || addingKey || updatingLineKey) return;
+    const currentQty = inTaskQty.get(productKey(product)) || 0;
+    if (currentQty >= MAX_LINE_QUANTITY) return;
     if (product.kind === "device") {
-      const nextAction = action || "install";
-      setAddingKey(`${productKey(product)}:${nextAction}`);
-      addDeviceMutation.mutate({ device_id: product.id, action: nextAction });
+      const action = task?.action === "repair" ? "repair" : "install";
+      setAddingKey(productKey(product));
+      addDeviceMutation.mutate({ device_id: product.id, action });
       return;
     }
     setAddingKey(productKey(product));
     addServiceMutation.mutate(product.id);
   }
 
-  async function handleUploadDevice(line: TaskDeviceLine, files: File[]) {
-    setUploadingKey(`device-${line.device_id}`);
-    setLineError("");
-    try {
-      await uploadDeviceImages(line.device_id, files);
-      invalidateTask();
-    } catch (error) {
-      setLineError(error instanceof Error ? error.message : "Не удалось загрузить изображение.");
-    } finally {
-      setUploadingKey("");
-    }
+  function handleDeviceQuantity(line: TaskDeviceLine, quantity: number) {
+    if (!line.id || updatingLineKey) return;
+    setUpdatingLineKey(`device:${line.id}`);
+    updateDeviceMutation.mutate({ lineId: line.id, quantity });
   }
 
-  async function handleUploadService(line: TaskServiceLine, files: File[]) {
-    setUploadingKey(`service-${line.service_id}`);
-    setLineError("");
-    try {
-      await uploadServiceImages(line.service_id, files);
-      invalidateTask();
-    } catch (error) {
-      setLineError(error instanceof Error ? error.message : "Не удалось загрузить изображение.");
-    } finally {
-      setUploadingKey("");
-    }
+  function handleServiceQuantity(line: TaskServiceLine, quantity: number) {
+    if (!line.id || updatingLineKey) return;
+    setUpdatingLineKey(`service:${line.id}`);
+    updateServiceMutation.mutate({ lineId: line.id, quantity });
   }
 
-  async function handleDeleteDeviceImage(line: TaskDeviceLine, image: CatalogImage) {
-    const ok = await confirm({
-      message: "Удалить это фото устройства? Оно пропадёт во всех задачах.",
-      variant: "danger",
-      confirmLabel: "Удалить",
+  function toggleLineSelected(key: string) {
+    setSelectedLineKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  }
+
+  function applyDiscount(
+    scope: "all" | "selected",
+    payload: { type: "percent" | "amount"; value: number; currency: "UZS" | "USD" },
+  ) {
+    const lines =
+      scope === "selected"
+        ? selectedLineKeys
+            .map((key) => {
+              const [kind, rawId] = key.split(":");
+              const id = Number(rawId);
+              if ((kind !== "device" && kind !== "service") || !Number.isFinite(id)) return null;
+              return { kind, id };
+            })
+            .filter((item): item is { kind: "device" | "service"; id: number } => Boolean(item))
+        : undefined;
+    if (scope === "selected" && !lines?.length) {
+      setLineError("Выберите позиции для скидки.");
+      return;
+    }
+    discountMutation.mutate({
+      scope,
+      lines,
+      type: payload.type,
+      value: payload.value,
+      currency: payload.currency,
     });
-    if (!ok) return;
-    setLineError("");
-    try {
-      await deleteDeviceImage(line.device_id, image.id);
-      invalidateTask();
-    } catch (error) {
-      setLineError(error instanceof Error ? error.message : "Не удалось удалить изображение.");
-    }
-  }
-
-  async function handleDeleteServiceImage(line: TaskServiceLine, image: CatalogImage) {
-    const ok = await confirm({
-      message: "Удалить это фото услуги? Оно пропадёт во всех задачах.",
-      variant: "danger",
-      confirmLabel: "Удалить",
-    });
-    if (!ok) return;
-    setLineError("");
-    try {
-      await deleteServiceImage(line.service_id, image.id);
-      invalidateTask();
-    } catch (error) {
-      setLineError(error instanceof Error ? error.message : "Не удалось удалить изображение.");
-    }
   }
 
   if (!validId) return <p className="message error">Некорректный идентификатор задачи.</p>;
   if (taskQuery.isLoading) return <LoadingState message="Загрузка задачи…" />;
   if (!task) return <p className="message error">Задача не найдена.</p>;
 
-  const totals = task.totals || { cost_uzs: 0, cost_usd: 0, price_uzs: 0, price_usd: 0 };
+  const totals = task.totals || {
+    cost_uzs: 0,
+    cost_usd: 0,
+    price_uzs: 0,
+    price_usd: 0,
+    price_without_discount_uzs: 0,
+    price_without_discount_usd: 0,
+  };
   const devices = task.devices || [];
   const services = task.services || [];
-  const inTask = new Set([
-    ...devices.map((line) => `device:${line.device_id}`),
-    ...services.map((line) => `service:${line.service_id}`),
-  ]);
+  const payments = task.payments || [];
+  const paymentTotals = task.payment_totals || { paid_uzs: 0, paid_usd: 0, due_uzs: 0, due_usd: 0 };
+  const overpaid = Number(paymentTotals.due_uzs) < -0.0001;
+  const hasCartLines = devices.length > 0 || services.length > 0;
+  const cartLineKeys = [
+    ...devices.map((line) => cartLineKey("device", line.id)),
+    ...services.map((line) => cartLineKey("service", line.id)),
+  ].filter(Boolean);
+  const activeSelectedKeys = selectedLineKeys.filter((key) => cartLineKeys.includes(key));
+  const totalsHaveDiscount =
+    Number(totals.price_without_discount_uzs) > 0 &&
+    Number(totals.price_uzs) < Number(totals.price_without_discount_uzs) - 0.0001;
   const catalogLoading = devicesQuery.isPending || servicesQuery.isPending;
-  const showDeviceCats = kindFilter !== "service";
-  const showServiceCats = kindFilter !== "device";
   const uncategorizedDevices = countProducts("device", "device:none");
   const uncategorizedServices = countProducts("service", "service:none");
 
@@ -382,7 +800,7 @@ export default function TaskDetailPage() {
     if (!categories.length && !uncategorizedCount) return null;
     return (
       <div className="task-catalog__group">
-        {kindFilter === "all" ? <h3>{title}</h3> : null}
+        <h3>{title}</h3>
         {categories.map((category) => {
           const key = `${kind}:${category.id}` as CategoryKey;
           return (
@@ -414,12 +832,28 @@ export default function TaskDetailPage() {
           <Link to="/tasks" className="ticket-detail-header__back" aria-label="К списку задач" title="К списку задач">
             <ArrowLeft size={18} aria-hidden="true" />
           </Link>
-          <h1>{task.title}</h1>
-          {canEdit ? (
-            <button type="button" className="btn-secondary btn-sm" onClick={() => setEditOpen(true)}>
-              Изменить
-            </button>
-          ) : null}
+          <div className="ticket-detail-header__heading">
+            <h1>{task.title}</h1>
+            {canEdit ? (
+              <button
+                type="button"
+                className="btn-secondary btn-sm ticket-detail-header__edit"
+                onClick={() => setEditOpen(true)}
+              >
+                <Pencil size={14} aria-hidden="true" />
+                Изменить
+              </button>
+            ) : null}
+            {canRefund && hasCartLines ? (
+              <Link
+                to={`/tasks/${taskId}/refund`}
+                className="btn-secondary btn-sm ticket-detail-header__edit"
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+                Возврат
+              </Link>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -455,51 +889,30 @@ export default function TaskDetailPage() {
           }`}
         >
           <div className="task-catalog__toolbar">
-            <div className="role-tabs" role="tablist" aria-label="Тип товара">
-              <button
-                type="button"
-                className={`role-tab${kindFilter === "all" ? " role-tab--active" : ""}`}
-                onClick={() => selectKind("all")}
-              >
-                Все
-              </button>
-              <button
-                type="button"
-                className={`role-tab${kindFilter === "device" ? " role-tab--active" : ""}`}
-                onClick={() => selectKind("device")}
-              >
-                Устройства
-              </button>
-              <button
-                type="button"
-                className={`role-tab${kindFilter === "service" ? " role-tab--active" : ""}`}
-                onClick={() => selectKind("service")}
-              >
-                Услуги
-              </button>
-            </div>
             <SearchField
               value={productQuery}
               onChange={setProductQuery}
               placeholder="Поиск товара…"
               className="task-catalog__search"
             />
+            {canEdit ? (
+              <p className="muted-copy task-catalog__hint">
+                Нажмите на товар, чтобы добавить в задачу
+                {task.action_label ? ` (${task.action_label})` : ""}. Повторное нажатие увеличит количество.
+              </p>
+            ) : null}
           </div>
 
           <div className="task-catalog">
             <nav className="task-catalog__nav" aria-label="Категории">
               <CategoryNavButton
                 label="Все"
-                count={countProducts(kindFilter === "all" ? undefined : kindFilter)}
+                count={countProducts()}
                 active={categoryKey === "all"}
                 onClick={() => setCategoryKey("all")}
               />
-              {showDeviceCats
-                ? renderCategoryGroup("Устройства", "device", deviceCategories, uncategorizedDevices)
-                : null}
-              {showServiceCats
-                ? renderCategoryGroup("Услуги", "service", serviceCategories, uncategorizedServices)
-                : null}
+              {renderCategoryGroup("Устройства", "device", deviceCategories, uncategorizedDevices)}
+              {renderCategoryGroup("Услуги", "service", serviceCategories, uncategorizedServices)}
             </nav>
 
             <div className="task-catalog__grid-wrap">
@@ -514,13 +927,13 @@ export default function TaskDetailPage() {
               ) : (
                 <ul className="task-shop-grid">
                   {filteredProducts.map((product) => {
-                    const price = catalogPriceLines(product, rate);
-                    const added = inTask.has(productKey(product));
-                    const busyDeviceInstall = addingKey === `${productKey(product)}:install`;
-                    const busyDeviceRepair = addingKey === `${productKey(product)}:repair`;
-                    const busyService = addingKey === productKey(product);
-                    return (
-                      <li key={productKey(product)} className="task-shop-card">
+                    const price = catalogPriceLines(product, rate, displayCurrency);
+                    const addedQty = inTaskQty.get(productKey(product)) || 0;
+                    const added = addedQty > 0;
+                    const busy = addingKey === productKey(product);
+                    const atMax = addedQty >= MAX_LINE_QUANTITY;
+                    const cardBody = (
+                      <>
                         <CatalogThumb images={product.images} alt={product.name} />
                         <div className="task-shop-card__body">
                           <div className="task-shop-card__meta">
@@ -530,7 +943,12 @@ export default function TaskDetailPage() {
                             {product.category?.name ? (
                               <span className="task-shop-card__category">{product.category.name}</span>
                             ) : null}
-                            {added ? <span className="task-shop-card__in-cart">В задаче</span> : null}
+                            {added ? (
+                              <span className="task-shop-card__in-cart">
+                                {addedQty > 1 ? `В задаче · ${addedQty}` : "В задаче"}
+                              </span>
+                            ) : null}
+                            {busy ? <span className="task-shop-card__in-cart">Добавление…</span> : null}
                           </div>
                           <h3>{product.name}</h3>
                           {product.description ? (
@@ -539,38 +957,36 @@ export default function TaskDetailPage() {
                           <div className="task-product-card__price">
                             <MoneyCell primary={price.primary} muted={price.muted} />
                           </div>
-                          {canEdit ? (
-                            product.kind === "device" ? (
-                              <div className="task-shop-card__actions">
-                                <button
-                                  type="button"
-                                  className="btn-primary btn-sm"
-                                  disabled={addDeviceMutation.isPending}
-                                  onClick={() => handleAddProduct(product, "install")}
-                                >
-                                  {busyDeviceInstall ? "…" : "Установка"}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn-secondary btn-sm"
-                                  disabled={addDeviceMutation.isPending}
-                                  onClick={() => handleAddProduct(product, "repair")}
-                                >
-                                  {busyDeviceRepair ? "…" : "Ремонт"}
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn-primary btn-sm"
-                                disabled={addServiceMutation.isPending}
-                                onClick={() => handleAddProduct(product)}
-                              >
-                                {busyService ? "Добавление…" : "Добавить"}
-                              </button>
-                            )
-                          ) : null}
                         </div>
+                      </>
+                    );
+                    return (
+                      <li key={productKey(product)} className={`task-shop-card${added ? " is-added" : ""}`}>
+                        <button
+                          type="button"
+                          className="btn-icon task-shop-card__view"
+                          aria-label="Подробнее"
+                          title="Подробнее"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setViewingProduct(product);
+                          }}
+                        >
+                          <Eye size={22} aria-hidden="true" />
+                        </button>
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            className="task-shop-card__hit"
+                            disabled={atMax || Boolean(addingKey) || Boolean(updatingLineKey)}
+                            onClick={() => handleAddProduct(product)}
+                          >
+                            {cardBody}
+                          </button>
+                        ) : (
+                          cardBody
+                        )}
                       </li>
                     );
                   })}
@@ -585,11 +1001,14 @@ export default function TaskDetailPage() {
             isMobile && mobileView !== "task" ? " task-workspace__panel--hidden" : ""
           }`}
         >
-          <section className="card">
+          <section className="card card--task-compact">
             <h2 className="task-detail-section-title">Задача</h2>
             <dl className="task-detail-meta">
               <DetailRow label="Статус">{task.status_label || task.status}</DetailRow>
+              <DetailRow label="Тип">{task.action_label || "—"}</DetailRow>
+              <DetailRow label="Валюта">{displayCurrency || "Обе валюты"}</DetailRow>
               <DetailRow label="Категория">{task.category?.name || "—"}</DetailRow>
+              <DetailRow label="Локация">{task.location?.name || "—"}</DetailRow>
               <DetailRow label="Клиент">{clientLabel(task)}</DetailRow>
               <DetailRow label="Адрес">{textOrDash(task.address)}</DetailRow>
               <DetailRow label="Менеджер">{task.manager?.name || "—"}</DetailRow>
@@ -604,100 +1023,183 @@ export default function TaskDetailPage() {
             {!devices.length && !services.length ? (
               <p className="empty-state">Добавьте товары из каталога.</p>
             ) : (
-              <ul className="task-cart-list">
-                {devices.map((line) => {
-                  const price = catalogPriceLines(line, rate);
-                  return (
-                    <li key={`device-${line.id}`} className="task-product-card task-product-card--cart">
-                      <CatalogImageGallery
+              <>
+                {canEdit ? (
+                  <DiscountBar
+                    disabled={discountMutation.isPending}
+                    hasSelection={activeSelectedKeys.length > 0}
+                    lockedCurrency={displayCurrency}
+                    onApplySelected={(payload) => applyDiscount("selected", payload)}
+                    onApplyAll={(payload) => applyDiscount("all", payload)}
+                    onClear={() => discountMutation.mutate({ scope: "all", clear: true })}
+                  />
+                ) : null}
+                <ul className="task-cart-list">
+                  {devices.map((line) => {
+                    const lineKey = cartLineKey("device", line.id);
+                    const discounted = hasCartDiscount(line);
+                    const title = line.device_name || `Устройство #${line.device_id}`;
+                    return (
+                      <CartLine
+                        key={lineKey}
                         images={line.images}
-                        alt={line.device_name || `Устройство #${line.device_id}`}
-                        canEdit={canEdit}
-                        uploading={uploadingKey === `device-${line.device_id}`}
-                        onUpload={(files) => void handleUploadDevice(line, files)}
-                        onDelete={(image) => void handleDeleteDeviceImage(line, image)}
+                        alt={title}
+                        title={title}
+                        badge={line.action_label || line.action}
+                        description={line.description}
+                        notes={line.notes}
+                        price={cartOperationPriceLines(line, rate, "price", displayCurrency)}
+                        originalPrice={discounted ? cartOperationPriceLines(line, rate, "price_without_discount", displayCurrency) : null}
+                        discountText={discountLabel(line)}
+                        quantity={lineQuantity(line.quantity)}
+                        selected={activeSelectedKeys.includes(lineKey)}
+                        canEdit={Boolean(canEdit && line.id)}
+                        removing={removeDeviceMutation.isPending}
+                        updating={updatingLineKey === lineKey}
+                        onToggleSelected={() => toggleLineSelected(lineKey)}
+                        onQuantityChange={(quantity) => handleDeviceQuantity(line, quantity)}
+                        onRemove={() => void handleRemoveDevice(line)}
                       />
-                      <div className="task-product-card__body">
-                        <div className="task-product-card__title-row">
-                          <h3>{line.device_name || `Устройство #${line.device_id}`}</h3>
-                          <span className="task-product-card__badge">{line.action_label || line.action}</span>
-                        </div>
-                        {line.description ? (
-                          <p className="task-product-card__description">{line.description}</p>
-                        ) : null}
-                        {line.notes ? <p className="muted-copy">{line.notes}</p> : null}
-                        <div className="task-product-card__price">
-                          <MoneyCell primary={price.primary} muted={price.muted} />
-                        </div>
-                        {canEdit && line.id ? (
-                          <button
-                            type="button"
-                            className="btn-danger btn-sm"
-                            onClick={() => void handleRemoveDevice(line)}
-                            disabled={removeDeviceMutation.isPending}
-                          >
-                            Удалить
-                          </button>
-                        ) : null}
-                      </div>
-                    </li>
-                  );
-                })}
-                {services.map((line) => {
-                  const price = catalogPriceLines(line, rate);
-                  return (
-                    <li key={`service-${line.id}`} className="task-product-card task-product-card--cart">
-                      <CatalogImageGallery
+                    );
+                  })}
+                  {services.map((line) => {
+                    const lineKey = cartLineKey("service", line.id);
+                    const discounted = hasCartDiscount(line);
+                    const title = line.service_name || `Услуга #${line.service_id}`;
+                    return (
+                      <CartLine
+                        key={lineKey}
                         images={line.images}
-                        alt={line.service_name || `Услуга #${line.service_id}`}
-                        canEdit={canEdit}
-                        uploading={uploadingKey === `service-${line.service_id}`}
-                        onUpload={(files) => void handleUploadService(line, files)}
-                        onDelete={(image) => void handleDeleteServiceImage(line, image)}
+                        alt={title}
+                        title={title}
+                        description={line.description}
+                        notes={line.notes}
+                        price={cartOperationPriceLines(line, rate, "price", displayCurrency)}
+                        originalPrice={discounted ? cartOperationPriceLines(line, rate, "price_without_discount", displayCurrency) : null}
+                        discountText={discountLabel(line)}
+                        quantity={lineQuantity(line.quantity)}
+                        selected={activeSelectedKeys.includes(lineKey)}
+                        canEdit={Boolean(canEdit && line.id)}
+                        removing={removeServiceMutation.isPending}
+                        updating={updatingLineKey === lineKey}
+                        onToggleSelected={() => toggleLineSelected(lineKey)}
+                        onQuantityChange={(quantity) => handleServiceQuantity(line, quantity)}
+                        onRemove={() => void handleRemoveService(line)}
                       />
-                      <div className="task-product-card__body">
-                        <h3>{line.service_name || `Услуга #${line.service_id}`}</h3>
-                        {line.description ? (
-                          <p className="task-product-card__description">{line.description}</p>
-                        ) : null}
-                        {line.notes ? <p className="muted-copy">{line.notes}</p> : null}
-                        <div className="task-product-card__price">
-                          <MoneyCell primary={price.primary} muted={price.muted} />
-                        </div>
-                        {canEdit && line.id ? (
-                          <button
-                            type="button"
-                            className="btn-danger btn-sm"
-                            onClick={() => void handleRemoveService(line)}
-                            disabled={removeServiceMutation.isPending}
-                          >
-                            Удалить
-                          </button>
-                        ) : null}
-                      </div>
-                    </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="task-payments-head">
+              <h2 className="task-detail-section-title">Оплаты</h2>
+              {canTakePayment ? (
+                <button
+                  type="button"
+                  className="btn-primary btn-sm"
+                  onClick={() => setPaymentOpen(true)}
+                >
+                  Принять оплату
+                </button>
+              ) : null}
+            </div>
+            {!payments.length ? (
+              <p className="empty-state">Оплаты не приняты.</p>
+            ) : (
+              <ul className="task-payment-list">
+                {payments.map((payment) => {
+                  const isRefund = payment.kind === "refund";
+                  return (
+                  <li
+                    key={payment.id}
+                    className={`task-payment-list__item${isRefund ? " task-payment-list__item--refund" : ""}`}
+                  >
+                    <div className="task-payment-list__body">
+                      <strong>
+                        {isRefund ? "Возврат · " : ""}
+                        {payment.payment_type_name}
+                      </strong>
+                      <small>
+                        {[formatDateTime(payment.created_at), payment.created_by?.name]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </small>
+                      {payment.note ? <small>{payment.note}</small> : null}
+                    </div>
+                    <div className="task-payment-list__money">
+                      {isRefund ? "−" : ""}
+                      {formatMoneyLine(payment.amount, payment.currency)}
+                    </div>
+                    {canDeletePayment ? (
+                      <button
+                        type="button"
+                        className="btn-danger btn-icon btn-sm"
+                        aria-label="Удалить оплату"
+                        disabled={removePaymentMutation.isPending}
+                        onClick={() => void handleRemovePayment(payment)}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    ) : null}
+                  </li>
                   );
                 })}
               </ul>
             )}
           </section>
 
-          <section className="card card--task-totals">
+          <section className="card card--task-compact card--task-totals">
             <h2 className="task-detail-section-title">Итого</h2>
-            <dl className="task-detail-totals task-detail-totals--price">
-              <div>
-                <dt>Цена</dt>
-                <dd>
+            <dl className="task-detail-meta task-detail-meta--totals">
+              {totalsHaveDiscount ? (
+                <DetailRow label="Без скидки">
                   <MoneyCell
-                    primary={formatMoneyLine(totals.price_uzs, "UZS")}
-                    muted={formatMoneyLine(totals.price_usd, "USD")}
+                    {...totalsPriceLines(
+                      totals.price_without_discount_uzs,
+                      totals.price_without_discount_usd,
+                      displayCurrency,
+                    )}
+                    className="money-pair--old"
                   />
-                </dd>
-              </div>
+                </DetailRow>
+              ) : null}
+              <DetailRow label="Цена">
+                <MoneyCell
+                  {...totalsPriceLines(totals.price_uzs, totals.price_usd, displayCurrency)}
+                />
+              </DetailRow>
+              <DetailRow label="Оплачено">
+                <MoneyCell
+                  {...totalsPriceLines(
+                    paymentTotals.paid_uzs,
+                    paymentTotals.paid_usd,
+                    displayCurrency,
+                  )}
+                />
+              </DetailRow>
+              <DetailRow label={overpaid ? "Переплата" : "Остаток"}>
+                <MoneyCell
+                  {...totalsPriceLines(
+                    overpaid ? -paymentTotals.due_uzs : paymentTotals.due_uzs,
+                    overpaid ? -paymentTotals.due_usd : paymentTotals.due_usd,
+                    displayCurrency,
+                  )}
+                />
+              </DetailRow>
             </dl>
           </section>
         </div>
       </div>
+
+      <ProductPreviewModal
+        product={viewingProduct}
+        rate={rate}
+        displayCurrency={displayCurrency}
+        onClose={() => setViewingProduct(null)}
+      />
 
       <TaskEditorModal
         open={editOpen}
@@ -706,6 +1208,16 @@ export default function TaskDetailPage() {
         onClose={() => setEditOpen(false)}
         onSaved={() => {
           setEditOpen(false);
+          invalidateTask();
+        }}
+      />
+
+      <TaskPaymentModal
+        open={paymentOpen}
+        task={task}
+        onClose={() => setPaymentOpen(false)}
+        onSaved={() => {
+          setPaymentOpen(false);
           invalidateTask();
         }}
       />

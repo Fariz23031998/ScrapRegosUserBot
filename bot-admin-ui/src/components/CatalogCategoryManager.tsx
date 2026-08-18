@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import type { CatalogCategory } from "../lib/types";
 import Modal from "./Modal";
 
@@ -66,16 +67,24 @@ export default function CatalogCategoryManager({
                     <div className="cell-actions">
                       <button
                         type="button"
-                        className="btn-secondary btn-sm"
+                        className="btn-secondary btn-icon btn-sm"
+                        aria-label="Изменить"
+                        title="Изменить"
                         onClick={() => {
                           setFormError("");
                           setEditor({ id: category.id, name: category.name });
                         }}
                       >
-                        Изменить
+                        <Pencil size={15} aria-hidden="true" />
                       </button>
-                      <button type="button" className="btn-danger btn-sm" onClick={() => onDelete(category)}>
-                        Удалить
+                      <button
+                        type="button"
+                        className="btn-danger btn-icon btn-sm"
+                        aria-label="Удалить"
+                        title="Удалить"
+                        onClick={() => onDelete(category)}
+                      >
+                        <Trash2 size={15} aria-hidden="true" />
                       </button>
                     </div>
                   ) : null}

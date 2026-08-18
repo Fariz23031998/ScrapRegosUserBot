@@ -1,7 +1,23 @@
 const express = require('express');
 const multer = require('multer');
-const { requireRight, requireAnyRight } = require('./bot-admin-auth');
-const { listEmployeeUsers } = require('../db/bot-users-db');
+const { getSessionActor, requireRight, requireAnyRight } = require('./bot-admin-auth');
+const { getBotUserById, getBotUserByTelegramId, listEmployeeUsers } = require('../db/bot-users-db');
+const {
+  listLocations,
+  listLocationsForViewer,
+  getLocation,
+  createLocation,
+  updateLocation,
+  deleteLocation,
+  getLocationViewer,
+} = require('../db/locations');
+const {
+  listPaymentTypes,
+  getPaymentType,
+  createPaymentType,
+  updatePaymentType,
+  deletePaymentType,
+} = require('../db/payment-types');
 const {
   addCatalogImage,
   countCatalogImages,
@@ -45,11 +61,20 @@ const {
   createTask,
   updateTask,
   addTaskDevice,
+  updateTaskDevice,
   deleteTaskDevice,
   addTaskService,
+  updateTaskService,
   deleteTaskService,
+  applyTaskDiscount,
   deleteTask,
 } = require('../db/tasks');
+const {
+  createTaskPayment,
+  deleteTaskPayment,
+  getTaskPayment,
+} = require('../db/task-payments');
+const { refundTaskLine } = require('../db/task-refunds');
 const { RegosCrmError, searchClients } = require('../integrations/regos-crm');
 
 function parsePaginationQuery(req) {
@@ -101,6 +126,8 @@ function catalogMoneyFromBody(body = {}) {
     cost_currency: body.cost_currency,
     price_uzs: body.price_uzs,
     price_usd: body.price_usd,
+    manager_sale_percent: body.manager_sale_percent,
+    technician_score: body.technician_score,
   };
 }
 
@@ -112,6 +139,8 @@ function deviceWriteErrorMessage(code) {
   if (code === 'INVALID_MONEY_AMOUNT') return 'Некорректная сумма. Укажите число не меньше 0.';
   if (code === 'INVALID_COST_CURRENCY') return 'Валюта себестоимости: UZS или USD.';
   if (code === 'INVALID_PRICE') return 'Укажите цену в сумах или в USD.';
+  if (code === 'INVALID_MANAGER_SALE_PERCENT') return 'Процент менеджеру: число от 0 до 100.';
+  if (code === 'INVALID_TECHNICIAN_SCORE') return 'Баллы технику: число не меньше 0.';
   return null;
 }
 
@@ -123,11 +152,25 @@ function serviceWriteErrorMessage(code) {
   if (code === 'INVALID_MONEY_AMOUNT') return 'Некорректная сумма. Укажите число не меньше 0.';
   if (code === 'INVALID_COST_CURRENCY') return 'Валюта себестоимости: UZS или USD.';
   if (code === 'INVALID_PRICE') return 'Укажите цену в сумах или в USD.';
+  if (code === 'INVALID_MANAGER_SALE_PERCENT') return 'Процент менеджеру: число от 0 до 100.';
+  if (code === 'INVALID_TECHNICIAN_SCORE') return 'Баллы технику: число не меньше 0.';
   return null;
 }
 
 function categoryWriteErrorMessage(code) {
   if (code === 'INVALID_CATEGORY_NAME') return 'Укажите название категории.';
+  return null;
+}
+
+function locationWriteErrorMessage(code) {
+  if (code === 'INVALID_LOCATION_NAME') return 'Укажите название локации.';
+  if (code === 'INVALID_LOCATION_USERS') return 'Выберите хотя бы одного сотрудника с доступом к локации.';
+  return null;
+}
+
+function paymentTypeWriteErrorMessage(code) {
+  if (code === 'INVALID_PAYMENT_TYPE_NAME') return 'Укажите название типа оплаты.';
+  if (code === 'INVALID_PAYMENT_TYPE_CURRENCY') return 'Валюта типа оплаты: UZS или USD.';
   return null;
 }
 
@@ -139,14 +182,26 @@ function taskWriteErrorMessage(code) {
     INVALID_TASK_CLIENT: 'Некорректные данные клиента.',
     INVALID_TASK_STATUS: 'Некорректный статус задачи.',
     INVALID_TASK_CATEGORY: 'Некорректная категория задачи.',
+    INVALID_TASK_LOCATION: 'Выберите локацию, к которой у вас есть доступ.',
     INVALID_TASK_MANAGER: 'Некорректный менеджер.',
     INVALID_TASK_TECHNICIAN: 'Некорректный техник.',
     INVALID_TASK_DEVICES: 'Некорректный список устройств.',
     INVALID_TASK_DEVICE: 'Некорректное устройство в задаче.',
     INVALID_TASK_ACTION: 'Укажите действие: установка или ремонт.',
+    INVALID_TASK_CURRENCY: 'Валюта задачи: UZS, USD или обе.',
     INVALID_TASK_DEVICE_NOTES: 'Слишком длинная заметка по устройству.',
     INVALID_TASK_SERVICE: 'Некорректная услуга в задаче.',
     INVALID_TASK_SERVICE_NOTES: 'Слишком длинная заметка по услуге.',
+    INVALID_TASK_QUANTITY: 'Укажите количество от 1 до 999.',
+    INVALID_TASK_DISCOUNT: 'Укажите скидку: процент от 0 до 100 или сумму не меньше 0.',
+    INVALID_TASK_DISCOUNT_TARGET: 'Выберите позиции для скидки.',
+    INVALID_TASK_PAYMENT_AMOUNT: 'Укажите сумму оплаты больше 0.',
+    INVALID_TASK_PAYMENT_TYPE: 'Выберите тип оплаты.',
+    INVALID_TASK_PAYMENT_CURRENCY: 'Валюта оплаты: UZS или USD.',
+    INVALID_TASK_PAYMENT_NOTE: 'Слишком длинный комментарий к оплате.',
+    INVALID_TASK_REFUND_LINE: 'Выберите позицию для возврата.',
+    INVALID_TASK_REFUND_QUANTITY: 'Укажите количество для возврата.',
+    INVALID_TASK_REFUND_AMOUNT: 'Сумма возврата не может превышать стоимость позиции.',
   };
   return messages[code] || null;
 }
@@ -217,6 +272,32 @@ function respondWriteError(res, error, fallbackMessage, mapMessage) {
 }
 
 function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails }) {
+  function taskViewer(req) {
+    return getLocationViewer(db, getSessionActor(req));
+  }
+
+  // Password-only admin sessions are not linked to a bot user, so payments they
+  // take are stored without an author.
+  function sessionUserId(req) {
+    const actor = getSessionActor(req);
+    if (actor?.type === 'telegram') return getBotUserByTelegramId(db, actor.telegramId)?.id ?? null;
+    if (actor?.type === 'user') return getBotUserById(db, actor.userId)?.id ?? null;
+    return null;
+  }
+
+  function visibleTask(req, id = req.params.id) {
+    return getTask(db, id, taskViewer(req));
+  }
+
+  function requireVisibleTask(req, res) {
+    const task = visibleTask(req);
+    if (!task) {
+      res.status(404).json({ message: 'Задача не найдена.' });
+      return null;
+    }
+    return task;
+  }
+
   router.get(
     '/api/settings/exchange-rate',
     requireAnyRight(db, ['settings_read', 'tasks_read', 'devices_read', 'services_read']),
@@ -248,6 +329,145 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       }
       console.error('Save exchange rate error:', error);
       return res.status(500).json({ message: 'Не удалось сохранить курс валют.' });
+    }
+  });
+
+  router.get('/api/settings/locations', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ locations: listLocations(db) });
+    } catch (error) {
+      console.error('List locations error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить локации.' });
+    }
+  });
+
+  router.post('/api/settings/locations', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const location = createLocation(db, {
+        name: req.body?.name,
+        allowed_user_ids: req.body?.allowed_user_ids,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'location',
+        entityId: location.id,
+        action: 'create',
+        summary: `Создана локация «${location.name}»`,
+        details: buildAuditDetails({ before: null, after: location }),
+      });
+      return res.status(201).json({ location });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось создать локацию.', locationWriteErrorMessage);
+    }
+  });
+
+  router.put('/api/settings/locations/:id', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const before = getLocation(db, req.params.id);
+      const location = updateLocation(db, req.params.id, {
+        name: req.body?.name,
+        allowed_user_ids: req.body?.allowed_user_ids,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'location',
+        entityId: location.id,
+        action: 'update',
+        summary: `Изменена локация #${location.id}`,
+        details: buildAuditDetails({ before, after: location }),
+      });
+      return res.json({ location });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Локация не найдена.' : 'Не удалось обновить локацию.',
+        locationWriteErrorMessage
+      );
+    }
+  });
+
+  router.delete('/api/settings/locations/:id', requireRight(db, 'settings_edit'), (req, res) => {
+    try {
+      const before = getLocation(db, req.params.id);
+      const deleted = deleteLocation(db, req.params.id);
+      if (!deleted) return res.status(404).json({ message: 'Локация не найдена.' });
+      auditAdminChange(db, req, {
+        entityType: 'location',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалена локация «${before.name}»`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось удалить локацию.', locationWriteErrorMessage);
+    }
+  });
+
+  router.get('/api/settings/payment-types', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ payment_types: listPaymentTypes(db) });
+    } catch (error) {
+      console.error('List payment types error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить типы оплаты.' });
+    }
+  });
+
+  router.post('/api/settings/payment-types', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const paymentType = createPaymentType(db, { name: req.body?.name, currency: req.body?.currency });
+      auditAdminChange(db, req, {
+        entityType: 'payment_type',
+        entityId: paymentType.id,
+        action: 'create',
+        summary: `Создан тип оплаты «${paymentType.name}»`,
+        details: buildAuditDetails({ before: null, after: paymentType }),
+      });
+      return res.status(201).json({ payment_type: paymentType });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось создать тип оплаты.', paymentTypeWriteErrorMessage);
+    }
+  });
+
+  router.put('/api/settings/payment-types/:id', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const before = getPaymentType(db, req.params.id);
+      const paymentType = updatePaymentType(db, req.params.id, {
+        name: req.body?.name,
+        currency: req.body?.currency,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'payment_type',
+        entityId: paymentType.id,
+        action: 'update',
+        summary: `Изменён тип оплаты #${paymentType.id}`,
+        details: buildAuditDetails({ before, after: paymentType }),
+      });
+      return res.json({ payment_type: paymentType });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Тип оплаты не найден.' : 'Не удалось обновить тип оплаты.',
+        paymentTypeWriteErrorMessage
+      );
+    }
+  });
+
+  router.delete('/api/settings/payment-types/:id', requireRight(db, 'settings_edit'), (req, res) => {
+    try {
+      const before = getPaymentType(db, req.params.id);
+      const deleted = deletePaymentType(db, req.params.id);
+      if (!deleted) return res.status(404).json({ message: 'Тип оплаты не найден.' });
+      auditAdminChange(db, req, {
+        entityType: 'payment_type',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалён тип оплаты «${before.name}»`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось удалить тип оплаты.', paymentTypeWriteErrorMessage);
     }
   });
 
@@ -752,7 +972,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     }
   });
 
-  router.get('/api/tasks/employees', requireRight(db, 'tasks_read'), (_req, res) => {
+  router.get('/api/tasks/employees', requireAnyRight(db, ['tasks_read', 'settings_read']), (_req, res) => {
     try {
       const employees = listEmployeeUsers(db).map(mapEmployee);
       employees.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -760,6 +980,25 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     } catch (error) {
       console.error('List task employees error:', error);
       return res.status(500).json({ message: 'Не удалось загрузить сотрудников.' });
+    }
+  });
+
+  router.get('/api/tasks/locations', requireRight(db, 'tasks_read'), (req, res) => {
+    try {
+      return res.json({ locations: listLocationsForViewer(db, taskViewer(req)) });
+    } catch (error) {
+      console.error('List task locations error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить локации.' });
+    }
+  });
+
+  // Registered before '/api/tasks/:id' so Express does not treat it as a task id.
+  router.get('/api/tasks/payment-types', requireRight(db, 'tasks_read'), (_req, res) => {
+    try {
+      return res.json({ payment_types: listPaymentTypes(db) });
+    } catch (error) {
+      console.error('List task payment types error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить типы оплаты.' });
     }
   });
 
@@ -785,11 +1024,15 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       const query = String(req.query.q || '').trim();
       const status = String(req.query.status || '').trim();
       const categoryId = String(req.query.category_id || '').trim();
+      const locationId = String(req.query.location_id || '').trim();
+      const viewer = taskViewer(req);
       let { page, limit, offset } = parsePaginationQuery(req);
       let result = listTasks(db, {
         query,
         status: status || undefined,
         categoryId: categoryId || undefined,
+        locationId: locationId || undefined,
+        viewer,
         offset,
         limit,
       });
@@ -801,6 +1044,8 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
           query,
           status: status || undefined,
           categoryId: categoryId || undefined,
+          locationId: locationId || undefined,
+          viewer,
           offset,
           limit,
         });
@@ -820,14 +1065,15 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
   });
 
   router.get('/api/tasks/:id', requireRight(db, 'tasks_read'), (req, res) => {
-    const task = getTask(db, req.params.id);
+    const task = visibleTask(req);
     if (!task) return res.status(404).json({ message: 'Задача не найдена.' });
     return res.json({ task });
   });
 
   router.post('/api/tasks/:id/devices', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
     try {
-      const before = getTask(db, req.params.id);
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
       const task = addTaskDevice(db, req.params.id, {
         device_id: req.body?.device_id,
         action: req.body?.action,
@@ -851,9 +1097,35 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     }
   });
 
+  router.put('/api/tasks/:id/devices/:lineId', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
+    try {
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
+      const task = updateTaskDevice(db, req.params.id, req.params.lineId, {
+        quantity: req.body?.quantity,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: task.id,
+        action: 'update',
+        summary: `Изменено количество устройства в задаче #${task.id}`,
+        details: buildAuditDetails({ before, after: task }),
+      });
+      return res.json({ task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Строка задачи не найдена.' : 'Не удалось обновить устройство.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
   router.delete('/api/tasks/:id/devices/:lineId', requireRight(db, 'tasks_edit'), (req, res) => {
     try {
-      const before = getTask(db, req.params.id);
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
       const task = deleteTaskDevice(db, req.params.id, req.params.lineId);
       auditAdminChange(db, req, {
         entityType: 'task',
@@ -875,7 +1147,8 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
 
   router.post('/api/tasks/:id/services', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
     try {
-      const before = getTask(db, req.params.id);
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
       const task = addTaskService(db, req.params.id, {
         service_id: req.body?.service_id,
         notes: req.body?.notes,
@@ -898,9 +1171,35 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     }
   });
 
+  router.put('/api/tasks/:id/services/:lineId', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
+    try {
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
+      const task = updateTaskService(db, req.params.id, req.params.lineId, {
+        quantity: req.body?.quantity,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: task.id,
+        action: 'update',
+        summary: `Изменено количество услуги в задаче #${task.id}`,
+        details: buildAuditDetails({ before, after: task }),
+      });
+      return res.json({ task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Строка задачи не найдена.' : 'Не удалось обновить услугу.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
   router.delete('/api/tasks/:id/services/:lineId', requireRight(db, 'tasks_edit'), (req, res) => {
     try {
-      const before = getTask(db, req.params.id);
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
       const task = deleteTaskService(db, req.params.id, req.params.lineId);
       auditAdminChange(db, req, {
         entityType: 'task',
@@ -920,9 +1219,145 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     }
   });
 
+  router.post('/api/tasks/:id/discount', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
+    try {
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
+      const task = applyTaskDiscount(db, req.params.id, req.body || {});
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: task.id,
+        action: 'update',
+        summary: `Изменена скидка в задаче #${task.id}`,
+        details: buildAuditDetails({ before, after: task }),
+      });
+      return res.json({ task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Задача не найдена.' : 'Не удалось применить скидку.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
+  router.post(
+    '/api/tasks/:id/payments',
+    requireRight(db, 'tasks_payment_create'),
+    express.json(),
+    (req, res) => {
+      try {
+        const before = requireVisibleTask(req, res);
+        if (!before) return;
+        const payment = createTaskPayment(db, before.id, {
+          payment_type_id: req.body?.payment_type_id,
+          amount: req.body?.amount,
+          currency: req.body?.currency,
+          note: req.body?.note,
+          created_by_user_id: sessionUserId(req),
+        });
+        const task = visibleTask(req);
+        auditAdminChange(db, req, {
+          entityType: 'task',
+          entityId: before.id,
+          action: 'update',
+          summary: `Принята оплата ${payment.amount} ${payment.currency} по задаче #${before.id}`,
+          details: buildAuditDetails({ before, after: task }),
+        });
+        return res.status(201).json({ task });
+      } catch (error) {
+        return respondWriteError(
+          res,
+          error,
+          error.message === 'NOT_FOUND' ? 'Задача не найдена.' : 'Не удалось принять оплату.',
+          taskWriteErrorMessage
+        );
+      }
+    }
+  );
+
+  router.delete(
+    '/api/tasks/:id/payments/:paymentId',
+    requireRight(db, 'tasks_payment_delete'),
+    (req, res) => {
+      try {
+        const before = requireVisibleTask(req, res);
+        if (!before) return;
+        const payment = getTaskPayment(db, before.id, req.params.paymentId);
+        if (!payment) return res.status(404).json({ message: 'Оплата не найдена.' });
+        deleteTaskPayment(db, before.id, payment.id);
+        const task = visibleTask(req);
+        auditAdminChange(db, req, {
+          entityType: 'task',
+          entityId: before.id,
+          action: 'update',
+          summary: `Удалена оплата ${payment.amount} ${payment.currency} по задаче #${before.id}`,
+          details: buildAuditDetails({ before, after: task }),
+        });
+        return res.json({ task });
+      } catch (error) {
+        return respondWriteError(
+          res,
+          error,
+          error.message === 'NOT_FOUND' ? 'Оплата не найдена.' : 'Не удалось удалить оплату.',
+          taskWriteErrorMessage
+        );
+      }
+    }
+  );
+
+  router.post(
+    '/api/tasks/:id/refunds',
+    requireRight(db, 'tasks_edit'),
+    requireRight(db, 'tasks_payment_create'),
+    express.json(),
+    (req, res) => {
+      try {
+        const before = requireVisibleTask(req, res);
+        if (!before) return;
+        const result = refundTaskLine(
+          db,
+          before.id,
+          {
+            kind: req.body?.kind,
+            line_id: req.body?.line_id,
+            quantity: req.body?.quantity,
+            payment_type_id: req.body?.payment_type_id,
+            amount: req.body?.amount,
+            currency: req.body?.currency,
+            note: req.body?.note,
+            created_by_user_id: sessionUserId(req),
+          },
+          taskViewer(req)
+        );
+        const { task, payment, line_name, kind, quantity } = result;
+        const kindLabel = kind === 'device' ? 'устройство' : 'услуга';
+        auditAdminChange(db, req, {
+          entityType: 'task',
+          entityId: before.id,
+          action: 'update',
+          summary: `Возврат ${quantity}× ${kindLabel} «${line_name}» — ${payment.amount} ${payment.currency} по задаче #${before.id}`,
+          details: buildAuditDetails({ before, after: task }),
+        });
+        return res.status(201).json({ task });
+      } catch (error) {
+        return respondWriteError(
+          res,
+          error,
+          error.message === 'NOT_FOUND' ? 'Задача не найдена.' : 'Не удалось оформить возврат.',
+          taskWriteErrorMessage
+        );
+      }
+    }
+  );
+
   router.post('/api/tasks', requireRight(db, 'tasks_create'), express.json(), (req, res) => {
     try {
-      const task = createTask(db, req.body || {});
+      const task = createTask(db, req.body || {}, {
+        requireLocation: true,
+        viewer: taskViewer(req),
+      });
       auditAdminChange(db, req, {
         entityType: 'task',
         entityId: task.id,
@@ -938,8 +1373,12 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
 
   router.put('/api/tasks/:id', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
     try {
-      const before = getTask(db, req.params.id);
-      const task = updateTask(db, req.params.id, req.body || {});
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
+      const task = updateTask(db, req.params.id, req.body || {}, {
+        requireLocation: true,
+        viewer: taskViewer(req),
+      });
       auditAdminChange(db, req, {
         entityType: 'task',
         entityId: task.id,
@@ -960,7 +1399,8 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
 
   router.delete('/api/tasks/:id', requireRight(db, 'tasks_delete'), (req, res) => {
     try {
-      const before = getTask(db, req.params.id);
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
       const deleted = deleteTask(db, req.params.id);
       if (!deleted) return res.status(404).json({ message: 'Задача не найдена.' });
       auditAdminChange(db, req, {

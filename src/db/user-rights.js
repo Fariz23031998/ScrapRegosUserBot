@@ -185,6 +185,14 @@ const RIGHTS = {
     column: 'tasks_delete',
     label: 'Админ: задачи — удаление',
   },
+  tasks_payment_create: {
+    column: 'tasks_payment_create',
+    label: 'Админ: задачи — приём оплаты',
+  },
+  tasks_payment_delete: {
+    column: 'tasks_payment_delete',
+    label: 'Админ: задачи — удаление оплаты',
+  },
   devices_read: {
     column: 'devices_read',
     label: 'Админ: устройства — просмотр',
@@ -260,6 +268,8 @@ const ADMIN_PERMISSION_KEYS = [
   'tasks_create',
   'tasks_edit',
   'tasks_delete',
+  'tasks_payment_create',
+  'tasks_payment_delete',
   'devices_read',
   'devices_create',
   'devices_edit',

@@ -1,6 +1,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import {
   createService,
   createServiceCategory,
@@ -16,6 +17,13 @@ import {
 import { getExchangeRate } from "../api/settings";
 import CatalogCategoryManager from "../components/CatalogCategoryManager";
 import CatalogImageGallery, { CatalogThumb } from "../components/CatalogImageGallery";
+import CatalogStaffFields, {
+  emptyStaffEditor,
+  formatSalePercent,
+  formatTechnicianScore,
+  staffEditorFromItem,
+  staffPayloadFromEditor,
+} from "../components/CatalogStaffFields";
 import EntityCards from "../components/EntityCards";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
@@ -47,6 +55,8 @@ type ServiceEditor = {
   cost_currency: "UZS" | "USD";
   price_uzs: string;
   price_usd: string;
+  manager_sale_percent: string;
+  technician_score: string;
 };
 
 function ServiceFilterFields({
@@ -101,6 +111,7 @@ export default function ServicesPage() {
   const [editor, setEditor] = useState<ServiceEditor | null>(null);
   const [formError, setFormError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
   const rateQuery = useQuery({
     queryKey: ["exchange-rate"],
@@ -139,12 +150,29 @@ export default function ServicesPage() {
         description: payload.description.trim(),
         category_id: payload.category_id ? Number(payload.category_id) : null,
         ...moneyPayloadFromEditor(payload),
+        ...staffPayloadFromEditor(payload),
       };
       if (payload.id) return updateService(payload.id, body);
       return createService(body);
     },
-    onSuccess: () => {
+    onSuccess: async (result, payload) => {
+      if (!payload.id && pendingFiles.length) {
+        try {
+          setUploading(true);
+          await uploadServiceImages(result.service.id, pendingFiles);
+        } catch (error) {
+          setUploading(false);
+          setPendingFiles([]);
+          setEditor((prev) => (prev ? { ...prev, id: result.service.id } : prev));
+          setFormError(error instanceof Error ? error.message : "Не удалось загрузить изображение.");
+          invalidateServices();
+          return;
+        } finally {
+          setUploading(false);
+        }
+      }
       setEditor(null);
+      setPendingFiles([]);
       invalidateServices();
     },
     onError: (error: Error) => setFormError(error.message),
@@ -166,17 +194,20 @@ export default function ServicesPage() {
 
   function openCreate() {
     setFormError("");
-    setEditor({ name: "", description: "", category_id: "", ...emptyMoneyEditor() });
+    setPendingFiles([]);
+    setEditor({ name: "", description: "", category_id: "", ...emptyMoneyEditor(), ...emptyStaffEditor() });
   }
 
   function openEdit(service: CatalogService) {
     setFormError("");
+    setPendingFiles([]);
     setEditor({
       id: service.id,
       name: service.name,
       description: service.description || "",
       category_id: service.category_id ? String(service.category_id) : "",
       ...moneyEditorFromItem(service),
+      ...staffEditorFromItem(service),
     });
   }
 
@@ -195,13 +226,25 @@ export default function ServicesPage() {
     return (
       <>
         {hasPermission("services_edit") ? (
-          <button type="button" className="btn-secondary" onClick={() => openEdit(service)}>
-            Изменить
+          <button
+            type="button"
+            className="btn-secondary btn-icon btn-sm"
+            aria-label="Изменить"
+            title="Изменить"
+            onClick={() => openEdit(service)}
+          >
+            <Pencil size={15} aria-hidden="true" />
           </button>
         ) : null}
         {hasPermission("services_delete") ? (
-          <button type="button" className="btn-danger" onClick={() => void handleDelete(service)}>
-            Удалить
+          <button
+            type="button"
+            className="btn-danger btn-icon btn-sm"
+            aria-label="Удалить"
+            title="Удалить"
+            onClick={() => void handleDelete(service)}
+          >
+            <Trash2 size={15} aria-hidden="true" />
           </button>
         ) : null}
       </>
@@ -275,6 +318,16 @@ export default function ServicesPage() {
           const lines = catalogPriceLines(row.original, rate);
           return <MoneyCell primary={lines.primary} muted={lines.muted} />;
         },
+      },
+      {
+        id: "manager_sale_percent",
+        header: "% менеджеру",
+        accessorFn: (row) => formatSalePercent(row.manager_sale_percent),
+      },
+      {
+        id: "technician_score",
+        header: "Баллы технику",
+        accessorFn: (row) => formatTechnicianScore(row.technician_score),
       },
       {
         id: "updated_at",
@@ -351,6 +404,8 @@ export default function ServicesPage() {
             getFields={(service) => [
               { label: "Себестоимость", value: <MoneyCell {...catalogCostLines(service)} /> },
               { label: "Цена", value: <MoneyCell {...catalogPriceLines(service, rate)} /> },
+              { label: "% менеджеру", value: formatSalePercent(service.manager_sale_percent) },
+              { label: "Баллы технику", value: formatTechnicianScore(service.technician_score) },
               { label: "Обновлено", value: formatDateTime(service.updated_at) },
             ]}
             getActions={(service) => serviceActions(service)}
@@ -378,7 +433,10 @@ export default function ServicesPage() {
       <Modal
         open={editor != null}
         title={editor?.id ? "Редактирование услуги" : "Новая услуга"}
-        onClose={() => setEditor(null)}
+        onClose={() => {
+          setEditor(null);
+          setPendingFiles([]);
+        }}
       >
         <form
           className="stack-form"
@@ -430,7 +488,13 @@ export default function ServicesPage() {
             />
           </label>
           {editor ? (
-            <MoneyFields value={editor} onChange={(value) => setEditor((prev) => (prev ? { ...prev, ...value } : prev))} />
+            <>
+              <MoneyFields value={editor} onChange={(value) => setEditor((prev) => (prev ? { ...prev, ...value } : prev))} />
+              <CatalogStaffFields
+                value={editor}
+                onChange={(value) => setEditor((prev) => (prev ? { ...prev, ...value } : prev))}
+              />
+            </>
           ) : null}
           {editor?.id ? (
             <CatalogImageGallery
@@ -443,11 +507,18 @@ export default function ServicesPage() {
               onDelete={(image) => void handleDeleteImage(image)}
             />
           ) : (
-            <p className="muted-copy">Сохраните услугу, чтобы добавить фото.</p>
+            <CatalogImageGallery
+              variant="compact"
+              pendingFiles={pendingFiles}
+              alt={editor?.name || "Услуга"}
+              canEdit={hasPermission("services_create") || hasPermission("services_edit")}
+              uploading={uploading}
+              onPendingFilesChange={setPendingFiles}
+            />
           )}
           {formError ? <p className="message error">{formError}</p> : null}
           <div className="form-actions">
-            <button type="button" className="btn-secondary" onClick={() => setEditor(null)}>
+            <button type="button" className="btn-secondary" onClick={() => { setEditor(null); setPendingFiles([]); }}>
               Отмена
             </button>
             <button type="submit" className="btn-primary" disabled={saveMutation.isPending}>

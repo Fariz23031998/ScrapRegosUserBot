@@ -2,7 +2,19 @@ const { ensureDeviceTables, getDevice } = require('./devices');
 const { ensureServiceTables, getService } = require('./services');
 const { attachCatalogImages } = require('./catalog-images');
 const { getBotUserById } = require('./bot-users-db');
-const { getUsdUzsRate, presentMoneyFields, snapshotMoney, sumMoneyTotals } = require('./money');
+const { CURRENCIES, getUsdUzsRate, presentTaskLineMoney, snapshotMoney, sumMoneyTotals, emptyMoneyTotals, normalizeDiscountInput, emptyDiscount } = require('./money');
+const {
+  ensureTaskPaymentTables,
+  emptyTaskPaymentTotals,
+  listTaskPayments,
+  summarizeTaskPayments,
+} = require('./task-payments');
+const {
+  appendLocationAccessFilter,
+  canViewerAccessLocation,
+  ensureLocationTables,
+  getLocation,
+} = require('./locations');
 
 const MAX_TITLE = 200;
 const MAX_NOTES = 5000;
@@ -11,6 +23,7 @@ const MAX_CATEGORY_NAME = 100;
 const MAX_CLIENT_NAME = 200;
 const MAX_CLIENT_PHONE = 40;
 const MAX_LINE_NOTES = 500;
+const MAX_LINE_QUANTITY = 999;
 const TASK_STATUSES = ['new', 'in_progress', 'done'];
 const TASK_ACTIONS = ['install', 'repair'];
 const TASK_STATUS_LABELS = {
@@ -24,11 +37,12 @@ const TASK_ACTION_LABELS = {
 };
 
 const TASK_SELECT = `
-  t.id, t.title, t.status, t.notes, t.address, t.category_id,
+  t.id, t.title, t.status, t.action, t.notes, t.address, t.category_id, t.location_id,
   t.regos_client_id, t.client_name, t.client_phone,
-  t.manager_user_id, t.technician_user_id,
+  t.manager_user_id, t.technician_user_id, t.currency,
   t.created_at, t.updated_at,
   c.name AS category_name,
+  loc.name AS location_name,
   manager.display_name AS manager_display_name,
   manager.first_name AS manager_first_name,
   manager.last_name AS manager_last_name,
@@ -44,6 +58,7 @@ const TASK_SELECT = `
 const TASK_FROM = `
   tasks t
   LEFT JOIN task_categories c ON c.id = t.category_id
+  LEFT JOIN locations loc ON loc.id = t.location_id
   LEFT JOIN bot_users manager ON manager.id = t.manager_user_id
   LEFT JOIN bot_users tech ON tech.id = t.technician_user_id
 `;
@@ -54,8 +69,9 @@ function tableExists(db, name) {
 
 function ensureColumn(db, table, column, ddl) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (cols.some((col) => col.name === column)) return;
+  if (cols.some((col) => col.name === column)) return false;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  return true;
 }
 
 function ensureTaskTables(db) {
@@ -73,6 +89,7 @@ function ensureTaskTables(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'new',
+      action TEXT NOT NULL DEFAULT 'install',
       notes TEXT,
       address TEXT,
       category_id INTEGER,
@@ -81,6 +98,7 @@ function ensureTaskTables(db) {
       client_phone TEXT,
       manager_user_id INTEGER,
       technician_user_id INTEGER,
+      currency TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (category_id) REFERENCES task_categories(id) ON DELETE SET NULL,
@@ -94,6 +112,7 @@ function ensureTaskTables(db) {
       device_id INTEGER NOT NULL,
       action TEXT NOT NULL,
       notes TEXT,
+      quantity INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
       FOREIGN KEY (device_id) REFERENCES devices(id)
@@ -104,6 +123,7 @@ function ensureTaskTables(db) {
       task_id INTEGER NOT NULL,
       service_id INTEGER NOT NULL,
       notes TEXT,
+      quantity INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
       cost_amount REAL NOT NULL DEFAULT 0,
       cost_currency TEXT NOT NULL DEFAULT 'UZS',
@@ -125,6 +145,29 @@ function ensureTaskTables(db) {
   ensureColumn(db, 'task_devices', 'cost_currency', "TEXT NOT NULL DEFAULT 'UZS'");
   ensureColumn(db, 'task_devices', 'price_uzs', 'REAL');
   ensureColumn(db, 'task_devices', 'price_usd', 'REAL');
+  ensureColumn(db, 'task_devices', 'quantity', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'task_services', 'quantity', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'task_devices', 'discount_type', 'TEXT');
+  ensureColumn(db, 'task_devices', 'discount_value', 'REAL NOT NULL DEFAULT 0');
+  ensureColumn(db, 'task_devices', 'discount_currency', 'TEXT');
+  ensureColumn(db, 'task_services', 'discount_type', 'TEXT');
+  ensureColumn(db, 'task_services', 'discount_value', 'REAL NOT NULL DEFAULT 0');
+  ensureColumn(db, 'task_services', 'discount_currency', 'TEXT');
+  ensureColumn(db, 'tasks', 'currency', 'TEXT');
+  if (ensureColumn(db, 'tasks', 'action', "TEXT NOT NULL DEFAULT 'install'")) {
+    db.exec(`
+      UPDATE tasks
+      SET action = (
+        SELECT td.action FROM task_devices td
+        WHERE td.task_id = tasks.id
+        ORDER BY td.sort_order ASC, td.id ASC
+        LIMIT 1
+      )
+      WHERE EXISTS (
+        SELECT 1 FROM task_devices td WHERE td.task_id = tasks.id
+      )
+    `);
+  }
   if (tableExists(db, 'devices')) {
     db.exec(`
       UPDATE task_devices
@@ -136,6 +179,8 @@ function ensureTaskTables(db) {
       WHERE price_uzs IS NULL AND price_usd IS NULL
     `);
   }
+  ensureLocationTables(db);
+  ensureTaskPaymentTables(db);
 }
 
 function employeeLabel(row, prefix) {
@@ -164,8 +209,9 @@ function mapTaskDevice(row, rate) {
     action: row.action,
     action_label: TASK_ACTION_LABELS[row.action] || row.action,
     notes: row.notes || '',
+    quantity: Number(row.quantity) > 0 ? Number(row.quantity) : 1,
     sort_order: row.sort_order ?? 0,
-    ...presentMoneyFields(row, rate),
+    ...presentTaskLineMoney(row, rate),
   };
 }
 
@@ -178,12 +224,13 @@ function mapTaskService(row, rate) {
     service_name: row.service_name || '',
     description: row.service_description || '',
     notes: row.notes || '',
+    quantity: Number(row.quantity) > 0 ? Number(row.quantity) : 1,
     sort_order: row.sort_order ?? 0,
-    ...presentMoneyFields(row, rate),
+    ...presentTaskLineMoney(row, rate),
   };
 }
 
-function mapTask(row, devices = [], services = [], totals = null) {
+function mapTask(row, devices = [], services = [], totals = null, payments = null, paymentTotals = null) {
   if (!row) return null;
   const managerName = employeeLabel(row, 'manager');
   const technicianName = employeeLabel(row, 'technician');
@@ -192,11 +239,17 @@ function mapTask(row, devices = [], services = [], totals = null) {
     title: row.title,
     status: row.status,
     status_label: TASK_STATUS_LABELS[row.status] || row.status,
+    action: row.action || 'install',
+    action_label: TASK_ACTION_LABELS[row.action] || TASK_ACTION_LABELS.install,
     notes: row.notes || '',
     address: row.address || '',
     category_id: row.category_id ?? null,
     category: row.category_id
       ? { id: row.category_id, name: row.category_name || '' }
+      : null,
+    location_id: row.location_id ?? null,
+    location: row.location_id
+      ? { id: row.location_id, name: row.location_name || '' }
       : null,
     regos_client_id: row.regos_client_id ?? null,
     client_name: row.client_name || '',
@@ -205,9 +258,12 @@ function mapTask(row, devices = [], services = [], totals = null) {
     manager: mapEmployeeSummary(row.manager_user_id, managerName),
     technician_user_id: row.technician_user_id ?? null,
     technician: mapEmployeeSummary(row.technician_user_id, technicianName),
+    currency: row.currency === 'USD' ? 'USD' : row.currency === 'UZS' ? 'UZS' : null,
     devices,
     services,
-    totals: totals || { cost_uzs: 0, cost_usd: 0, price_uzs: 0, price_usd: 0 },
+    totals: totals || emptyMoneyTotals(),
+    payments: payments || [],
+    payment_totals: paymentTotals || emptyTaskPaymentTotals(),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -305,6 +361,21 @@ function normalizeCategoryId(db, value) {
   return category.id;
 }
 
+function normalizeLocationId(db, value, { required = false, viewer } = {}) {
+  if (value === undefined && !required) return undefined;
+  const locationId = normalizeOptionalId(value);
+  if (locationId == null) {
+    if (required) throw new Error('INVALID_TASK_LOCATION');
+    return null;
+  }
+  const location = getLocation(db, locationId);
+  if (!location) throw new Error('INVALID_TASK_LOCATION');
+  if (!canViewerAccessLocation(db, location.id, viewer)) {
+    throw new Error('INVALID_TASK_LOCATION');
+  }
+  return location.id;
+}
+
 function normalizeEmployeeId(db, value, errorCode) {
   if (value === undefined) return undefined;
   const userId = normalizeOptionalId(value);
@@ -321,16 +392,41 @@ function normalizeStatus(value, fallback = 'new') {
   return status;
 }
 
-function normalizeTaskDeviceLine(db, item, index = 0) {
+function normalizeAction(value, fallback = 'install') {
+  if (value == null || value === '') return fallback;
+  const action = String(value).trim();
+  if (!TASK_ACTIONS.includes(action)) throw new Error('INVALID_TASK_ACTION');
+  return action;
+}
+
+function normalizeDisplayCurrency(value, fallback = null) {
+  if (value === undefined) return fallback;
+  if (value == null || value === '') return null;
+  const currency = String(value).trim().toUpperCase();
+  if (!CURRENCIES.includes(currency)) throw new Error('INVALID_TASK_CURRENCY');
+  return currency;
+}
+
+function normalizeQuantity(value, fallback = 1) {
+  if (value == null || value === '') return fallback;
+  const qty = Number(value);
+  if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 1 || qty > MAX_LINE_QUANTITY) {
+    throw new Error('INVALID_TASK_QUANTITY');
+  }
+  return qty;
+}
+
+function normalizeTaskDeviceLine(db, item, index = 0, fallbackAction = 'install') {
   const device = getDevice(db, item?.device_id);
   if (!device) throw new Error('INVALID_TASK_DEVICE');
-  const action = String(item?.action || '').trim();
-  if (!TASK_ACTIONS.includes(action)) throw new Error('INVALID_TASK_ACTION');
+  const action = normalizeAction(item?.action, fallbackAction);
   const notes = normalizeOptionalText(item?.notes, MAX_LINE_NOTES, 'INVALID_TASK_DEVICE_NOTES');
+  const quantity = normalizeQuantity(item?.quantity);
   return {
     device_id: device.id,
     action,
     notes,
+    quantity,
     sort_order: index,
     ...snapshotMoney(device),
   };
@@ -340,21 +436,23 @@ function normalizeTaskServiceLine(db, item, index = 0) {
   const service = getService(db, item?.service_id);
   if (!service) throw new Error('INVALID_TASK_SERVICE');
   const notes = normalizeOptionalText(item?.notes, MAX_LINE_NOTES, 'INVALID_TASK_SERVICE_NOTES');
+  const quantity = normalizeQuantity(item?.quantity);
   return {
     service_id: service.id,
     notes,
+    quantity,
     sort_order: index,
     ...snapshotMoney(service),
   };
 }
 
-function normalizeTaskDevices(db, devices) {
+function normalizeTaskDevices(db, devices, fallbackAction = 'install') {
   if (devices == null) return [];
   if (!Array.isArray(devices)) throw new Error('INVALID_TASK_DEVICES');
-  return devices.map((item, index) => normalizeTaskDeviceLine(db, item, index));
+  return devices.map((item, index) => normalizeTaskDeviceLine(db, item, index, fallbackAction));
 }
 
-function normalizeTaskInput(db, input = {}, { partial = false, current = null } = {}) {
+function normalizeTaskInput(db, input = {}, { partial = false, current = null, requireLocation = false, viewer } = {}) {
   const titleSource = input.title != null ? input.title : current?.title;
   const title = String(titleSource || '').trim();
   if (!partial || input.title != null) {
@@ -363,6 +461,10 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null } 
   const status = normalizeStatus(
     input.status != null ? input.status : current?.status,
     current?.status || 'new'
+  );
+  const action = normalizeAction(
+    input.action != null ? input.action : current?.action,
+    current?.action || 'install'
   );
   const notes = normalizeOptionalText(
     input.notes != null ? input.notes : current?.notes,
@@ -389,20 +491,39 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null } 
     regosClientId = normalizeOptionalId(input.regos_client_id);
   }
   const categoryId = normalizeCategoryId(db, input.category_id);
+  const locationRequired = requireLocation && (input.location_id !== undefined || !current?.location_id);
+  const locationId = normalizeLocationId(db, input.location_id, {
+    required: locationRequired,
+    viewer,
+  });
   const managerUserId = normalizeEmployeeId(db, input.manager_user_id, 'INVALID_TASK_MANAGER');
   const technicianUserId = normalizeEmployeeId(db, input.technician_user_id, 'INVALID_TASK_TECHNICIAN');
+  const currency = input.currency !== undefined
+    ? normalizeDisplayCurrency(input.currency)
+    : current?.currency ?? null;
+
+  const nextLocationId = locationId === undefined ? current?.location_id ?? null : locationId;
+  if (requireLocation && nextLocationId == null) {
+    throw new Error('INVALID_TASK_LOCATION');
+  }
+  if (nextLocationId != null && !canViewerAccessLocation(db, nextLocationId, viewer)) {
+    throw new Error('INVALID_TASK_LOCATION');
+  }
 
   return {
     title: title || current?.title,
     status,
+    action,
     notes,
     address,
     client_name: clientName,
     client_phone: clientPhone,
     regos_client_id: regosClientId,
     category_id: categoryId === undefined ? current?.category_id ?? null : categoryId,
+    location_id: nextLocationId,
     manager_user_id: managerUserId === undefined ? current?.manager_user_id ?? null : managerUserId,
     technician_user_id: technicianUserId === undefined ? current?.technician_user_id ?? null : technicianUserId,
+    currency,
   };
 }
 
@@ -412,8 +533,9 @@ function listTaskDevicesForIds(db, taskIds, rate) {
   const placeholders = taskIds.map(() => '?').join(', ');
   const rows = db
     .prepare(
-      `SELECT td.id, td.task_id, td.device_id, td.action, td.notes, td.sort_order,
+      `SELECT td.id, td.task_id, td.device_id, td.action, td.notes, td.quantity, td.sort_order,
               td.cost_amount, td.cost_currency, td.price_uzs, td.price_usd,
+              td.discount_type, td.discount_value, td.discount_currency,
               d.name AS device_name,
               d.description AS device_description
        FROM task_devices td
@@ -438,8 +560,9 @@ function listTaskServicesForIds(db, taskIds, rate) {
   const placeholders = taskIds.map(() => '?').join(', ');
   const rows = db
     .prepare(
-      `SELECT ts.id, ts.task_id, ts.service_id, ts.notes, ts.sort_order,
+      `SELECT ts.id, ts.task_id, ts.service_id, ts.notes, ts.quantity, ts.sort_order,
               ts.cost_amount, ts.cost_currency, ts.price_uzs, ts.price_usd,
+              ts.discount_type, ts.discount_value, ts.discount_currency,
               s.name AS service_name,
               s.description AS service_description
        FROM task_services ts
@@ -469,13 +592,15 @@ function assembleTask(db, row) {
   const devices = listTaskDevicesForIds(db, [row.id], rate).get(row.id) || [];
   const services = listTaskServicesForIds(db, [row.id], rate).get(row.id) || [];
   const totals = sumMoneyTotals([...devices, ...services], rate);
-  return mapTask(row, devices, services, totals);
+  const payments = listTaskPayments(db, row.id);
+  return mapTask(row, devices, services, totals, payments, summarizeTaskPayments(payments, totals));
 }
 
-function getTask(db, id) {
+function getTask(db, id, viewer) {
   ensureTaskTables(db);
   const row = getTaskRow(db, id);
   if (!row) return null;
+  if (!canViewerAccessLocation(db, row.location_id, viewer)) return null;
   return assembleTask(db, row);
 }
 
@@ -496,8 +621,8 @@ function replaceTaskDevices(db, taskId, devices) {
   db.prepare('DELETE FROM task_devices WHERE task_id = ?').run(taskId);
   const insert = db.prepare(
     `INSERT INTO task_devices (
-       task_id, device_id, action, notes, sort_order, cost_amount, cost_currency, price_uzs, price_usd
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       task_id, device_id, action, notes, quantity, sort_order, cost_amount, cost_currency, price_uzs, price_usd
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const item of devices) {
     insert.run(
@@ -505,6 +630,7 @@ function replaceTaskDevices(db, taskId, devices) {
       item.device_id,
       item.action,
       item.notes,
+      item.quantity,
       item.sort_order,
       item.cost_amount,
       item.cost_currency,
@@ -514,31 +640,34 @@ function replaceTaskDevices(db, taskId, devices) {
   }
 }
 
-function createTask(db, input) {
+function createTask(db, input, options = {}) {
   ensureTaskTables(db);
-  const task = normalizeTaskInput(db, input);
-  const devices = normalizeTaskDevices(db, input.devices || []);
+  const task = normalizeTaskInput(db, input, options);
+  const devices = normalizeTaskDevices(db, input.devices || [], task.action);
   db.exec('BEGIN');
   try {
     const result = db
       .prepare(
         `INSERT INTO tasks (
-           title, status, notes, address, category_id,
+           title, status, action, notes, address, category_id, location_id,
            regos_client_id, client_name, client_phone,
-           manager_user_id, technician_user_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+           manager_user_id, technician_user_id, currency, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
       )
       .run(
         task.title,
         task.status,
+        task.action,
         task.notes,
         task.address,
         task.category_id,
+        task.location_id,
         task.regos_client_id,
         task.client_name,
         task.client_phone,
         task.manager_user_id,
-        task.technician_user_id
+        task.technician_user_id,
+        task.currency
       );
     const taskId = Number(result.lastInsertRowid);
     replaceTaskDevices(db, taskId, devices);
@@ -550,34 +679,40 @@ function createTask(db, input) {
   }
 }
 
-function updateTask(db, id, input = {}) {
+function updateTask(db, id, input = {}, options = {}) {
   ensureTaskTables(db);
-  const current = getTask(db, id);
+  const current = getTask(db, id, options.viewer);
   if (!current) throw new Error('NOT_FOUND');
-  const task = normalizeTaskInput(db, input, { partial: true, current });
-  const devices = input.devices != null ? normalizeTaskDevices(db, input.devices) : null;
+  const task = normalizeTaskInput(db, input, { partial: true, current, ...options });
+  const devices = input.devices != null ? normalizeTaskDevices(db, input.devices, task.action) : null;
   db.exec('BEGIN');
   try {
     db.prepare(
       `UPDATE tasks
-       SET title = ?, status = ?, notes = ?, address = ?, category_id = ?,
+       SET title = ?, status = ?, action = ?, notes = ?, address = ?, category_id = ?, location_id = ?,
            regos_client_id = ?, client_name = ?, client_phone = ?,
-           manager_user_id = ?, technician_user_id = ?, updated_at = datetime('now')
+           manager_user_id = ?, technician_user_id = ?, currency = ?, updated_at = datetime('now')
        WHERE id = ?`
     ).run(
       task.title,
       task.status,
+      task.action,
       task.notes,
       task.address,
       task.category_id,
+      task.location_id,
       task.regos_client_id,
       task.client_name,
       task.client_phone,
       task.manager_user_id,
       task.technician_user_id,
+      task.currency,
       current.id
     );
     if (devices) replaceTaskDevices(db, current.id, devices);
+    else if (task.action !== current.action) {
+      db.prepare('UPDATE task_devices SET action = ? WHERE task_id = ?').run(task.action, current.id);
+    }
     db.exec('COMMIT');
     return getTask(db, current.id);
   } catch (error) {
@@ -586,20 +721,48 @@ function updateTask(db, id, input = {}) {
   }
 }
 
+function bumpLineQuantity(db, table, lineId, currentQuantity) {
+  if (table !== 'task_devices' && table !== 'task_services') {
+    throw new Error('INVALID_TABLE');
+  }
+  const next = (Number(currentQuantity) > 0 ? Number(currentQuantity) : 1) + 1;
+  if (next > MAX_LINE_QUANTITY) throw new Error('INVALID_TASK_QUANTITY');
+  db.prepare(`UPDATE ${table} SET quantity = ? WHERE id = ?`).run(next, lineId);
+}
+
 function addTaskDevice(db, taskId, input = {}) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
-  const line = normalizeTaskDeviceLine(db, input, nextSortOrder(db, 'task_devices', current.id));
+  const existing = db
+    .prepare(
+      `SELECT id, quantity FROM task_devices
+       WHERE task_id = ? AND device_id = ?
+       ORDER BY sort_order ASC, id ASC
+       LIMIT 1`
+    )
+    .get(current.id, Number(input.device_id));
+  if (existing) {
+    bumpLineQuantity(db, 'task_devices', existing.id, existing.quantity);
+    touchTask(db, current.id);
+    return getTask(db, current.id);
+  }
+  const line = normalizeTaskDeviceLine(
+    db,
+    input,
+    nextSortOrder(db, 'task_devices', current.id),
+    current.action
+  );
   db.prepare(
     `INSERT INTO task_devices (
-       task_id, device_id, action, notes, sort_order, cost_amount, cost_currency, price_uzs, price_usd
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       task_id, device_id, action, notes, quantity, sort_order, cost_amount, cost_currency, price_uzs, price_usd
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     current.id,
     line.device_id,
     line.action,
     line.notes,
+    line.quantity,
     line.sort_order,
     line.cost_amount,
     line.cost_currency,
@@ -626,15 +789,29 @@ function addTaskService(db, taskId, input = {}) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  const existing = db
+    .prepare(
+      `SELECT id, quantity FROM task_services
+       WHERE task_id = ? AND service_id = ?
+       ORDER BY sort_order ASC, id ASC
+       LIMIT 1`
+    )
+    .get(current.id, Number(input.service_id));
+  if (existing) {
+    bumpLineQuantity(db, 'task_services', existing.id, existing.quantity);
+    touchTask(db, current.id);
+    return getTask(db, current.id);
+  }
   const line = normalizeTaskServiceLine(db, input, nextSortOrder(db, 'task_services', current.id));
   db.prepare(
     `INSERT INTO task_services (
-       task_id, service_id, notes, sort_order, cost_amount, cost_currency, price_uzs, price_usd
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       task_id, service_id, notes, quantity, sort_order, cost_amount, cost_currency, price_uzs, price_usd
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     current.id,
     line.service_id,
     line.notes,
+    line.quantity,
     line.sort_order,
     line.cost_amount,
     line.cost_currency,
@@ -657,6 +834,166 @@ function deleteTaskService(db, taskId, lineId) {
   return getTask(db, current.id);
 }
 
+function updateTaskDevice(db, taskId, lineId, input = {}) {
+  ensureTaskTables(db);
+  const current = getTask(db, taskId);
+  if (!current) throw new Error('NOT_FOUND');
+  const id = Number(lineId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error('NOT_FOUND');
+  const row = db
+    .prepare(
+      `SELECT id, quantity, discount_type, discount_value, discount_currency
+       FROM task_devices WHERE id = ? AND task_id = ?`
+    )
+    .get(id, current.id);
+  if (!row) throw new Error('NOT_FOUND');
+  const quantity = input.quantity !== undefined ? normalizeQuantity(input.quantity) : row.quantity || 1;
+  const discount =
+    input.discount_type !== undefined || input.type !== undefined || input.clear
+      ? input.clear
+        ? emptyDiscount()
+        : normalizeDiscountInput(input)
+      : {
+          discount_type: row.discount_type || null,
+          discount_value: Number(row.discount_value) || 0,
+          discount_currency: row.discount_currency || null,
+        };
+  db.prepare(
+    `UPDATE task_devices
+     SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?
+     WHERE id = ? AND task_id = ?`
+  ).run(quantity, discount.discount_type, discount.discount_value, discount.discount_currency, id, current.id);
+  touchTask(db, current.id);
+  return getTask(db, current.id);
+}
+
+function updateTaskService(db, taskId, lineId, input = {}) {
+  ensureTaskTables(db);
+  const current = getTask(db, taskId);
+  if (!current) throw new Error('NOT_FOUND');
+  const id = Number(lineId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error('NOT_FOUND');
+  const row = db
+    .prepare(
+      `SELECT id, quantity, discount_type, discount_value, discount_currency
+       FROM task_services WHERE id = ? AND task_id = ?`
+    )
+    .get(id, current.id);
+  if (!row) throw new Error('NOT_FOUND');
+  const quantity = input.quantity !== undefined ? normalizeQuantity(input.quantity) : row.quantity || 1;
+  const discount =
+    input.discount_type !== undefined || input.type !== undefined || input.clear
+      ? input.clear
+        ? emptyDiscount()
+        : normalizeDiscountInput(input)
+      : {
+          discount_type: row.discount_type || null,
+          discount_value: Number(row.discount_value) || 0,
+          discount_currency: row.discount_currency || null,
+        };
+  db.prepare(
+    `UPDATE task_services
+     SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?
+     WHERE id = ? AND task_id = ?`
+  ).run(quantity, discount.discount_type, discount.discount_value, discount.discount_currency, id, current.id);
+  touchTask(db, current.id);
+  return getTask(db, current.id);
+}
+
+function writeLineDiscount(db, kind, taskId, lineId, discount) {
+  const table = kind === 'service' ? 'task_services' : kind === 'device' ? 'task_devices' : null;
+  if (!table) throw new Error('INVALID_TABLE');
+  const result = db
+    .prepare(
+      `UPDATE ${table}
+       SET discount_type = ?, discount_value = ?, discount_currency = ?
+       WHERE id = ? AND task_id = ?`
+    )
+    .run(discount.discount_type, discount.discount_value, discount.discount_currency, lineId, taskId);
+  if (!result.changes) throw new Error('NOT_FOUND');
+}
+
+function cartLines(task) {
+  return [
+    ...(task.devices || []).map((line) => ({ kind: 'device', ...line })),
+    ...(task.services || []).map((line) => ({ kind: 'service', ...line })),
+  ];
+}
+
+function resolveDiscountTargets(task, input = {}) {
+  const all = cartLines(task);
+  const scope = String(input.scope || '').trim();
+  if (scope === 'all' || input.all === true) return all;
+  const requested = Array.isArray(input.lines) ? input.lines : [];
+  if (!requested.length) throw new Error('INVALID_TASK_DISCOUNT_TARGET');
+  const byKey = new Map(all.map((line) => [`${line.kind}:${line.id}`, line]));
+  const targets = [];
+  for (const item of requested) {
+    const kind = item?.kind === 'service' ? 'service' : item?.kind === 'device' ? 'device' : null;
+    const id = Number(item?.id);
+    if (!kind || !Number.isFinite(id) || id <= 0) throw new Error('INVALID_TASK_DISCOUNT_TARGET');
+    const line = byKey.get(`${kind}:${id}`);
+    if (!line) throw new Error('INVALID_TASK_DISCOUNT_TARGET');
+    targets.push(line);
+  }
+  return targets;
+}
+
+function distributeAmountDiscount(lines, discount) {
+  const currency = discount.discount_currency === 'USD' ? 'USD' : 'UZS';
+  const key = currency === 'USD' ? 'price_without_discount_usd' : 'price_without_discount_uzs';
+  const total = lines.reduce((sum, line) => sum + (Number(line[key]) || 0), 0);
+  if (total <= 0 || !discount.discount_value) {
+    return lines.map((line) => ({ line, discount: emptyDiscount() }));
+  }
+  let remaining = discount.discount_value;
+  return lines.map((line, index) => {
+    const share = (Number(line[key]) || 0) / total;
+    const value =
+      index === lines.length - 1 ? roundMoneySafe(remaining) : roundMoneySafe(discount.discount_value * share);
+    remaining = roundMoneySafe(remaining - value);
+    return {
+      line,
+      discount: {
+        discount_type: 'amount',
+        discount_value: value,
+        discount_currency: currency,
+      },
+    };
+  });
+}
+
+function roundMoneySafe(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 10000) / 10000;
+}
+
+function applyTaskDiscount(db, taskId, input = {}) {
+  ensureTaskTables(db);
+  const current = getTask(db, taskId);
+  if (!current) throw new Error('NOT_FOUND');
+  const targets = resolveDiscountTargets(current, input);
+  if (!targets.length) throw new Error('INVALID_TASK_DISCOUNT_TARGET');
+  const clear = input.clear === true || input.discount_type === 'none' || input.type === 'none';
+  const discount = clear ? emptyDiscount() : normalizeDiscountInput(input, { allowEmpty: false });
+  const updates =
+    !clear && discount.discount_type === 'amount' && targets.length > 1
+      ? distributeAmountDiscount(targets, discount)
+      : targets.map((line) => ({ line, discount }));
+  db.exec('BEGIN');
+  try {
+    for (const item of updates) {
+      writeLineDiscount(db, item.line.kind, current.id, item.line.id, item.discount);
+    }
+    touchTask(db, current.id);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return getTask(db, current.id);
+}
+
 function deleteTask(db, id) {
   const current = getTask(db, id);
   if (!current) return false;
@@ -673,7 +1010,7 @@ function deleteTask(db, id) {
   }
 }
 
-function listTasks(db, { query, status, categoryId, limit = 25, offset = 0 } = {}) {
+function listTasks(db, { query, status, categoryId, locationId, viewer, limit = 25, offset = 0 } = {}) {
   ensureTaskTables(db);
   const rate = getUsdUzsRate(db);
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 25));
@@ -690,6 +1027,7 @@ function listTasks(db, { query, status, categoryId, limit = 25, offset = 0 } = {
       OR IFNULL(t.address, '') LIKE ?
       OR IFNULL(t.notes, '') LIKE ?
       OR IFNULL(c.name, '') LIKE ?
+      OR IFNULL(loc.name, '') LIKE ?
       OR EXISTS (
         SELECT 1 FROM task_devices td
         LEFT JOIN devices d ON d.id = td.device_id
@@ -701,7 +1039,7 @@ function listTasks(db, { query, status, categoryId, limit = 25, offset = 0 } = {
         WHERE ts.task_id = t.id AND IFNULL(s.name, '') LIKE ?
       )
     )`);
-    params.push(like, like, like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like, like, like);
   }
   if (status) {
     if (!TASK_STATUSES.includes(status)) throw new Error('INVALID_TASK_STATUS');
@@ -714,6 +1052,14 @@ function listTasks(db, { query, status, categoryId, limit = 25, offset = 0 } = {
     where.push('t.category_id = ?');
     params.push(parsed);
   }
+  if (locationId != null && locationId !== '' && locationId !== 'all') {
+    const parsed = Number(locationId);
+    if (!Number.isFinite(parsed) || parsed <= 0) throw new Error('INVALID_TASK_LOCATION');
+    if (!canViewerAccessLocation(db, parsed, viewer)) throw new Error('INVALID_TASK_LOCATION');
+    where.push('t.location_id = ?');
+    params.push(parsed);
+  }
+  appendLocationAccessFilter(where, params, viewer);
   const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : '';
   const total = db.prepare(`SELECT COUNT(*) AS count FROM ${TASK_FROM}${whereSql}`).get(...params).count;
   const rows = db
@@ -753,8 +1099,12 @@ module.exports = {
   createTask,
   updateTask,
   addTaskDevice,
+  updateTaskDevice,
   deleteTaskDevice,
   addTaskService,
+  updateTaskService,
   deleteTaskService,
+  applyTaskDiscount,
   deleteTask,
+  touchTask,
 };

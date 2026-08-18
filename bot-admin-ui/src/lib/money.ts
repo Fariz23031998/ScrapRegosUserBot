@@ -20,6 +20,12 @@ export function parseMoneyCurrency(value: unknown): MoneyCurrency {
   return String(value || "").toUpperCase() === "USD" ? "USD" : "UZS";
 }
 
+export function parseDisplayCurrency(value: unknown): MoneyCurrency | null {
+  const raw = String(value || "").trim().toUpperCase();
+  if (raw === "USD" || raw === "UZS") return raw;
+  return null;
+}
+
 export function formatMoneyLine(amount: number | null | undefined, currency: MoneyCurrency): string {
   const n = Number(amount);
   const safe = Number.isFinite(n) ? n : 0;
@@ -55,8 +61,19 @@ export function catalogCostLines(item: CatalogMoney): MoneyLines {
   };
 }
 
-export function catalogPriceLines(item: CatalogMoney, rate: number): MoneyLines {
+export function catalogPriceLines(
+  item: CatalogMoney,
+  rate: number,
+  displayCurrency?: MoneyCurrency | null,
+): MoneyLines {
   const resolved = resolvePrice(item.price_uzs, item.price_usd, rate);
+  if (!resolved.storedUzs && !resolved.storedUsd) return { primary: "—", muted: "" };
+  if (displayCurrency === "USD" || displayCurrency === "UZS") {
+    return {
+      primary: formatMoneyLine(displayCurrency === "USD" ? resolved.usd : resolved.uzs, displayCurrency),
+      muted: "",
+    };
+  }
   if (resolved.storedUsd && !resolved.storedUzs) {
     return {
       primary: formatMoneyLine(item.price_usd, "USD"),
@@ -76,6 +93,60 @@ export function catalogPriceLines(item: CatalogMoney, rate: number): MoneyLines 
     };
   }
   return { primary: "—", muted: "" };
+}
+
+export type CartMoney = CatalogMoney & {
+  price_stored_uzs?: number | null;
+  price_stored_usd?: number | null;
+  price_without_discount_uzs?: number | null;
+  price_without_discount_usd?: number | null;
+  discount_type?: string | null;
+  discount_value?: number | null;
+  discount_currency?: string | null;
+};
+
+export function cartOperationPriceLines(
+  line: CartMoney,
+  rate: number,
+  field: "price" | "price_without_discount" = "price",
+  displayCurrency?: MoneyCurrency | null,
+): MoneyLines {
+  const uzs = field === "price" ? line.price_uzs : line.price_without_discount_uzs;
+  const usd = field === "price" ? line.price_usd : line.price_without_discount_usd;
+  const storedUzs = line.price_stored_uzs != null && Number.isFinite(Number(line.price_stored_uzs));
+  const storedUsd = line.price_stored_usd != null && Number.isFinite(Number(line.price_stored_usd));
+  return catalogPriceLines(
+    {
+      price_uzs: storedUzs || !storedUsd ? uzs : null,
+      price_usd: storedUsd || !storedUzs ? usd : null,
+    },
+    rate,
+    displayCurrency,
+  );
+}
+
+export function totalsPriceLines(
+  uzs: number | null | undefined,
+  usd: number | null | undefined,
+  displayCurrency?: MoneyCurrency | null,
+): MoneyLines {
+  if (displayCurrency === "USD") {
+    return { primary: formatMoneyLine(usd, "USD"), muted: "" };
+  }
+  if (displayCurrency === "UZS") {
+    return { primary: formatMoneyLine(uzs, "UZS"), muted: "" };
+  }
+  return {
+    primary: formatMoneyLine(uzs, "UZS"),
+    muted: formatMoneyLine(usd, "USD"),
+  };
+}
+
+export function hasCartDiscount(line: CartMoney): boolean {
+  if (line.discount_type && Number(line.discount_value) > 0) return true;
+  const price = Number(line.price_uzs);
+  const original = Number(line.price_without_discount_uzs);
+  return Number.isFinite(original) && Number.isFinite(price) && original > 0 && price < original - 0.0001;
 }
 
 export function emptyMoneyEditor() {
@@ -108,4 +179,22 @@ export function moneyPayloadFromEditor(editor: {
     price_uzs: editor.price_uzs.trim() === "" ? null : Number(editor.price_uzs),
     price_usd: editor.price_usd.trim() === "" ? null : Number(editor.price_usd),
   };
+}
+
+export function lineRefundAmount(
+  line: {
+    price_uzs?: number | null;
+    price_usd?: number | null;
+    quantity?: number | null;
+  },
+  refundQty: number,
+  currency: MoneyCurrency,
+): number {
+  const totalQty = Math.max(1, Math.trunc(Number(line.quantity) || 1));
+  const qty = Math.min(Math.max(1, Math.trunc(refundQty)), totalQty);
+  const ratio = qty / totalQty;
+  const uzs = (Number(line.price_uzs) || 0) * ratio;
+  const usd = (Number(line.price_usd) || 0) * ratio;
+  const value = currency === "USD" ? usd : uzs;
+  return Math.round(value * 100) / 100;
 }

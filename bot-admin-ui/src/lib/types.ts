@@ -695,6 +695,8 @@ export type CatalogDevice = {
   price_usd?: number | null;
   display_price_uzs?: number | null;
   display_price_usd?: number | null;
+  manager_sale_percent?: number | null;
+  technician_score?: number | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -714,6 +716,35 @@ export type CatalogService = {
   price_usd?: number | null;
   display_price_uzs?: number | null;
   display_price_usd?: number | null;
+  manager_sale_percent?: number | null;
+  technician_score?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type TaskLocation = {
+  id: number;
+  name: string;
+};
+
+export type SettingsLocationUser = {
+  id: number;
+  name: string;
+};
+
+export type SettingsLocation = {
+  id: number;
+  name: string;
+  allowed_user_ids: number[];
+  allowed_users: SettingsLocationUser[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PaymentType = {
+  id: number;
+  name: string;
+  currency: "UZS" | "USD";
   created_at?: string;
   updated_at?: string;
 };
@@ -745,6 +776,35 @@ export type TaskMoneyTotals = {
   cost_usd: number;
   price_uzs: number;
   price_usd: number;
+  price_without_discount_uzs?: number;
+  price_without_discount_usd?: number;
+};
+
+export type TaskPayment = {
+  id: number;
+  task_id?: number;
+  payment_type_id?: number | null;
+  payment_type_name: string;
+  amount: number;
+  currency: "UZS" | "USD";
+  amount_uzs: number;
+  amount_usd: number;
+  usd_uzs_rate?: number;
+  kind?: "payment" | "refund";
+  device_line_id?: number | null;
+  service_line_id?: number | null;
+  refunded_quantity?: number | null;
+  note?: string;
+  created_by_user_id?: number | null;
+  created_by?: { id: number; name: string } | null;
+  created_at?: string;
+};
+
+export type TaskPaymentTotals = {
+  paid_uzs: number;
+  paid_usd: number;
+  due_uzs: number;
+  due_usd: number;
 };
 
 export type TaskDeviceLine = {
@@ -757,15 +817,23 @@ export type TaskDeviceLine = {
   action: "install" | "repair" | string;
   action_label?: string;
   notes?: string;
+  quantity?: number;
   sort_order?: number;
   cost_amount?: number | null;
   cost_currency?: string | null;
   cost_uzs?: number | null;
   cost_usd?: number | null;
+  price_stored_uzs?: number | null;
+  price_stored_usd?: number | null;
+  price_without_discount_uzs?: number | null;
+  price_without_discount_usd?: number | null;
   price_uzs?: number | null;
   price_usd?: number | null;
   display_price_uzs?: number | null;
   display_price_usd?: number | null;
+  discount_type?: "percent" | "amount" | null;
+  discount_value?: number;
+  discount_currency?: string | null;
 };
 
 export type TaskServiceLine = {
@@ -776,15 +844,23 @@ export type TaskServiceLine = {
   description?: string;
   images?: CatalogImage[];
   notes?: string;
+  quantity?: number;
   sort_order?: number;
   cost_amount?: number | null;
   cost_currency?: string | null;
   cost_uzs?: number | null;
   cost_usd?: number | null;
+  price_stored_uzs?: number | null;
+  price_stored_usd?: number | null;
+  price_without_discount_uzs?: number | null;
+  price_without_discount_usd?: number | null;
   price_uzs?: number | null;
   price_usd?: number | null;
   display_price_uzs?: number | null;
   display_price_usd?: number | null;
+  discount_type?: "percent" | "amount" | null;
+  discount_value?: number;
+  discount_currency?: string | null;
 };
 
 export type FieldTask = {
@@ -792,10 +868,14 @@ export type FieldTask = {
   title: string;
   status: "new" | "in_progress" | "done" | string;
   status_label?: string;
+  action?: "install" | "repair" | string;
+  action_label?: string;
   notes?: string;
   address?: string;
   category_id?: number | null;
   category?: { id: number; name: string } | null;
+  location_id?: number | null;
+  location?: { id: number; name: string } | null;
   regos_client_id?: number | null;
   client_name?: string;
   client_phone?: string;
@@ -803,9 +883,12 @@ export type FieldTask = {
   manager?: { id: number; name: string } | null;
   technician_user_id?: number | null;
   technician?: { id: number; name: string } | null;
+  currency?: "UZS" | "USD" | null;
   devices: TaskDeviceLine[];
   services?: TaskServiceLine[];
   totals?: TaskMoneyTotals;
+  payments?: TaskPayment[];
+  payment_totals?: TaskPaymentTotals;
   created_at?: string;
   updated_at?: string;
 };

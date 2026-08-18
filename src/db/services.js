@@ -1,4 +1,5 @@
 const { getUsdUzsRate, normalizeMoneyInput, presentMoneyFields } = require('./money');
+const { normalizeCatalogStaffInput, presentCatalogStaffFields } = require('./catalog-staff');
 const { attachCatalogImages, deleteCatalogImagesForEntity, ensureCatalogImageTables } = require('./catalog-images');
 const {
   appendCategoryFilter,
@@ -11,6 +12,7 @@ const MAX_NAME = 200;
 const MAX_DESCRIPTION = 2000;
 const SERVICE_SELECT = `
   s.id, s.name, s.description, s.cost_amount, s.cost_currency, s.price_uzs, s.price_usd,
+  s.manager_sale_percent, s.technician_score,
   s.category_id, s.created_at, s.updated_at, c.name AS category_name
 `;
 
@@ -45,6 +47,8 @@ function ensureServiceTables(db) {
   ensureColumn(db, 'services', 'cost_currency', "TEXT NOT NULL DEFAULT 'UZS'");
   ensureColumn(db, 'services', 'price_uzs', 'REAL');
   ensureColumn(db, 'services', 'price_usd', 'REAL');
+  ensureColumn(db, 'services', 'manager_sale_percent', 'REAL NOT NULL DEFAULT 0');
+  ensureColumn(db, 'services', 'technician_score', 'REAL NOT NULL DEFAULT 0');
   ensureCatalogCategoryTables(db, 'service');
 }
 
@@ -56,6 +60,7 @@ function mapService(row, rate) {
     description: row.description || '',
     ...mapCategoryFields(row),
     ...presentMoneyFields(row, rate),
+    ...presentCatalogStaffFields(row),
     images: [],
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -72,6 +77,7 @@ function normalizeServiceInput(db, input = {}) {
     description: description || null,
     category_id: resolveCatalogCategoryId(db, 'service', input.category_id),
     ...normalizeMoneyInput(input),
+    ...normalizeCatalogStaffInput(input),
   };
 }
 
@@ -137,8 +143,9 @@ function createService(db, input) {
   const result = db
     .prepare(
       `INSERT INTO services (
-         name, description, category_id, cost_amount, cost_currency, price_uzs, price_usd, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+         name, description, category_id, cost_amount, cost_currency, price_uzs, price_usd,
+         manager_sale_percent, technician_score, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
     )
     .run(
       service.name,
@@ -147,7 +154,9 @@ function createService(db, input) {
       service.cost_amount,
       service.cost_currency,
       service.price_uzs,
-      service.price_usd
+      service.price_usd,
+      service.manager_sale_percent,
+      service.technician_score
     );
   return getService(db, Number(result.lastInsertRowid));
 }
@@ -163,11 +172,15 @@ function updateService(db, id, input = {}) {
     cost_currency: input.cost_currency != null ? input.cost_currency : current.cost_currency,
     price_uzs: input.price_uzs !== undefined ? input.price_uzs : current.price_uzs,
     price_usd: input.price_usd !== undefined ? input.price_usd : current.price_usd,
+    manager_sale_percent:
+      input.manager_sale_percent !== undefined ? input.manager_sale_percent : current.manager_sale_percent,
+    technician_score: input.technician_score !== undefined ? input.technician_score : current.technician_score,
   });
   db.prepare(
     `UPDATE services
      SET name = ?, description = ?, category_id = ?, cost_amount = ?, cost_currency = ?,
-         price_uzs = ?, price_usd = ?, updated_at = datetime('now')
+         price_uzs = ?, price_usd = ?, manager_sale_percent = ?, technician_score = ?,
+         updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     service.name,
@@ -177,6 +190,8 @@ function updateService(db, id, input = {}) {
     service.cost_currency,
     service.price_uzs,
     service.price_usd,
+    service.manager_sale_percent,
+    service.technician_score,
     current.id
   );
   return getService(db, current.id);

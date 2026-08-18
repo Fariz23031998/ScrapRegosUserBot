@@ -6,6 +6,8 @@ export type CatalogMoneyPayload = {
   cost_currency: string;
   price_uzs: number | null;
   price_usd: number | null;
+  manager_sale_percent?: number;
+  technician_score?: number;
 };
 
 export type DevicePayload = {
