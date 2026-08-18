@@ -189,6 +189,8 @@ function migrateSchema(db) {
   ensureTaskTables(db);
   const { ensureLocationTables } = require('./locations');
   ensureLocationTables(db);
+  const { ensureAccountTables } = require('./accounts');
+  ensureAccountTables(db);
   const { ensurePaymentTypeTables } = require('./payment-types');
   ensurePaymentTypeTables(db);
 }

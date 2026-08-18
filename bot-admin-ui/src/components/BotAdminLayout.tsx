@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Bot,
   ClipboardList,
   FilePen,
@@ -42,6 +43,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "/logs": FileText,
   "/tickets": Ticket,
   "/tasks": ListTodo,
+  "/reports": BarChart3,
   "/devices": MonitorSmartphone,
   "/services": Wrench,
   "/technical-support": Headphones,

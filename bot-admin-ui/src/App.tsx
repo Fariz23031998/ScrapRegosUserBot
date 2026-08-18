@@ -16,6 +16,7 @@ const TicketDetailPage = lazy(() => import("./pages/TicketDetailPage"));
 const TasksPage = lazy(() => import("./pages/TasksPage"));
 const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
 const TaskRefundPage = lazy(() => import("./pages/TaskRefundPage"));
+const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const DevicesPage = lazy(() => import("./pages/DevicesPage"));
 const ServicesPage = lazy(() => import("./pages/ServicesPage"));
 const TechnicalSupportPage = lazy(() => import("./pages/TechnicalSupportPage"));
@@ -133,6 +134,16 @@ export default function App() {
               element={
                 <SuspensePage>
                   <TaskDetailPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
+          <Route element={<ProtectedRoute permission="see_all_report" />}>
+            <Route
+              path="reports"
+              element={
+                <SuspensePage>
+                  <ReportsPage />
                 </SuspensePage>
               }
             />

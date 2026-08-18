@@ -19,6 +19,7 @@
   --danger-hover: #dc2626;
   --danger-soft: #fee2e2;
   --success: #10b981;
+  --success-hover: #059669;
   --success-soft: #d1fae5;
   --warn: #d97706;
   --warn-soft: #fef3c7;
@@ -107,6 +108,15 @@ button:disabled, .btn:disabled {
 
 .btn-danger:hover:not(:disabled) {
   background: var(--danger-hover);
+}
+
+.btn-success {
+  background: var(--success);
+  color: #fff;
+}
+
+.btn-success:hover:not(:disabled) {
+  background: var(--success-hover);
 }
 
 input:not([type="checkbox"]):not([type="radio"]),
@@ -4184,7 +4194,7 @@ body.is-column-resizing * {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  max-width: 36rem;
+  max-width: 42rem;
 }
 
 .page--task-refund .ticket-detail-header__heading {
@@ -4196,6 +4206,50 @@ body.is-column-resizing * {
 
 .task-refund-card {
   margin: 0;
+}
+
+.task-refund-operations {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.task-refund-operation {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+}
+
+.task-refund-operation__head {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.task-refund-operation__head small {
+  color: var(--ink-soft);
+}
+
+.task-refund-operation__lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.task-refund-operation__lines li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.task-refund-operation__payments h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.92rem;
 }
 
 .page--task-detail {
@@ -4543,8 +4597,28 @@ body.is-column-resizing * {
   padding: 0.55rem 0.85rem;
 }
 
+.task-detail-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .card--task-compact .task-detail-section-title {
   font-size: 0.95rem;
+}
+
+.task-meta-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0;
+}
+
+.task-meta-summary .summary-chip {
+  padding: 0.16rem 0.55rem;
+  font-size: 0.78rem;
 }
 
 .task-detail-meta {

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Eye, Minus, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, BadgeCheck, BadgeX, Eye, Minus, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { listDeviceCategories, listDevices } from "../api/devices";
@@ -8,12 +8,15 @@ import { getExchangeRate } from "../api/settings";
 import {
   addTaskDevice,
   addTaskService,
+  advanceTaskStatus,
   applyTaskDiscount,
   deleteTaskDevice,
   deleteTaskPayment,
   deleteTaskService,
   getTask,
   listTaskCategories,
+  postTask,
+  unpostTask,
   updateTaskDevice,
   updateTaskService,
 } from "../api/tasks";
@@ -48,6 +51,7 @@ import type {
   TaskServiceLine,
 } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
+import { isTaskCartLocked, nextTaskStatus } from "../lib/task-status";
 
 type CatalogKind = "device" | "service";
 type CategoryKey = "all" | `${CatalogKind}:none` | `${CatalogKind}:${number}`;
@@ -102,6 +106,85 @@ function clientLabel(task: FieldTask): string {
     task.client_name ||
     task.client_phone ||
     (task.regos_client_id ? `Клиент #${task.regos_client_id}` : "—")
+  );
+}
+
+type MetaChipTone = "neutral" | "muted" | "danger" | "warn" | "ok" | "info";
+
+function taskFullMetaRows(
+  task: FieldTask,
+  displayCurrency: MoneyCurrency | null,
+): { label: string; value: string }[] {
+  const rows = [
+    { label: "Статус", value: task.status_label || task.status || "—" },
+    { label: "Проведение", value: task.posted ? "Проведена" : "Не проведена" },
+    { label: "Тип", value: task.action_label || "—" },
+    { label: "Валюта", value: displayCurrency || "Обе валюты" },
+    { label: "Категория", value: task.category?.name || "—" },
+    { label: "Филиал", value: task.location?.name || "—" },
+    { label: "Клиент", value: clientLabel(task) },
+    { label: "Адрес", value: textOrDash(task.address) },
+    { label: "Менеджер", value: task.manager?.name || "—" },
+  ];
+  if (task.action !== "sale") {
+    rows.push({ label: "Техник", value: task.technician?.name || "—" });
+  }
+  rows.push(
+    { label: "Заметки", value: textOrDash(task.notes) },
+    { label: "Обновлено", value: formatDateTime(task.updated_at) },
+  );
+  return rows;
+}
+
+function taskSummaryItems(task: FieldTask): { key: string; label?: string; value: string; tone: MetaChipTone }[] {
+  const statusTone: MetaChipTone =
+    task.status === "done" ? "ok" : task.status === "in_progress" ? "warn" : "muted";
+  const items: { key: string; label?: string; value: string; tone: MetaChipTone }[] = [
+    { key: "action", value: task.action_label || task.action || "—", tone: "info" },
+    { key: "status", value: task.status_label || task.status || "—", tone: statusTone },
+    {
+      key: "posted",
+      value: task.posted ? "Проведена" : "Не проведена",
+      tone: task.posted ? "ok" : "muted",
+    },
+  ];
+  const client = clientLabel(task);
+  if (client !== "—") items.push({ key: "client", label: "Клиент", value: client, tone: "neutral" });
+  if (task.location?.name) {
+    items.push({ key: "location", label: "Филиал", value: task.location.name, tone: "neutral" });
+  }
+  if (task.manager?.name) {
+    items.push({ key: "manager", label: "Менеджер", value: task.manager.name, tone: "neutral" });
+  }
+  if (task.action !== "sale" && task.technician?.name) {
+    items.push({ key: "technician", label: "Техник", value: task.technician.name, tone: "neutral" });
+  }
+  return items;
+}
+
+function TaskMetaModal({
+  open,
+  task,
+  displayCurrency,
+  onClose,
+}: {
+  open: boolean;
+  task: FieldTask | null;
+  displayCurrency: MoneyCurrency | null;
+  onClose: () => void;
+}) {
+  return (
+    <Modal open={open} title="Задача" onClose={onClose} closeOnOverlayClick>
+      {task ? (
+        <dl className="task-detail-meta">
+          {taskFullMetaRows(task, displayCurrency).map((row) => (
+            <DetailRow key={row.label} label={row.label}>
+              {row.value}
+            </DetailRow>
+          ))}
+        </dl>
+      ) : null}
+    </Modal>
   );
 }
 
@@ -488,11 +571,13 @@ export default function TaskDetailPage() {
   const [updatingLineKey, setUpdatingLineKey] = useState("");
   const [selectedLineKeys, setSelectedLineKeys] = useState<string[]>([]);
   const [viewingProduct, setViewingProduct] = useState<CatalogProduct | null>(null);
+  const [taskMetaOpen, setTaskMetaOpen] = useState(false);
 
   const canEdit = hasPermission("tasks_edit");
   const canTakePayment = hasPermission("tasks_payment_create");
   const canDeletePayment = hasPermission("tasks_payment_delete");
-  const canRefund = canEdit && canTakePayment;
+  const canPost = hasPermission("tasks_post");
+  const canUnpost = hasPermission("tasks_unpost");
   const validId = Number.isFinite(taskId) && taskId > 0;
 
   const taskQuery = useQuery({
@@ -526,6 +611,8 @@ export default function TaskDetailPage() {
   });
 
   const task = taskQuery.data?.task;
+  const cartLocked = isTaskCartLocked(task);
+  const canEditCart = canEdit && !cartLocked;
   const displayCurrency = parseDisplayCurrency(task?.currency);
   const rate = rateQuery.data?.usd_uzs_rate || DEFAULT_USD_UZS_RATE;
   const catalogDevices = devicesQuery.data?.devices || [];
@@ -578,7 +665,7 @@ export default function TaskDetailPage() {
   }
 
   const addDeviceMutation = useMutation({
-    mutationFn: (payload: { device_id: number; action?: "install" | "repair" }) =>
+    mutationFn: (payload: { device_id: number; action?: "install" | "repair" | "sale" }) =>
       addTaskDevice(taskId, payload),
     onSuccess: () => {
       setLineError("");
@@ -669,6 +756,33 @@ export default function TaskDetailPage() {
     onError: (error: Error) => setLineError(error.message),
   });
 
+  const postMutation = useMutation({
+    mutationFn: () => postTask(taskId),
+    onSuccess: () => {
+      setLineError("");
+      invalidateTask();
+    },
+    onError: (error: Error) => setLineError(error.message),
+  });
+
+  const unpostMutation = useMutation({
+    mutationFn: (deleteRefunds?: boolean) => unpostTask(taskId, { deleteRefunds }),
+    onSuccess: () => {
+      setLineError("");
+      invalidateTask();
+    },
+    onError: (error: Error) => setLineError(error.message),
+  });
+
+  const advanceStatusMutation = useMutation({
+    mutationFn: () => advanceTaskStatus(taskId),
+    onSuccess: () => {
+      setLineError("");
+      invalidateTask();
+    },
+    onError: (error: Error) => setLineError(error.message),
+  });
+
   async function handleRemovePayment(payment: TaskPayment) {
     const ok = await confirm({
       message: `Удалить оплату «${payment.payment_type_name}» на ${formatMoneyLine(
@@ -679,6 +793,24 @@ export default function TaskDetailPage() {
       confirmLabel: "Удалить",
     });
     if (ok) removePaymentMutation.mutate(payment.id);
+  }
+
+  async function handleTogglePosted() {
+    if (!taskQuery.data?.task) return;
+    if (taskQuery.data.task.posted) {
+      const hasRefunds = (taskQuery.data.task.refunds || []).length > 0;
+      const ok = await confirm({
+        title: "Отменить проведение",
+        message: hasRefunds
+          ? "Отменить проведение задачи? Все возвраты будут удалены вместе с позициями (услуги и устройства) и связанными оплатами. После этого документ снова можно будет менять."
+          : "Отменить проведение задачи? После этого документ снова можно будет менять.",
+        variant: hasRefunds ? "danger" : "default",
+        confirmLabel: "Отменить проведение",
+      });
+      if (ok) unpostMutation.mutate(hasRefunds);
+      return;
+    }
+    postMutation.mutate();
   }
 
   async function handleRemoveDevice(line: TaskDeviceLine) {
@@ -702,11 +834,11 @@ export default function TaskDetailPage() {
   }
 
   function handleAddProduct(product: CatalogProduct) {
-    if (!canEdit || addingKey || updatingLineKey) return;
+    if (!canEditCart || addingKey || updatingLineKey) return;
     const currentQty = inTaskQty.get(productKey(product)) || 0;
     if (currentQty >= MAX_LINE_QUANTITY) return;
     if (product.kind === "device") {
-      const action = task?.action === "repair" ? "repair" : "install";
+      const action = task?.action || "install";
       setAddingKey(productKey(product));
       addDeviceMutation.mutate({ device_id: product.id, action });
       return;
@@ -775,10 +907,13 @@ export default function TaskDetailPage() {
   };
   const devices = task.devices || [];
   const services = task.services || [];
-  const payments = task.payments || [];
+  const payments = (task.payments || []).filter((payment) => payment.kind !== "refund");
   const paymentTotals = task.payment_totals || { paid_uzs: 0, paid_usd: 0, due_uzs: 0, due_usd: 0 };
   const overpaid = Number(paymentTotals.due_uzs) < -0.0001;
   const hasCartLines = devices.length > 0 || services.length > 0;
+  const showRefund = canEdit && task.status === "done" && Boolean(task.posted) && hasCartLines;
+  const nextStatus = nextTaskStatus(task.status);
+  const postingBusy = postMutation.isPending || unpostMutation.isPending;
   const cartLineKeys = [
     ...devices.map((line) => cartLineKey("device", line.id)),
     ...services.map((line) => cartLineKey("service", line.id)),
@@ -844,7 +979,44 @@ export default function TaskDetailPage() {
                 Изменить
               </button>
             ) : null}
-            {canRefund && hasCartLines ? (
+            {canEdit && nextStatus ? (
+              <button
+                type="button"
+                className="btn-success btn-sm ticket-detail-header__edit"
+                aria-label={nextStatus.label}
+                title={nextStatus.label}
+                disabled={advanceStatusMutation.isPending}
+                onClick={() => advanceStatusMutation.mutate()}
+              >
+                <ArrowRight size={18} aria-hidden="true" />
+                {nextStatus.label}
+              </button>
+            ) : null}
+            {!task.posted && canPost ? (
+              <button
+                type="button"
+                className="btn-success btn-icon ticket-detail-header__edit"
+                aria-label="Провести"
+                title="Провести"
+                disabled={postingBusy}
+                onClick={() => void handleTogglePosted()}
+              >
+                <BadgeCheck size={22} aria-hidden="true" />
+              </button>
+            ) : null}
+            {task.posted && canUnpost ? (
+              <button
+                type="button"
+                className="btn-danger btn-icon ticket-detail-header__edit"
+                aria-label="Отменить проведение"
+                title="Отменить проведение"
+                disabled={postingBusy}
+                onClick={() => void handleTogglePosted()}
+              >
+                <BadgeX size={22} aria-hidden="true" />
+              </button>
+            ) : null}
+            {showRefund ? (
               <Link
                 to={`/tasks/${taskId}/refund`}
                 className="btn-secondary btn-sm ticket-detail-header__edit"
@@ -895,10 +1067,14 @@ export default function TaskDetailPage() {
               placeholder="Поиск товара…"
               className="task-catalog__search"
             />
-            {canEdit ? (
+            {canEditCart ? (
               <p className="muted-copy task-catalog__hint">
                 Нажмите на товар, чтобы добавить в задачу
                 {task.action_label ? ` (${task.action_label})` : ""}. Повторное нажатие увеличит количество.
+              </p>
+            ) : canEdit && cartLocked ? (
+              <p className="muted-copy task-catalog__hint">
+                Корзина заблокирована: задача выполнена и проведена.
               </p>
             ) : null}
           </div>
@@ -975,7 +1151,7 @@ export default function TaskDetailPage() {
                         >
                           <Eye size={22} aria-hidden="true" />
                         </button>
-                        {canEdit ? (
+                        {canEditCart ? (
                           <button
                             type="button"
                             className="task-shop-card__hit"
@@ -1002,20 +1178,31 @@ export default function TaskDetailPage() {
           }`}
         >
           <section className="card card--task-compact">
-            <h2 className="task-detail-section-title">Задача</h2>
-            <dl className="task-detail-meta">
-              <DetailRow label="Статус">{task.status_label || task.status}</DetailRow>
-              <DetailRow label="Тип">{task.action_label || "—"}</DetailRow>
-              <DetailRow label="Валюта">{displayCurrency || "Обе валюты"}</DetailRow>
-              <DetailRow label="Категория">{task.category?.name || "—"}</DetailRow>
-              <DetailRow label="Локация">{task.location?.name || "—"}</DetailRow>
-              <DetailRow label="Клиент">{clientLabel(task)}</DetailRow>
-              <DetailRow label="Адрес">{textOrDash(task.address)}</DetailRow>
-              <DetailRow label="Менеджер">{task.manager?.name || "—"}</DetailRow>
-              <DetailRow label="Техник">{task.technician?.name || "—"}</DetailRow>
-              <DetailRow label="Заметки">{textOrDash(task.notes)}</DetailRow>
-              <DetailRow label="Обновлено">{formatDateTime(task.updated_at)}</DetailRow>
-            </dl>
+            <div className="task-detail-section-head">
+              <h2 className="task-detail-section-title">Задача</h2>
+              <button
+                type="button"
+                className="btn-secondary btn-icon btn-sm"
+                aria-label="Полная информация"
+                title="Полная информация"
+                onClick={() => setTaskMetaOpen(true)}
+              >
+                <Eye size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="task-meta-summary">
+              {taskSummaryItems(task).map((item) => (
+                <span key={item.key} className={`summary-chip summary-chip--${item.tone}`}>
+                  {item.label ? (
+                    <>
+                      {item.label}: <strong className="summary-chip__value">{item.value}</strong>
+                    </>
+                  ) : (
+                    <strong className="summary-chip__value">{item.value}</strong>
+                  )}
+                </span>
+              ))}
+            </div>
           </section>
 
           <section className="card">
@@ -1024,7 +1211,7 @@ export default function TaskDetailPage() {
               <p className="empty-state">Добавьте товары из каталога.</p>
             ) : (
               <>
-                {canEdit ? (
+                {canEditCart ? (
                   <DiscountBar
                     disabled={discountMutation.isPending}
                     hasSelection={activeSelectedKeys.length > 0}
@@ -1053,7 +1240,7 @@ export default function TaskDetailPage() {
                         discountText={discountLabel(line)}
                         quantity={lineQuantity(line.quantity)}
                         selected={activeSelectedKeys.includes(lineKey)}
-                        canEdit={Boolean(canEdit && line.id)}
+                        canEdit={Boolean(canEditCart && line.id)}
                         removing={removeDeviceMutation.isPending}
                         updating={updatingLineKey === lineKey}
                         onToggleSelected={() => toggleLineSelected(lineKey)}
@@ -1079,7 +1266,7 @@ export default function TaskDetailPage() {
                         discountText={discountLabel(line)}
                         quantity={lineQuantity(line.quantity)}
                         selected={activeSelectedKeys.includes(lineKey)}
-                        canEdit={Boolean(canEdit && line.id)}
+                        canEdit={Boolean(canEditCart && line.id)}
                         removing={removeServiceMutation.isPending}
                         updating={updatingLineKey === lineKey}
                         onToggleSelected={() => toggleLineSelected(lineKey)}
@@ -1193,6 +1380,13 @@ export default function TaskDetailPage() {
           </section>
         </div>
       </div>
+
+      <TaskMetaModal
+        open={taskMetaOpen}
+        task={task}
+        displayCurrency={displayCurrency}
+        onClose={() => setTaskMetaOpen(false)}
+      />
 
       <ProductPreviewModal
         product={viewingProduct}

@@ -741,10 +741,23 @@ export type SettingsLocation = {
   updated_at?: string;
 };
 
+export type PaymentAccount = {
+  id: number;
+  name: string;
+  currency: "UZS" | "USD";
+  value: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type PaymentType = {
   id: number;
   name: string;
   currency: "UZS" | "USD";
+  account_id?: number | null;
+  account?: PaymentAccount | null;
+  code?: string | null;
+  is_system?: boolean;
   created_at?: string;
   updated_at?: string;
 };
@@ -794,6 +807,7 @@ export type TaskPayment = {
   device_line_id?: number | null;
   service_line_id?: number | null;
   refunded_quantity?: number | null;
+  refund_id?: number | null;
   note?: string;
   created_by_user_id?: number | null;
   created_by?: { id: number; name: string } | null;
@@ -814,7 +828,7 @@ export type TaskDeviceLine = {
   device_name?: string;
   description?: string;
   images?: CatalogImage[];
-  action: "install" | "repair" | string;
+  action: "install" | "repair" | "sale" | string;
   action_label?: string;
   notes?: string;
   quantity?: number;
@@ -863,12 +877,39 @@ export type TaskServiceLine = {
   discount_currency?: string | null;
 };
 
+export type TaskRefundLine = {
+  id: number;
+  refund_id?: number;
+  kind: "device" | "service" | string;
+  device_line_id?: number | null;
+  service_line_id?: number | null;
+  name: string;
+  quantity: number;
+  price_uzs?: number;
+  price_usd?: number;
+  price_without_discount_uzs?: number;
+  price_without_discount_usd?: number;
+};
+
+export type TaskRefund = {
+  id: number;
+  task_id?: number;
+  note?: string;
+  created_by_user_id?: number | null;
+  created_by?: { id: number; name: string } | null;
+  created_at?: string;
+  lines?: TaskRefundLine[];
+  payments?: TaskPayment[];
+  totals?: { price_uzs: number; price_usd: number };
+};
+
 export type FieldTask = {
   id: number;
   title: string;
   status: "new" | "in_progress" | "done" | string;
   status_label?: string;
-  action?: "install" | "repair" | string;
+  posted?: boolean;
+  action?: "install" | "repair" | "sale" | string;
   action_label?: string;
   notes?: string;
   address?: string;
@@ -889,6 +930,7 @@ export type FieldTask = {
   totals?: TaskMoneyTotals;
   payments?: TaskPayment[];
   payment_totals?: TaskPaymentTotals;
+  refunds?: TaskRefund[];
   created_at?: string;
   updated_at?: string;
 };

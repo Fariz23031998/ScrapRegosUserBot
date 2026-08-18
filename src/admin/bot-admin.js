@@ -69,7 +69,6 @@ const {
 const { enrichChatMessages } = require('./chat-system-message');
 const {
   getTicketRecording,
-  getTicketRecordingsByIds,
   upsertTicketRecording,
 } = require('../db/ticket-recordings');
 const { setTicketAiStopped, isTicketAiStopped } = require('../db/ticket-ai-state');
@@ -223,7 +222,9 @@ const {
 const { resolveTicketClientId } = require('../ai/ticket-period');
 const { createKnowledgeMcpRouter } = require('../mcp/knowledge-mcp');
 const { registerTaskRoutes } = require('./tasks-admin');
+const { registerReportRoutes } = require('./reports-admin');
 const { getTicketRecordingUrl } = require('./ticket-recording');
+const { buildDurationSummary } = require('./ticket-duration');
 const {
   summarizeByDuration,
   buildDurationsByTicketId,
@@ -640,56 +641,6 @@ async function loadActiveTicketForRequest(db, req) {
   };
 }
 
-function buildDurationSummary(tickets, channelSettings, db = null) {
-  const modeByChannelId = new Map(
-    (channelSettings || []).map((setting) => [
-      String(setting.channel_id),
-      String(setting.interaction_mode || ''),
-    ])
-  );
-  const messageTickets = [];
-  const calls = [];
-  const recordingsById = db
-    ? getTicketRecordingsByIds(
-        db,
-        (tickets || []).map((ticket) => ticket?.id)
-      )
-    : new Map();
-
-  for (const ticket of tickets || []) {
-    const channelId = ticket?.channel_id == null ? '' : String(ticket.channel_id);
-    const channelMode = modeByChannelId.get(channelId) || null;
-    const ticketId = Number(ticket?.id);
-    const recording =
-      Number.isInteger(ticketId) && ticketId > 0 ? recordingsById.get(ticketId) : null;
-    const hasRecording = Boolean(getTicketRecordingUrl(ticket) || recording?.recording_url);
-    // Explicit message channels stay in the base. Call channels are always evaluated.
-    // Unconfigured channels with a recording are treated as calls so the duration
-    // filter works before channel settings are saved.
-    const isCallTicket =
-      channelMode === 'call' || (channelMode !== 'message_only' && hasRecording);
-    if (!isCallTicket) {
-      messageTickets.push(ticket);
-      continue;
-    }
-    const cachedDuration = Number(recording?.duration_seconds);
-    const durationSeconds =
-      Number.isFinite(cachedDuration) && cachedDuration > 0 ? cachedDuration : null;
-    calls.push({
-      id: ticket.id,
-      slaBreached: Boolean(ticket.sla_breached),
-      rated: ticket.rating != null,
-      hasRecording,
-      duration_seconds: durationSeconds,
-    });
-  }
-
-  return {
-    base: summarizeTickets(messageTickets),
-    calls,
-  };
-}
-
 const CHAT_FILE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 function collectMessageFileIds(messages) {
@@ -943,6 +894,7 @@ function createBotAdminRouter(db) {
 
   router.use(createKnowledgeMcpRouter(db));
   registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails });
+  registerReportRoutes(router, db);
 
   router.get('/auth/telegram', (req, res) => {
     const creds = getAdminCredentials();

@@ -10,18 +10,15 @@ import {
   type TaskPayload,
 } from "../api/tasks";
 import Modal from "./Modal";
+import { useAuth } from "../hooks/useAuth";
 import type { FieldTask, TaskCategory, TaskClient } from "../lib/types";
 import { parseDisplayCurrency, type MoneyCurrency } from "../lib/money";
-
-const TASK_STATUSES = [
-  { value: "new", label: "Новая" },
-  { value: "in_progress", label: "В работе" },
-  { value: "done", label: "Выполнена" },
-] as const;
+import { TASK_STATUSES } from "../lib/task-status";
 
 const TASK_ACTIONS = [
   { value: "install", label: "Установка" },
   { value: "repair", label: "Ремонт" },
+  { value: "sale", label: "Продажа" },
 ] as const;
 
 const TASK_CURRENCIES = [
@@ -100,6 +97,8 @@ export default function TaskEditorModal({
   onClose: () => void;
   onSaved: (saved: FieldTask) => void;
 }) {
+  const { hasPermission } = useAuth();
+  const canChangeStatus = hasPermission("tasks_status");
   const [editor, setEditor] = useState<TaskEditor>(() => (task ? editorFromTask(task) : emptyEditor()));
   const [formError, setFormError] = useState("");
 
@@ -146,21 +145,22 @@ export default function TaskEditorModal({
   });
 
   function buildPayload(current: TaskEditor): TaskPayload {
-    return {
+    const payload: TaskPayload = {
       title: current.title.trim(),
-      status: current.status,
       action: current.action,
       notes: current.notes.trim(),
       address: current.address.trim(),
       category_id: current.category_id ? Number(current.category_id) : null,
       location_id: current.location_id ? Number(current.location_id) : null,
       manager_user_id: current.manager_user_id ? Number(current.manager_user_id) : null,
-      technician_user_id: current.technician_user_id ? Number(current.technician_user_id) : null,
+      technician_user_id: current.action === "sale" ? null : current.technician_user_id ? Number(current.technician_user_id) : null,
       currency: parseDisplayCurrency(current.currency),
       regos_client_id: current.client?.id ?? null,
       client_name: current.client?.name || "",
       client_phone: current.client?.phone || "",
     };
+    if (canChangeStatus) payload.status = current.status;
+    return payload;
   }
 
   return (
@@ -175,11 +175,11 @@ export default function TaskEditorModal({
         onSubmit={(event) => {
           event.preventDefault();
           if (!TASK_ACTIONS.some((item) => item.value === editor.action)) {
-            setFormError("Выберите тип задачи: установка или ремонт.");
+            setFormError("Выберите тип задачи: установка, ремонт или продажа.");
             return;
           }
           if (!editor.location_id) {
-            setFormError("Выберите локацию.");
+            setFormError("Выберите филиал.");
             return;
           }
           setFormError("");
@@ -196,28 +196,37 @@ export default function TaskEditorModal({
           />
         </label>
         <div className="filters-grid">
+          {canChangeStatus ? (
+            <label>
+              Статус
+              <select
+                required
+                value={editor.status}
+                onChange={(event) => setEditor((prev) => ({ ...prev, status: event.target.value }))}
+              >
+                {TASK_STATUSES.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label>
             Тип
             <select
               required
               value={editor.action}
-              onChange={(event) => setEditor((prev) => ({ ...prev, action: event.target.value }))}
+              onChange={(event) =>
+                setEditor((prev) => ({
+                  ...prev,
+                  action: event.target.value,
+                  technician_user_id: event.target.value === "sale" ? "" : prev.technician_user_id,
+                }))
+              }
             >
               <option value="">Выберите тип</option>
               {TASK_ACTIONS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Статус
-            <select
-              value={editor.status}
-              onChange={(event) => setEditor((prev) => ({ ...prev, status: event.target.value }))}
-            >
-              {TASK_STATUSES.map((item) => (
                 <option key={item.value} value={item.value}>
                   {item.label}
                 </option>
@@ -258,13 +267,13 @@ export default function TaskEditorModal({
           </select>
         </label>
         <label>
-          Локация
+          Филиал
           <select
             required
             value={editor.location_id}
             onChange={(event) => setEditor((prev) => ({ ...prev, location_id: event.target.value }))}
           >
-            <option value="">Выберите локацию</option>
+            <option value="">Выберите филиал</option>
             {locations.map((location) => (
               <option key={location.id} value={location.id}>
                 {location.name}
@@ -350,20 +359,22 @@ export default function TaskEditorModal({
               ))}
             </select>
           </label>
-          <label>
-            Техник
-            <select
-              value={editor.technician_user_id}
-              onChange={(event) => setEditor((prev) => ({ ...prev, technician_user_id: event.target.value }))}
-            >
-              <option value="">Не назначен</option>
-              {employees.map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {editor.action === "sale" ? null : (
+            <label>
+              Техник
+              <select
+                value={editor.technician_user_id}
+                onChange={(event) => setEditor((prev) => ({ ...prev, technician_user_id: event.target.value }))}
+              >
+                <option value="">Не назначен</option>
+                {employees.map((employee) => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
         {formError ? <p className="message error">{formError}</p> : null}
         <div className="form-actions">

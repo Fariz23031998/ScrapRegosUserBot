@@ -25,7 +25,8 @@ const MAX_CLIENT_PHONE = 40;
 const MAX_LINE_NOTES = 500;
 const MAX_LINE_QUANTITY = 999;
 const TASK_STATUSES = ['new', 'in_progress', 'done'];
-const TASK_ACTIONS = ['install', 'repair'];
+const TASK_STATUS_ORDER = { new: 0, in_progress: 1, done: 2 };
+const TASK_ACTIONS = ['install', 'repair', 'sale'];
 const TASK_STATUS_LABELS = {
   new: 'Новая',
   in_progress: 'В работе',
@@ -34,10 +35,11 @@ const TASK_STATUS_LABELS = {
 const TASK_ACTION_LABELS = {
   install: 'Установка',
   repair: 'Ремонт',
+  sale: 'Продажа',
 };
 
 const TASK_SELECT = `
-  t.id, t.title, t.status, t.action, t.notes, t.address, t.category_id, t.location_id,
+  t.id, t.title, t.status, t.posted, t.action, t.notes, t.address, t.category_id, t.location_id,
   t.regos_client_id, t.client_name, t.client_phone,
   t.manager_user_id, t.technician_user_id, t.currency,
   t.created_at, t.updated_at,
@@ -154,6 +156,7 @@ function ensureTaskTables(db) {
   ensureColumn(db, 'task_services', 'discount_value', 'REAL NOT NULL DEFAULT 0');
   ensureColumn(db, 'task_services', 'discount_currency', 'TEXT');
   ensureColumn(db, 'tasks', 'currency', 'TEXT');
+  ensureColumn(db, 'tasks', 'posted', 'INTEGER NOT NULL DEFAULT 0');
   if (ensureColumn(db, 'tasks', 'action', "TEXT NOT NULL DEFAULT 'install'")) {
     db.exec(`
       UPDATE tasks
@@ -181,6 +184,7 @@ function ensureTaskTables(db) {
   }
   ensureLocationTables(db);
   ensureTaskPaymentTables(db);
+  require('./task-refunds').ensureTaskRefundTables(db);
 }
 
 function employeeLabel(row, prefix) {
@@ -230,7 +234,7 @@ function mapTaskService(row, rate) {
   };
 }
 
-function mapTask(row, devices = [], services = [], totals = null, payments = null, paymentTotals = null) {
+function mapTask(row, devices = [], services = [], totals = null, payments = null, paymentTotals = null, refunds = null) {
   if (!row) return null;
   const managerName = employeeLabel(row, 'manager');
   const technicianName = employeeLabel(row, 'technician');
@@ -239,6 +243,7 @@ function mapTask(row, devices = [], services = [], totals = null, payments = nul
     title: row.title,
     status: row.status,
     status_label: TASK_STATUS_LABELS[row.status] || row.status,
+    posted: Boolean(row.posted),
     action: row.action || 'install',
     action_label: TASK_ACTION_LABELS[row.action] || TASK_ACTION_LABELS.install,
     notes: row.notes || '',
@@ -264,6 +269,7 @@ function mapTask(row, devices = [], services = [], totals = null, payments = nul
     totals: totals || emptyMoneyTotals(),
     payments: payments || [],
     payment_totals: paymentTotals || emptyTaskPaymentTotals(),
+    refunds: refunds || [],
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -392,6 +398,39 @@ function normalizeStatus(value, fallback = 'new') {
   return status;
 }
 
+function nextTaskStatus(status) {
+  if (status === 'new') return 'in_progress';
+  if (status === 'in_progress') return 'done';
+  return null;
+}
+
+function assertForwardStatus(currentStatus, nextStatus) {
+  if (currentStatus === nextStatus) return;
+  const currentOrder = TASK_STATUS_ORDER[currentStatus];
+  const nextOrder = TASK_STATUS_ORDER[nextStatus];
+  if (
+    currentOrder == null ||
+    nextOrder == null ||
+    nextOrder !== currentOrder + 1
+  ) {
+    throw new Error('INVALID_TASK_STATUS_TRANSITION');
+  }
+}
+
+function isTaskCartLocked(task) {
+  return Boolean(task && task.status === 'done' && task.posted);
+}
+
+function assertTaskCartEditable(task) {
+  if (isTaskCartLocked(task)) throw new Error('TASK_CART_LOCKED');
+}
+
+function countTaskRefunds(db, taskId) {
+  if (!tableExists(db, 'task_refunds')) return 0;
+  const row = db.prepare('SELECT COUNT(*) AS count FROM task_refunds WHERE task_id = ?').get(taskId);
+  return Number(row?.count) || 0;
+}
+
 function normalizeAction(value, fallback = 'install') {
   if (value == null || value === '') return fallback;
   const action = String(value).trim();
@@ -497,7 +536,9 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null, r
     viewer,
   });
   const managerUserId = normalizeEmployeeId(db, input.manager_user_id, 'INVALID_TASK_MANAGER');
-  const technicianUserId = normalizeEmployeeId(db, input.technician_user_id, 'INVALID_TASK_TECHNICIAN');
+  const technicianUserId = action === 'sale'
+    ? null
+    : normalizeEmployeeId(db, input.technician_user_id, 'INVALID_TASK_TECHNICIAN');
   const currency = input.currency !== undefined
     ? normalizeDisplayCurrency(input.currency)
     : current?.currency ?? null;
@@ -522,7 +563,9 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null, r
     category_id: categoryId === undefined ? current?.category_id ?? null : categoryId,
     location_id: nextLocationId,
     manager_user_id: managerUserId === undefined ? current?.manager_user_id ?? null : managerUserId,
-    technician_user_id: technicianUserId === undefined ? current?.technician_user_id ?? null : technicianUserId,
+    technician_user_id: action === 'sale'
+      ? null
+      : (technicianUserId === undefined ? current?.technician_user_id ?? null : technicianUserId),
     currency,
   };
 }
@@ -592,8 +635,10 @@ function assembleTask(db, row) {
   const devices = listTaskDevicesForIds(db, [row.id], rate).get(row.id) || [];
   const services = listTaskServicesForIds(db, [row.id], rate).get(row.id) || [];
   const totals = sumMoneyTotals([...devices, ...services], rate);
-  const payments = listTaskPayments(db, row.id);
-  return mapTask(row, devices, services, totals, payments, summarizeTaskPayments(payments, totals));
+  const allPayments = listTaskPayments(db, row.id);
+  const payments = allPayments.filter((payment) => payment.kind !== 'refund');
+  const refunds = require('./task-refunds').listTaskRefunds(db, row.id, allPayments);
+  return mapTask(row, devices, services, totals, payments, summarizeTaskPayments(payments, totals), refunds);
 }
 
 function getTask(db, id, viewer) {
@@ -684,7 +729,11 @@ function updateTask(db, id, input = {}, options = {}) {
   const current = getTask(db, id, options.viewer);
   if (!current) throw new Error('NOT_FOUND');
   const task = normalizeTaskInput(db, input, { partial: true, current, ...options });
+  if (!options.allowAnyStatus) {
+    assertForwardStatus(current.status, task.status);
+  }
   const devices = input.devices != null ? normalizeTaskDevices(db, input.devices, task.action) : null;
+  if (devices) assertTaskCartEditable(current);
   db.exec('BEGIN');
   try {
     db.prepare(
@@ -734,6 +783,7 @@ function addTaskDevice(db, taskId, input = {}) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const existing = db
     .prepare(
       `SELECT id, quantity FROM task_devices
@@ -777,6 +827,7 @@ function deleteTaskDevice(db, taskId, lineId) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const id = Number(lineId);
   if (!Number.isFinite(id) || id <= 0) throw new Error('NOT_FOUND');
   const result = db.prepare('DELETE FROM task_devices WHERE id = ? AND task_id = ?').run(id, current.id);
@@ -789,6 +840,7 @@ function addTaskService(db, taskId, input = {}) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const existing = db
     .prepare(
       `SELECT id, quantity FROM task_services
@@ -826,6 +878,7 @@ function deleteTaskService(db, taskId, lineId) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const id = Number(lineId);
   if (!Number.isFinite(id) || id <= 0) throw new Error('NOT_FOUND');
   const result = db.prepare('DELETE FROM task_services WHERE id = ? AND task_id = ?').run(id, current.id);
@@ -838,6 +891,7 @@ function updateTaskDevice(db, taskId, lineId, input = {}) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const id = Number(lineId);
   if (!Number.isFinite(id) || id <= 0) throw new Error('NOT_FOUND');
   const row = db
@@ -871,6 +925,7 @@ function updateTaskService(db, taskId, lineId, input = {}) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const id = Number(lineId);
   if (!Number.isFinite(id) || id <= 0) throw new Error('NOT_FOUND');
   const row = db
@@ -972,6 +1027,7 @@ function applyTaskDiscount(db, taskId, input = {}) {
   ensureTaskTables(db);
   const current = getTask(db, taskId);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const targets = resolveDiscountTargets(current, input);
   if (!targets.length) throw new Error('INVALID_TASK_DISCOUNT_TARGET');
   const clear = input.clear === true || input.discount_type === 'none' || input.type === 'none';
@@ -1083,6 +1139,44 @@ function listTasks(db, { query, status, categoryId, locationId, viewer, limit = 
   };
 }
 
+function postTask(db, id, viewer) {
+  ensureTaskTables(db);
+  const current = getTask(db, id, viewer);
+  if (!current) throw new Error('NOT_FOUND');
+  if (current.posted) return current;
+  db.prepare(`UPDATE tasks SET posted = 1, updated_at = datetime('now') WHERE id = ?`).run(current.id);
+  return getTask(db, current.id, viewer);
+}
+
+function unpostTask(db, id, viewer, options = {}) {
+  ensureTaskTables(db);
+  const current = getTask(db, id, viewer);
+  if (!current) throw new Error('NOT_FOUND');
+  if (!current.posted) return current;
+  const refundCount = countTaskRefunds(db, current.id);
+  if (refundCount > 0 && !options.deleteRefunds) throw new Error('TASK_HAS_REFUNDS');
+  db.exec('BEGIN');
+  try {
+    if (refundCount > 0) require('./task-refunds').deleteTaskRefunds(db, current.id);
+    db.prepare(`UPDATE tasks SET posted = 0, updated_at = datetime('now') WHERE id = ?`).run(current.id);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return getTask(db, current.id, viewer);
+}
+
+function advanceTaskStatus(db, id, viewer) {
+  ensureTaskTables(db);
+  const current = getTask(db, id, viewer);
+  if (!current) throw new Error('NOT_FOUND');
+  const next = nextTaskStatus(current.status);
+  if (!next) throw new Error('INVALID_TASK_STATUS_TRANSITION');
+  db.prepare(`UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(next, current.id);
+  return getTask(db, current.id, viewer);
+}
+
 module.exports = {
   TASK_STATUSES,
   TASK_ACTIONS,
@@ -1107,4 +1201,9 @@ module.exports = {
   applyTaskDiscount,
   deleteTask,
   touchTask,
+  postTask,
+  unpostTask,
+  advanceTaskStatus,
+  nextTaskStatus,
+  isTaskCartLocked,
 };

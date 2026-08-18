@@ -40,7 +40,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
   { id: "channels", title: "Каналы" },
   { id: "telegram", title: "Telegram" },
   { id: "currency", title: "Валюта" },
-  { id: "locations", title: "Локации и оплата" },
+  { id: "locations", title: "Филиалы и оплата" },
 ];
 
 function emptyTelegramTicketSettings(): TelegramTicketSettings {

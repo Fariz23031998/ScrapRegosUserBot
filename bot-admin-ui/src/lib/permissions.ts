@@ -9,6 +9,7 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { to: "/tickets", label: "Тикеты", permission: "tickets_read" },
   { to: "/tasks", label: "Задачи", permission: "tasks_read" },
+  { to: "/reports", label: "Отчёты", permission: "see_all_report" },
   { to: "/devices", label: "Устройства", permission: "devices_read" },
   { to: "/services", label: "Услуги", permission: "services_read" },
   { to: "/orders", label: "Заказы", permission: "orders_read" },

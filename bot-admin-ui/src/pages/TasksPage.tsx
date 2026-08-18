@@ -1,7 +1,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { ArrowRight, Pencil, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   createTaskCategory,
@@ -10,6 +10,7 @@ import {
   listTaskCategories,
   listTaskLocations,
   listTasks,
+  advanceTaskStatus,
   updateTaskCategory,
 } from "../api/tasks";
 import EntityCards from "../components/EntityCards";
@@ -25,12 +26,7 @@ import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import type { FieldTask, TaskCategory, TaskLocation } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
-
-const TASK_STATUSES = [
-  { value: "new", label: "Новая" },
-  { value: "in_progress", label: "В работе" },
-  { value: "done", label: "Выполнена" },
-] as const;
+import { TASK_STATUSES, nextTaskStatus } from "../lib/task-status";
 
 function taskClientLabel(task: FieldTask): string {
   return (
@@ -82,7 +78,7 @@ function TaskFilterFields({
         </select>
       </label>
       <label className="ticket-filters__field">
-        <span>Локация</span>
+        <span>Филиал</span>
         <select value={locationId} onChange={(event) => onLocationChange(event.target.value)}>
           <option value="">Все</option>
           {locations.map((location) => (
@@ -171,6 +167,11 @@ export default function TasksPage() {
     onSuccess: invalidateTasks,
   });
 
+  const advanceStatusMutation = useMutation({
+    mutationFn: advanceTaskStatus,
+    onSuccess: invalidateTasks,
+  });
+
   const saveCategory = useMutation({
     mutationFn: () => {
       const name = String(categoryEditor?.name || "").trim();
@@ -222,20 +223,40 @@ export default function TasksPage() {
   }
 
   function taskActions(task: FieldTask): ReactNode {
-    return hasPermission("tasks_delete") ? (
-      <button
-        type="button"
-        className="btn-danger btn-icon btn-sm"
-        aria-label="Удалить"
-        title="Удалить"
-        onClick={(event) => {
-          event.stopPropagation();
-          void handleDelete(task);
-        }}
-      >
-        <Trash2 size={15} aria-hidden="true" />
-      </button>
-    ) : null;
+    const nextStatus = nextTaskStatus(task.status);
+    return (
+      <>
+        {hasPermission("tasks_edit") && nextStatus ? (
+          <button
+            type="button"
+            className="btn-secondary btn-icon btn-sm"
+            aria-label={nextStatus.label}
+            title={nextStatus.label}
+            disabled={advanceStatusMutation.isPending}
+            onClick={(event) => {
+              event.stopPropagation();
+              advanceStatusMutation.mutate(task.id);
+            }}
+          >
+            <ArrowRight size={15} aria-hidden="true" />
+          </button>
+        ) : null}
+        {hasPermission("tasks_delete") ? (
+          <button
+            type="button"
+            className="btn-danger btn-icon btn-sm"
+            aria-label="Удалить"
+            title="Удалить"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleDelete(task);
+            }}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        ) : null}
+      </>
+    );
   }
 
   const columns = useMemo<ColumnDef<FieldTask>[]>(
@@ -256,7 +277,7 @@ export default function TasksPage() {
       },
       {
         id: "location",
-        header: "Локация",
+        header: "Филиал",
         accessorFn: (row) => row.location?.name || "—",
       },
       {
@@ -305,7 +326,7 @@ export default function TasksPage() {
         ),
       },
     ],
-    [dateTimeFormat, hasPermission],
+    [dateTimeFormat, hasPermission, advanceStatusMutation.isPending],
   );
 
   const tasks = tasksQuery.items;
@@ -387,10 +408,12 @@ export default function TasksPage() {
                 .join(" · ")
             }
             getFields={(task) => [
-              { label: "Локация", value: task.location?.name || "—" },
+              { label: "Филиал", value: task.location?.name || "—" },
               { label: "Клиент", value: taskClientLabel(task) },
               { label: "Менеджер", value: task.manager?.name || "—" },
-              { label: "Техник", value: task.technician?.name || "—" },
+              ...(task.action === "sale"
+                ? []
+                : [{ label: "Техник", value: task.technician?.name || "—" }]),
               { label: "Устройства", value: taskDevicesSummary(task) },
               { label: "Обновлено", value: formatDateTime(task.updated_at) },
             ]}

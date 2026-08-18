@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { getSessionActor, requireRight, requireAnyRight } = require('./bot-admin-auth');
+const { getSessionActor, requireRight, requireAnyRight, actorHasPermission } = require('./bot-admin-auth');
 const { getBotUserById, getBotUserByTelegramId, listEmployeeUsers } = require('../db/bot-users-db');
 const {
   listLocations,
@@ -11,6 +11,13 @@ const {
   deleteLocation,
   getLocationViewer,
 } = require('../db/locations');
+const {
+  listAccounts,
+  getAccount,
+  createAccount,
+  updateAccount,
+  deleteAccount,
+} = require('../db/accounts');
 const {
   listPaymentTypes,
   getPaymentType,
@@ -68,13 +75,16 @@ const {
   deleteTaskService,
   applyTaskDiscount,
   deleteTask,
+  postTask,
+  unpostTask,
+  advanceTaskStatus,
 } = require('../db/tasks');
 const {
   createTaskPayment,
   deleteTaskPayment,
   getTaskPayment,
 } = require('../db/task-payments');
-const { refundTaskLine } = require('../db/task-refunds');
+const { refundTaskLine, listTaskRefunds, hasRefundPaymentInput } = require('../db/task-refunds');
 const { RegosCrmError, searchClients } = require('../integrations/regos-crm');
 
 function parsePaginationQuery(req) {
@@ -163,14 +173,22 @@ function categoryWriteErrorMessage(code) {
 }
 
 function locationWriteErrorMessage(code) {
-  if (code === 'INVALID_LOCATION_NAME') return 'Укажите название локации.';
-  if (code === 'INVALID_LOCATION_USERS') return 'Выберите хотя бы одного сотрудника с доступом к локации.';
+  if (code === 'INVALID_LOCATION_NAME') return 'Укажите название филиала.';
+  if (code === 'INVALID_LOCATION_USERS') return 'Выберите хотя бы одного сотрудника с доступом к филиалу.';
   return null;
 }
 
 function paymentTypeWriteErrorMessage(code) {
   if (code === 'INVALID_PAYMENT_TYPE_NAME') return 'Укажите название типа оплаты.';
-  if (code === 'INVALID_PAYMENT_TYPE_CURRENCY') return 'Валюта типа оплаты: UZS или USD.';
+  if (code === 'INVALID_PAYMENT_TYPE_ACCOUNT') return 'Выберите счёт для типа оплаты.';
+  if (code === 'SYSTEM_PAYMENT_TYPE') return 'Системный тип оплаты нельзя изменить или удалить.';
+  return null;
+}
+
+function accountWriteErrorMessage(code) {
+  if (code === 'INVALID_ACCOUNT_NAME') return 'Укажите название счёта.';
+  if (code === 'INVALID_ACCOUNT_CURRENCY') return 'Валюта счёта: UZS или USD.';
+  if (code === 'ACCOUNT_IN_USE') return 'Счёт используется в типах оплаты и не может быть удалён.';
   return null;
 }
 
@@ -182,12 +200,12 @@ function taskWriteErrorMessage(code) {
     INVALID_TASK_CLIENT: 'Некорректные данные клиента.',
     INVALID_TASK_STATUS: 'Некорректный статус задачи.',
     INVALID_TASK_CATEGORY: 'Некорректная категория задачи.',
-    INVALID_TASK_LOCATION: 'Выберите локацию, к которой у вас есть доступ.',
+    INVALID_TASK_LOCATION: 'Выберите филиал, к которому у вас есть доступ.',
     INVALID_TASK_MANAGER: 'Некорректный менеджер.',
     INVALID_TASK_TECHNICIAN: 'Некорректный техник.',
     INVALID_TASK_DEVICES: 'Некорректный список устройств.',
     INVALID_TASK_DEVICE: 'Некорректное устройство в задаче.',
-    INVALID_TASK_ACTION: 'Укажите действие: установка или ремонт.',
+    INVALID_TASK_ACTION: 'Укажите действие: установка, ремонт или продажа.',
     INVALID_TASK_CURRENCY: 'Валюта задачи: UZS, USD или обе.',
     INVALID_TASK_DEVICE_NOTES: 'Слишком длинная заметка по устройству.',
     INVALID_TASK_SERVICE: 'Некорректная услуга в задаче.',
@@ -202,6 +220,11 @@ function taskWriteErrorMessage(code) {
     INVALID_TASK_REFUND_LINE: 'Выберите позицию для возврата.',
     INVALID_TASK_REFUND_QUANTITY: 'Укажите количество для возврата.',
     INVALID_TASK_REFUND_AMOUNT: 'Сумма возврата не может превышать стоимость позиции.',
+    INVALID_TASK_STATUS_TRANSITION: 'Статус задачи можно менять только вперёд: Новая → В работе → Выполнена.',
+    TASK_CART_LOCKED: 'После проведения выполненной задачи корзину нельзя изменить.',
+    TASK_NOT_DONE: 'Возврат доступен только для выполненной задачи.',
+    TASK_NOT_POSTED: 'Возврат доступен только после проведения задачи.',
+    TASK_HAS_REFUNDS: 'Нельзя отменить проведение: по задаче есть возвраты.',
   };
   return messages[code] || null;
 }
@@ -337,7 +360,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       return res.json({ locations: listLocations(db) });
     } catch (error) {
       console.error('List locations error:', error);
-      return res.status(500).json({ message: 'Не удалось загрузить локации.' });
+      return res.status(500).json({ message: 'Не удалось загрузить филиалы.' });
     }
   });
 
@@ -351,12 +374,12 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
         entityType: 'location',
         entityId: location.id,
         action: 'create',
-        summary: `Создана локация «${location.name}»`,
+        summary: `Создан филиал «${location.name}»`,
         details: buildAuditDetails({ before: null, after: location }),
       });
       return res.status(201).json({ location });
     } catch (error) {
-      return respondWriteError(res, error, 'Не удалось создать локацию.', locationWriteErrorMessage);
+      return respondWriteError(res, error, 'Не удалось создать филиал.', locationWriteErrorMessage);
     }
   });
 
@@ -371,7 +394,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
         entityType: 'location',
         entityId: location.id,
         action: 'update',
-        summary: `Изменена локация #${location.id}`,
+        summary: `Изменён филиал #${location.id}`,
         details: buildAuditDetails({ before, after: location }),
       });
       return res.json({ location });
@@ -379,7 +402,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       return respondWriteError(
         res,
         error,
-        error.message === 'NOT_FOUND' ? 'Локация не найдена.' : 'Не удалось обновить локацию.',
+        error.message === 'NOT_FOUND' ? 'Филиал не найден.' : 'Не удалось обновить филиал.',
         locationWriteErrorMessage
       );
     }
@@ -389,17 +412,85 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     try {
       const before = getLocation(db, req.params.id);
       const deleted = deleteLocation(db, req.params.id);
-      if (!deleted) return res.status(404).json({ message: 'Локация не найдена.' });
+      if (!deleted) return res.status(404).json({ message: 'Филиал не найден.' });
       auditAdminChange(db, req, {
         entityType: 'location',
         entityId: before.id,
         action: 'delete',
-        summary: `Удалена локация «${before.name}»`,
+        summary: `Удалён филиал «${before.name}»`,
         details: buildAuditDetails({ before, after: null }),
       });
       return res.json({ ok: true });
     } catch (error) {
-      return respondWriteError(res, error, 'Не удалось удалить локацию.', locationWriteErrorMessage);
+      return respondWriteError(res, error, 'Не удалось удалить филиал.', locationWriteErrorMessage);
+    }
+  });
+
+  router.get('/api/settings/accounts', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ accounts: listAccounts(db) });
+    } catch (error) {
+      console.error('List accounts error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить счета.' });
+    }
+  });
+
+  router.post('/api/settings/accounts', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const account = createAccount(db, { name: req.body?.name, currency: req.body?.currency });
+      auditAdminChange(db, req, {
+        entityType: 'account',
+        entityId: account.id,
+        action: 'create',
+        summary: `Создан счёт «${account.name}»`,
+        details: buildAuditDetails({ before: null, after: account }),
+      });
+      return res.status(201).json({ account });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось создать счёт.', accountWriteErrorMessage);
+    }
+  });
+
+  router.put('/api/settings/accounts/:id', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const before = getAccount(db, req.params.id);
+      const account = updateAccount(db, req.params.id, {
+        name: req.body?.name,
+        currency: req.body?.currency,
+      });
+      auditAdminChange(db, req, {
+        entityType: 'account',
+        entityId: account.id,
+        action: 'update',
+        summary: `Изменён счёт #${account.id}`,
+        details: buildAuditDetails({ before, after: account }),
+      });
+      return res.json({ account });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Счёт не найден.' : 'Не удалось обновить счёт.',
+        accountWriteErrorMessage
+      );
+    }
+  });
+
+  router.delete('/api/settings/accounts/:id', requireRight(db, 'settings_edit'), (req, res) => {
+    try {
+      const before = getAccount(db, req.params.id);
+      const deleted = deleteAccount(db, req.params.id);
+      if (!deleted) return res.status(404).json({ message: 'Счёт не найден.' });
+      auditAdminChange(db, req, {
+        entityType: 'account',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалён счёт «${before.name}»`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось удалить счёт.', accountWriteErrorMessage);
     }
   });
 
@@ -414,7 +505,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
 
   router.post('/api/settings/payment-types', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
     try {
-      const paymentType = createPaymentType(db, { name: req.body?.name, currency: req.body?.currency });
+      const paymentType = createPaymentType(db, { name: req.body?.name, account_id: req.body?.account_id });
       auditAdminChange(db, req, {
         entityType: 'payment_type',
         entityId: paymentType.id,
@@ -433,7 +524,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       const before = getPaymentType(db, req.params.id);
       const paymentType = updatePaymentType(db, req.params.id, {
         name: req.body?.name,
-        currency: req.body?.currency,
+        account_id: req.body?.account_id,
       });
       auditAdminChange(db, req, {
         entityType: 'payment_type',
@@ -988,7 +1079,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       return res.json({ locations: listLocationsForViewer(db, taskViewer(req)) });
     } catch (error) {
       console.error('List task locations error:', error);
-      return res.status(500).json({ message: 'Не удалось загрузить локации.' });
+      return res.status(500).json({ message: 'Не удалось загрузить филиалы.' });
     }
   });
 
@@ -1068,6 +1159,86 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     const task = visibleTask(req);
     if (!task) return res.status(404).json({ message: 'Задача не найдена.' });
     return res.json({ task });
+  });
+
+  router.post('/api/tasks/:id/post', requireRight(db, 'tasks_post'), (req, res) => {
+    try {
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
+      const task = postTask(db, before.id, taskViewer(req));
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: task.id,
+        action: 'update',
+        summary: `Проведена задача #${task.id}`,
+        details: buildAuditDetails({ before, after: task }),
+      });
+      return res.json({ task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Задача не найдена.' : 'Не удалось провести задачу.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
+  router.post('/api/tasks/:id/unpost', requireRight(db, 'tasks_unpost'), express.json(), (req, res) => {
+    try {
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
+      const deleteRefunds = Boolean(req.body?.delete_refunds);
+      const refundCount = Array.isArray(before.refunds) ? before.refunds.length : 0;
+      const task = unpostTask(db, before.id, taskViewer(req), { deleteRefunds });
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: task.id,
+        action: 'update',
+        summary:
+          refundCount > 0 && deleteRefunds
+            ? `Отменено проведение задачи #${task.id}: удалены возвраты`
+            : `Отменено проведение задачи #${task.id}`,
+        details: buildAuditDetails({ before, after: task }),
+      });
+      return res.json({ task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Задача не найдена.' : 'Не удалось отменить проведение задачи.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
+  router.post('/api/tasks/:id/status/next', requireRight(db, 'tasks_edit'), (req, res) => {
+    try {
+      const before = requireVisibleTask(req, res);
+      if (!before) return;
+      const task = advanceTaskStatus(db, before.id, taskViewer(req));
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: task.id,
+        action: 'update',
+        summary: `Статус задачи #${task.id}: ${before.status_label || before.status} → ${task.status_label || task.status}`,
+        details: buildAuditDetails({ before, after: task }),
+      });
+      return res.json({ task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Задача не найдена.' : 'Не удалось изменить статус задачи.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
+  router.get('/api/tasks/:id/refunds', requireRight(db, 'tasks_read'), (req, res) => {
+    const task = visibleTask(req);
+    if (!task) return res.status(404).json({ message: 'Задача не найдена.' });
+    return res.json({ refunds: listTaskRefunds(db, task.id) });
   });
 
   router.post('/api/tasks/:id/devices', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
@@ -1310,12 +1481,17 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
   router.post(
     '/api/tasks/:id/refunds',
     requireRight(db, 'tasks_edit'),
-    requireRight(db, 'tasks_payment_create'),
     express.json(),
     (req, res) => {
       try {
         const before = requireVisibleTask(req, res);
         if (!before) return;
+        if (
+          hasRefundPaymentInput(req.body) &&
+          !actorHasPermission(db, getSessionActor(req), 'tasks_payment_create')
+        ) {
+          return res.status(403).json({ message: 'Нет доступа.' });
+        }
         const result = refundTaskLine(
           db,
           before.id,
@@ -1331,16 +1507,17 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
           },
           taskViewer(req)
         );
-        const { task, payment, line_name, kind, quantity } = result;
+        const { task, refund, payment, line_name, kind, quantity } = result;
         const kindLabel = kind === 'device' ? 'устройство' : 'услуга';
+        const money = payment ? ` — ${payment.amount} ${payment.currency}` : '';
         auditAdminChange(db, req, {
           entityType: 'task',
           entityId: before.id,
           action: 'update',
-          summary: `Возврат ${quantity}× ${kindLabel} «${line_name}» — ${payment.amount} ${payment.currency} по задаче #${before.id}`,
+          summary: `Возврат ${quantity}× ${kindLabel} «${line_name}»${money} по задаче #${before.id}`,
           details: buildAuditDetails({ before, after: task }),
         });
-        return res.status(201).json({ task });
+        return res.status(201).json({ task, refund });
       } catch (error) {
         return respondWriteError(
           res,
@@ -1354,7 +1531,11 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
 
   router.post('/api/tasks', requireRight(db, 'tasks_create'), express.json(), (req, res) => {
     try {
-      const task = createTask(db, req.body || {}, {
+      const body = { ...(req.body || {}) };
+      if (!actorHasPermission(db, getSessionActor(req), 'tasks_status')) {
+        delete body.status;
+      }
+      const task = createTask(db, body, {
         requireLocation: true,
         viewer: taskViewer(req),
       });
@@ -1375,9 +1556,20 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     try {
       const before = requireVisibleTask(req, res);
       if (!before) return;
-      const task = updateTask(db, req.params.id, req.body || {}, {
+      const body = { ...(req.body || {}) };
+      const statusChanging =
+        body.status != null && String(body.status) !== String(before.status);
+      const canChangeStatus = actorHasPermission(db, getSessionActor(req), 'tasks_status');
+      if (statusChanging && !canChangeStatus) {
+        return res.status(403).json({ message: 'Недостаточно прав для изменения статуса задачи.' });
+      }
+      if (!canChangeStatus) {
+        delete body.status;
+      }
+      const task = updateTask(db, req.params.id, body, {
         requireLocation: true,
         viewer: taskViewer(req),
+        allowAnyStatus: statusChanging && canChangeStatus,
       });
       auditAdminChange(db, req, {
         entityType: 'task',

@@ -7,10 +7,12 @@ const path = require('path');
 const { openDb } = require('../src/db/partners-db');
 const { createService } = require('../src/db/services');
 const { addTaskService, createTask, getTask } = require('../src/db/tasks');
+const { createAccount, getAccount } = require('../src/db/accounts');
 const { setUsdUzsRate } = require('../src/db/money');
-const { createPaymentType, deletePaymentType } = require('../src/db/payment-types');
+const { createPaymentType, deletePaymentType, listPaymentTypes } = require('../src/db/payment-types');
 const {
   createTaskPayment,
+  createTaskRefund,
   deleteTaskPayment,
   listTaskPayments,
 } = require('../src/db/task-payments');
@@ -30,6 +32,11 @@ function removeDbFiles(dbPath) {
       // ignore
     }
   }
+}
+
+function makePaymentType(db, { name, currency }) {
+  const account = createAccount(db, { name: `${name} счёт`, currency });
+  return createPaymentType(db, { name, account_id: account.id });
 }
 
 function taskWithPrice(db, { title, priceUzs }) {
@@ -53,8 +60,8 @@ describe('task payments', () => {
     dbPath = makeTempDbPath();
     db = openDb(dbPath);
     setUsdUzsRate(db, 12500);
-    cashUzs = createPaymentType(db, { name: 'Наличные', currency: 'UZS' });
-    cardUsd = createPaymentType(db, { name: 'Карта USD', currency: 'USD' });
+    cashUzs = listPaymentTypes(db).find((item) => item.code === 'cash');
+    cardUsd = makePaymentType(db, { name: 'Карта USD', currency: 'USD' });
   });
 
   after(() => {
@@ -159,8 +166,24 @@ describe('task payments', () => {
     assert.equal(afterDelete.payment_totals.due_uzs, 90000);
   });
 
+  it('recalculates the account value from payments and refunds', () => {
+    setUsdUzsRate(db, 12500);
+    const uzsType = makePaymentType(db, { name: 'Касса тест', currency: 'UZS' });
+    const usdType = makePaymentType(db, { name: 'USD тест', currency: 'USD' });
+    const task = taskWithPrice(db, { title: 'Счёт кассы', priceUzs: 200000 });
+    const payment = createTaskPayment(db, task.id, { payment_type_id: uzsType.id, amount: 80000 });
+    assert.equal(getAccount(db, uzsType.account_id).value, 80000);
+    createTaskPayment(db, task.id, { payment_type_id: usdType.id, amount: 4 });
+    assert.equal(getAccount(db, uzsType.account_id).value, 80000);
+    assert.equal(getAccount(db, usdType.account_id).value, 4);
+    createTaskRefund(db, task.id, { payment_type_id: uzsType.id, amount: 20000 });
+    assert.equal(getAccount(db, uzsType.account_id).value, 60000);
+    assert.equal(deleteTaskPayment(db, task.id, payment.id), true);
+    assert.equal(getAccount(db, uzsType.account_id).value, -20000);
+  });
+
   it('keeps the payment type name after the type is removed', () => {
-    const temporaryType = createPaymentType(db, { name: 'Перевод', currency: 'UZS' });
+    const temporaryType = makePaymentType(db, { name: 'Перевод', currency: 'UZS' });
     const task = taskWithPrice(db, { title: 'Снимок типа', priceUzs: 20000 });
     createTaskPayment(db, task.id, { payment_type_id: temporaryType.id, amount: 20000 });
     deletePaymentType(db, temporaryType.id);

@@ -1,5 +1,5 @@
+const { recalculateAccountValue, recalculateAllAccountValues } = require('./accounts');
 const { CURRENCIES, getUsdUzsRate, roundMoney } = require('./money');
-
 const { ensurePaymentTypeTables, getPaymentType } = require('./payment-types');
 
 
@@ -12,11 +12,11 @@ const PAYMENT_KINDS = ['payment', 'refund'];
 
 const PAYMENT_SELECT = `
 
-  p.id, p.task_id, p.payment_type_id, p.payment_type_name,
+  p.id, p.task_id, p.payment_type_id, p.payment_type_name, p.account_id,
 
   p.amount, p.currency, p.amount_uzs, p.amount_usd, p.usd_uzs_rate,
 
-  p.kind, p.device_line_id, p.service_line_id, p.refunded_quantity,
+  p.kind, p.device_line_id, p.service_line_id, p.refunded_quantity, p.refund_id,
 
   p.note, p.created_by_user_id, p.created_at,
 
@@ -118,6 +118,24 @@ function ensureTaskPaymentTables(db) {
 
   ensureColumn(db, 'task_payments', 'refunded_quantity', 'INTEGER');
 
+  ensureColumn(db, 'task_payments', 'refund_id', 'INTEGER');
+
+  ensureColumn(db, 'task_payments', 'account_id', 'INTEGER');
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_task_payments_account_id ON task_payments(account_id)');
+
+  const backfilled = db
+    .prepare(
+      `UPDATE task_payments
+       SET account_id = (
+         SELECT account_id FROM payment_types WHERE payment_types.id = task_payments.payment_type_id
+       )
+       WHERE account_id IS NULL AND payment_type_id IS NOT NULL`
+    )
+    .run();
+
+  if (backfilled.changes > 0) recalculateAllAccountValues(db);
+
 }
 
 
@@ -166,6 +184,8 @@ function mapTaskPayment(row) {
 
     payment_type_name: row.payment_type_name || '',
 
+    account_id: row.account_id ?? null,
+
     amount: Number(row.amount) || 0,
 
     currency,
@@ -183,6 +203,8 @@ function mapTaskPayment(row) {
     service_line_id: row.service_line_id ?? null,
 
     refunded_quantity: row.refunded_quantity ?? null,
+
+    refund_id: row.refund_id ?? null,
 
     note: row.note || '',
 
@@ -284,6 +306,8 @@ function insertTaskPaymentRecord(db, taskId, paymentType, input = {}) {
 
   const currency = normalizePaymentCurrency(input.currency, paymentType.currency);
 
+  const accountId = Number(paymentType.account_id);
+
   const note = normalizePaymentNote(input.note);
 
   const rate = getUsdUzsRate(db);
@@ -300,21 +324,23 @@ function insertTaskPaymentRecord(db, taskId, paymentType, input = {}) {
 
   const refundedQuantity = Number(input.refunded_quantity);
 
+  const refundId = Number(input.refund_id);
+
   const result = db
 
     .prepare(
 
       `INSERT INTO task_payments (
 
-         task_id, payment_type_id, payment_type_name, amount, currency,
+         task_id, payment_type_id, payment_type_name, account_id, amount, currency,
 
          amount_uzs, amount_usd, usd_uzs_rate, kind,
 
-         device_line_id, service_line_id, refunded_quantity,
+         device_line_id, service_line_id, refunded_quantity, refund_id,
 
          note, created_by_user_id, created_at
 
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
 
     )
 
@@ -325,6 +351,8 @@ function insertTaskPaymentRecord(db, taskId, paymentType, input = {}) {
       paymentType.id,
 
       paymentType.name,
+
+      Number.isFinite(accountId) && accountId > 0 ? accountId : null,
 
       amount,
 
@@ -343,6 +371,8 @@ function insertTaskPaymentRecord(db, taskId, paymentType, input = {}) {
       Number.isFinite(serviceLineId) && serviceLineId > 0 ? serviceLineId : null,
 
       Number.isFinite(refundedQuantity) && refundedQuantity > 0 ? refundedQuantity : null,
+
+      Number.isFinite(refundId) && refundId > 0 ? refundId : null,
 
       note,
 
@@ -428,6 +458,8 @@ function createTaskPayment(db, taskId, input = {}) {
 
   db.prepare(`UPDATE tasks SET updated_at = datetime('now') WHERE id = ?`).run(id);
 
+  if (paymentType.account_id) recalculateAccountValue(db, paymentType.account_id);
+
   return getTaskPayment(db, id, paymentId);
 
 }
@@ -448,6 +480,8 @@ function createTaskRefund(db, taskId, input = {}) {
 
   const paymentId = insertTaskPaymentRecord(db, id, paymentType, { ...input, kind: 'refund' });
 
+  if (paymentType.account_id) recalculateAccountValue(db, paymentType.account_id);
+
   return getTaskPayment(db, id, paymentId);
 
 }
@@ -465,6 +499,8 @@ function deleteTaskPayment(db, taskId, paymentId) {
   db.prepare('DELETE FROM task_payments WHERE id = ?').run(current.id);
 
   db.prepare(`UPDATE tasks SET updated_at = datetime('now') WHERE id = ?`).run(current.task_id);
+
+  if (current.account_id) recalculateAccountValue(db, current.account_id);
 
   return true;
 
@@ -488,11 +524,11 @@ function summarizeTaskPayments(payments, totals) {
 
   for (const payment of payments || []) {
 
-    const sign = payment?.kind === 'refund' ? -1 : 1;
+    if (payment?.kind === 'refund') continue;
 
-    paidUzs += sign * (Number(payment?.amount_uzs) || 0);
+    paidUzs += Number(payment?.amount_uzs) || 0;
 
-    paidUsd += sign * (Number(payment?.amount_usd) || 0);
+    paidUsd += Number(payment?.amount_usd) || 0;
 
   }
 

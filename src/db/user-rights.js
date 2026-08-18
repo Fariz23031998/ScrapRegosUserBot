@@ -193,6 +193,18 @@ const RIGHTS = {
     column: 'tasks_payment_delete',
     label: 'Админ: задачи — удаление оплаты',
   },
+  tasks_post: {
+    column: 'tasks_post',
+    label: 'Админ: задачи — проведение',
+  },
+  tasks_unpost: {
+    column: 'tasks_unpost',
+    label: 'Админ: задачи — отмена проведения',
+  },
+  tasks_status: {
+    column: 'tasks_status',
+    label: 'Админ: задачи — изменение статуса',
+  },
   devices_read: {
     column: 'devices_read',
     label: 'Админ: устройства — просмотр',
@@ -235,6 +247,7 @@ const ADMIN_PERMISSION_KEYS = [
   'users_delete',
   'order_logs_read',
   'logs_read',
+  'see_all_report',
   'orders_read',
   'delete_unpaid_order',
   'delete_cash_order',
@@ -270,6 +283,9 @@ const ADMIN_PERMISSION_KEYS = [
   'tasks_delete',
   'tasks_payment_create',
   'tasks_payment_delete',
+  'tasks_post',
+  'tasks_unpost',
+  'tasks_status',
   'devices_read',
   'devices_create',
   'devices_edit',

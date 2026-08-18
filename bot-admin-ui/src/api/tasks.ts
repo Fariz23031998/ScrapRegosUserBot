@@ -6,6 +6,7 @@ import type {
   TaskClient,
   TaskEmployee,
   TaskLocation,
+  TaskRefund,
 } from "../lib/types";
 
 export type TaskListParams = {
@@ -68,6 +69,21 @@ export function updateTask(id: number, payload: TaskPayload) {
 
 export function deleteTask(id: number) {
   return apiFetch<{ ok: boolean }>(`/bot-admin/api/tasks/${id}`, { method: "DELETE" });
+}
+
+export function postTask(id: number) {
+  return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${id}/post`, { method: "POST" });
+}
+
+export function unpostTask(id: number, options?: { deleteRefunds?: boolean }) {
+  return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${id}/unpost`, {
+    method: "POST",
+    body: JSON.stringify({ delete_refunds: Boolean(options?.deleteRefunds) }),
+  });
+}
+
+export function advanceTaskStatus(id: number) {
+  return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${id}/status/next`, { method: "POST" });
 }
 
 export function listTaskCategories() {
@@ -202,15 +218,19 @@ export type TaskRefundPayload = {
   kind: "device" | "service";
   line_id: number;
   quantity: number;
-  payment_type_id: number;
-  amount: number;
+  payment_type_id?: number;
+  amount?: number;
   currency?: "UZS" | "USD";
   note?: string;
 };
 
 export function createTaskRefund(taskId: number, payload: TaskRefundPayload) {
-  return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${taskId}/refunds`, {
+  return apiFetch<{ task: FieldTask; refund?: TaskRefund }>(`/bot-admin/api/tasks/${taskId}/refunds`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listTaskRefunds(taskId: number) {
+  return apiFetch<{ refunds: TaskRefund[] }>(`/bot-admin/api/tasks/${taskId}/refunds`);
 }

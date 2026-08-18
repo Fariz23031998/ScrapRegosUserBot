@@ -13,6 +13,7 @@ const {
   listLocationsForViewer,
   updateLocation,
 } = require('../src/db/locations');
+const { createAccount } = require('../src/db/accounts');
 const { openDb } = require('../src/db/partners-db');
 const {
   createPaymentType,
@@ -89,20 +90,24 @@ describe('locations, payment types, and task visibility', () => {
     assert.throws(() => createLocation(db, { name: '  ' }), /INVALID_LOCATION_NAME/);
   });
 
-  it('creates, updates, and deletes payment types', () => {
-    const created = createPaymentType(db, { name: 'Наличные', currency: 'UZS' });
-    assert.equal(created.name, 'Наличные');
-    assert.equal(created.currency, 'UZS');
-    const updated = updatePaymentType(db, created.id, { name: 'CLICK', currency: 'USD' });
-    assert.equal(updated.name, 'CLICK');
-    assert.equal(updated.currency, 'USD');
+  it('creates, updates, and deletes custom payment types linked to an account', () => {
+    const account = createAccount(db, { name: 'Касса карты', currency: 'USD' });
+    const created = createPaymentType(db, { name: 'Карта', account_id: account.id });
+    assert.equal(created.name, 'Карта');
+    assert.equal(created.currency, 'USD');
+    assert.equal(created.account_id, account.id);
+    const uzsAccount = createAccount(db, { name: 'Касса UZS', currency: 'UZS' });
+    const updated = updatePaymentType(db, created.id, { name: 'Перевод', account_id: uzsAccount.id });
+    assert.equal(updated.name, 'Перевод');
+    assert.equal(updated.currency, 'UZS');
+    assert.equal(updated.account_id, uzsAccount.id);
     assert.equal(listPaymentTypes(db).some((item) => item.id === created.id), true);
     assert.equal(deletePaymentType(db, created.id), true);
     assert.equal(listPaymentTypes(db).some((item) => item.id === created.id), false);
     assert.throws(() => createPaymentType(db, { name: '' }), /INVALID_PAYMENT_TYPE_NAME/);
     assert.throws(
-      () => createPaymentType(db, { name: 'Payme', currency: 'EUR' }),
-      /INVALID_PAYMENT_TYPE_CURRENCY/
+      () => createPaymentType(db, { name: 'Карта', account_id: 999999 }),
+      /INVALID_PAYMENT_TYPE_ACCOUNT/
     );
   });
 
