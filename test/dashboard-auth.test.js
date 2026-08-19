@@ -459,7 +459,9 @@ describe('Telegram dashboard authentication', () => {
         body: { initData },
       });
       assert.equal(ok.statusCode, 200);
-      assert.equal(JSON.parse(ok.body).ok, true);
+      const okBody = JSON.parse(ok.body);
+      assert.equal(okBody.ok, true);
+      assert.equal(typeof okBody.token, 'string');
       assert.deepEqual(sessionActorFromSetCookie(ok.headers['set-cookie']), {
         type: 'telegram',
         telegramId,
@@ -506,6 +508,37 @@ describe('Telegram dashboard authentication', () => {
         body: { initData: deniedInit },
       });
       assert.equal(denied.statusCode, 403);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('returns a session token on login and accepts Authorization Bearer', async () => {
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    const server = await new Promise((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const loginRes = await request(server, 'POST', '/bot-admin/api/login', {
+        body: { login: 'admin', password: 'test-password' },
+      });
+      assert.equal(loginRes.statusCode, 200);
+      const loginBody = JSON.parse(loginRes.body);
+      assert.equal(loginBody.ok, true);
+      assert.equal(typeof loginBody.token, 'string');
+      assert.match(loginBody.token, /^eyJ/);
+
+      const noAuth = await request(server, 'GET', '/bot-admin/api/session');
+      assert.equal(noAuth.statusCode, 401);
+
+      const bearerSession = await request(server, 'GET', '/bot-admin/api/session', {
+        headers: { Authorization: `Bearer ${loginBody.token}` },
+      });
+      assert.equal(bearerSession.statusCode, 200);
+      const sessionBody = JSON.parse(bearerSession.body);
+      assert.equal(sessionBody.actor.type, 'password');
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

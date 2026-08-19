@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { getSession, loginTelegramWebApp } from "../api/auth";
 import { ApiError } from "../api/client";
+import { setStoredSessionToken } from "../api/session-token";
 import type { Permissions, SessionActor, SessionProfile } from "../lib/types";
 import { firstAllowedPath, hasPermission } from "../lib/permissions";
 
@@ -13,7 +14,7 @@ type AuthContextValue = {
   webAppDenied: string | null;
   hasPermission: (key: string) => boolean;
   firstAllowedPath: string | null;
-  refreshSession: () => Promise<void>;
+  refreshSession: () => Promise<boolean>;
   clearSession: () => void;
 };
 
@@ -21,6 +22,17 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 function telegramWebApp() {
   return typeof window === "undefined" ? undefined : window.Telegram?.WebApp;
+}
+
+async function maybeWaitForTelegramInitData() {
+  if (telegramWebApp()?.initData?.trim()) return;
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent || "";
+  if (!/Telegram/i.test(ua)) return;
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (telegramWebApp()?.initData?.trim()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -31,6 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [webAppDenied, setWebAppDenied] = useState<string | null>(null);
 
   const clearSession = useCallback(() => {
+    setStoredSessionToken(null);
     setActor(null);
     setProfile(null);
     setPermissions({});
@@ -39,6 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshSession = useCallback(async () => {
     setIsLoading(true);
     try {
+      await maybeWaitForTelegramInitData();
       const webApp = telegramWebApp();
       const initData = webApp?.initData?.trim();
       if (initData) {
@@ -50,8 +64,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } catch (err) {
           if (err instanceof ApiError && err.status === 403) {
             setWebAppDenied(err.message || "Доступ запрещён. Нет права на открытие админ-панели.");
-            clearSession();
-            return;
           }
         }
       }
@@ -61,8 +73,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setActor(data.actor);
       setProfile(data.profile);
       setPermissions(data.permissions || {});
+      return true;
     } catch {
       clearSession();
+      return false;
     } finally {
       setIsLoading(false);
     }

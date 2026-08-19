@@ -80,3 +80,18 @@ export function updatePaymentType(id: number, payload: { name: string; account_i
 export function deletePaymentType(id: number) {
   return apiFetch<{ ok: boolean }>(`/bot-admin/api/settings/payment-types/${id}`, { method: "DELETE" });
 }
+
+export type RepairReturnSettings = {
+  require_serials: boolean;
+};
+
+export function getRepairReturnSettings() {
+  return apiFetch<RepairReturnSettings>("/bot-admin/api/settings/repair-returns");
+}
+
+export function saveRepairReturnSettings(payload: RepairReturnSettings) {
+  return apiFetch<RepairReturnSettings>("/bot-admin/api/settings/repair-returns", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}

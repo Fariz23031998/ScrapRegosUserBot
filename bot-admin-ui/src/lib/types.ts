@@ -59,8 +59,8 @@ export type AiGroupTopic = {
   when?: string;
 };
 
-export type AiPromptSlug = "customer" | "customer_assist" | "kb" | "ticket_summary";
-export type AiToolAgentSlug = "customer" | "customer_assist" | "kb";
+export type AiPromptSlug = "customer" | "customer_assist" | "kb" | "ops" | "ticket_summary";
+export type AiToolAgentSlug = "customer" | "customer_assist" | "kb" | "ops";
 
 export type AiAgentTool = {
   name: string;
@@ -252,6 +252,8 @@ export type KnowledgeArticle = {
   category_id?: number | null;
   category?: Pick<KnowledgeCategory, "id" | "name" | "tags"> | null;
   locked?: boolean;
+  is_confirmed?: boolean;
+  creator?: string | null;
   updated_by?: number | null;
   created_at?: string;
   updated_at?: string;
@@ -329,6 +331,22 @@ export type AgentTestPromptTool = {
   name: string;
   description?: string;
   parameters?: Record<string, unknown>;
+};
+
+export type AgentPromptPreview = {
+  system: string;
+  messages: TicketAiPromptMessage[];
+  tools: TicketAiPromptTool[];
+  settings?: {
+    enabled?: boolean;
+    test_mode?: boolean;
+    provider?: string | null;
+    model?: string | null;
+    history_limit?: number;
+  };
+  session_id?: number;
+  ticket_id?: number | string | null;
+  chat_id?: string | null;
 };
 
 export type AgentTestPrompt = {
@@ -616,6 +634,7 @@ export type ChatUploadFile = {
   name: string;
   extension: string;
   data: string;
+  mime_type?: string;
 };
 
 export type ChannelSetting = {
@@ -741,6 +760,47 @@ export type SettingsLocation = {
   updated_at?: string;
 };
 
+export type PrintStationPrinter = {
+  name: string;
+  kind: "label" | "receipt" | "invoice" | string;
+  enabled: boolean;
+};
+
+export type PrintStation = {
+  station_id: string;
+  station_name: string;
+  location_id: string;
+  printers?: PrintStationPrinter[];
+};
+
+export type PrintEnabledPrinter = {
+  name: string;
+  kind: "label" | "receipt" | "invoice" | string;
+  enabled: boolean;
+  station_id: string;
+  station_name: string;
+  location_id: string;
+};
+
+export type PrintTemplate = {
+  id: string;
+  kind: "label" | "receipt" | "invoice" | string;
+  version: number;
+  paper: { widthMm: number; heightMm: number };
+  html: string;
+};
+
+export type PrintSettings = {
+  enabled: boolean;
+  env_forced_off: boolean;
+  token_configured: boolean;
+  token_hint: string;
+  token_source: "database" | "env" | "none" | string;
+  ws_path: string;
+  connected: number;
+  stations: PrintStation[];
+};
+
 export type PaymentAccount = {
   id: number;
   name: string;
@@ -748,6 +808,24 @@ export type PaymentAccount = {
   value: number;
   created_at?: string;
   updated_at?: string;
+};
+
+export type AccountPaymentDirection = "in" | "out";
+
+export type AccountPayment = {
+  id: number;
+  account_id: number;
+  account?: { id: number; name: string; currency: "UZS" | "USD" } | null;
+  direction: AccountPaymentDirection;
+  amount: number;
+  currency: "UZS" | "USD";
+  amount_uzs: number;
+  amount_usd: number;
+  usd_uzs_rate?: number;
+  note?: string;
+  created_by_user_id?: number | null;
+  created_by?: { id: number; name: string } | null;
+  created_at?: string;
 };
 
 export type PaymentType = {
@@ -821,6 +899,17 @@ export type TaskPaymentTotals = {
   due_usd: number;
 };
 
+export type TaskDeviceSerial = {
+  id: number;
+  task_id?: number;
+  device_line_id?: number;
+  code: string;
+  printed_at?: string | null;
+  returned_at?: string | null;
+  return_id?: number | null;
+  created_at?: string;
+};
+
 export type TaskDeviceLine = {
   id?: number;
   task_id?: number;
@@ -832,6 +921,8 @@ export type TaskDeviceLine = {
   action_label?: string;
   notes?: string;
   quantity?: number;
+  returned_quantity?: number;
+  remaining_return_quantity?: number;
   sort_order?: number;
   cost_amount?: number | null;
   cost_currency?: string | null;
@@ -848,6 +939,7 @@ export type TaskDeviceLine = {
   discount_type?: "percent" | "amount" | null;
   discount_value?: number;
   discount_currency?: string | null;
+  serials?: TaskDeviceSerial[];
 };
 
 export type TaskServiceLine = {
@@ -901,6 +993,32 @@ export type TaskRefund = {
   lines?: TaskRefundLine[];
   payments?: TaskPayment[];
   totals?: { price_uzs: number; price_usd: number };
+};
+
+export type RepairReturnItem = {
+  id: number;
+  kind: "pending" | "returned" | string;
+  device_line_id: number;
+  device_id: number;
+  device_name?: string;
+  quantity: number;
+  returned_quantity: number;
+  remaining_quantity: number;
+  return_id?: number | null;
+  return_quantity?: number | null;
+  note?: string;
+  created_at?: string | null;
+  created_by?: { id: number; name: string } | null;
+  serials?: TaskDeviceSerial[];
+  task: {
+    id: number;
+    title: string;
+    client_name?: string;
+    client_phone?: string;
+    location?: { id: number; name: string } | null;
+    technician?: { id: number; name: string } | null;
+    updated_at?: string;
+  };
 };
 
 export type FieldTask = {

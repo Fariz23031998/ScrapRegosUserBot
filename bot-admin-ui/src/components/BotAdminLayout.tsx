@@ -16,7 +16,9 @@ import {
   Receipt,
   Settings,
   Ticket,
+  Undo2,
   Users,
+  Wallet,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -43,9 +45,10 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "/users": Users,
   "/orders": Receipt,
   "/order-logs": ClipboardList,
-  "/logs": FileText,
   "/tickets": Ticket,
   "/tasks": ListTodo,
+  "/finances": Wallet,
+  "/repair-returns": Undo2,
   "/reports": BarChart3,
   "/devices": MonitorSmartphone,
   "/services": Wrench,
@@ -71,14 +74,17 @@ function ReportNotifications() {
 }
 
 export default function BotAdminLayout() {
-  const { actor, profile, permissions, clearSession, refreshSession } = useAuth();
+  const { actor, profile, permissions, clearSession, refreshSession, hasPermission } = useAuth();
   const { theme, dateTimeFormat, ticketPeriodDays, setTheme, setDateTimeFormat, setTicketPeriodDays } =
     useUiPreferences();
   const navigate = useNavigate();
   const location = useLocation();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [navVisible, setNavVisible] = useState(loadNavVisible);
-  const hideCompactNavButton = /^\/tickets(\/|$)/.test(location.pathname);
+  const hideCompactNavButton =
+    /^\/tickets(\/|$)/.test(location.pathname) ||
+    /^\/tasks(\/|$)/.test(location.pathname) ||
+    /^\/(devices|services|repair-returns)\/?$/.test(location.pathname);
   const toggleNav = useCallback(() => setNavVisible((value) => !value), []);
   const shellContext = useMemo<AdminShellContextValue>(
     () => ({ navVisible, toggleNav, setNavVisible }),
@@ -232,6 +238,22 @@ export default function BotAdminLayout() {
             >
               <span className="account-menu__initials">{initials(profile)}</span>
             </button>
+            {hasPermission("logs_read") ? (
+              <NavLink
+                to="/logs"
+                className={({ isActive }) =>
+                  `sidebar-footer-icon${isActive ? " sidebar-footer-icon--active" : ""}`
+                }
+                aria-label="Журнал"
+                title="Журнал"
+                onClick={() => {
+                  setMenuOpen(false);
+                  if (compact) setNavVisible(false);
+                }}
+              >
+                <FileText size={18} aria-hidden="true" />
+              </NavLink>
+            ) : null}
             {menuOpen ? (
               <div className="account-menu__dropdown account-menu__dropdown--profile">
                 <div className="account-menu__identity">

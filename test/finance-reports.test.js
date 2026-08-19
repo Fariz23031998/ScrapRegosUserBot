@@ -7,6 +7,7 @@ const path = require('path');
 const { createAccount } = require('../src/db/accounts');
 const { createEmployeeUser } = require('../src/db/bot-users-db');
 const { createDevice } = require('../src/db/devices');
+const { createService } = require('../src/db/services');
 const { buildFinanceReport, UNASSIGNED_LOCATION_NAME } = require('../src/db/finance-reports');
 const { createLocation } = require('../src/db/locations');
 const { openDb } = require('../src/db/partners-db');
@@ -14,7 +15,7 @@ const { createPaymentType, listPaymentTypes } = require('../src/db/payment-types
 const { setUsdUzsRate } = require('../src/db/money');
 const { createTaskPayment } = require('../src/db/task-payments');
 const { refundTaskLine } = require('../src/db/task-refunds');
-const { createTask, getTask, postTask, updateTaskDevice } = require('../src/db/tasks');
+const { addTaskService, createTask, getTask, postTask, updateTaskDevice } = require('../src/db/tasks');
 
 function makeTempDbPath() {
   return path.join(
@@ -195,5 +196,32 @@ describe('finance reports', () => {
     assert.equal(report.rows.some((row) => row.location_id === office.id), true);
     assert.equal(report.rows.some((row) => row.location_id === warehouse.id), false);
     assert.equal(report.rows.some((row) => row.location_id == null), true);
+  });
+
+  it('excludes repair task device prices from revenue and still counts services', () => {
+    const service = createService(db, {
+      name: 'Диагностика',
+      cost_amount: 10000,
+      cost_currency: 'UZS',
+      price_uzs: 25000,
+    });
+    const before = buildFinanceReport(db, currentPeriod());
+    const officeBefore = before.rows.find((row) => row.location_id === office.id);
+    const task = createTask(db, {
+      title: 'Ремонт терминала финансы',
+      action: 'repair',
+      status: 'done',
+      location_id: office.id,
+      devices: [{ device_id: device.id, quantity: 1 }],
+    });
+    addTaskService(db, task.id, { service_id: service.id, quantity: 1 });
+    postTask(db, task.id);
+
+    const after = buildFinanceReport(db, currentPeriod());
+    const officeAfter = after.rows.find((row) => row.location_id === office.id);
+    assert.ok(officeAfter);
+    assert.equal(officeAfter.task_count, (officeBefore?.task_count || 0) + 1);
+    assert.equal(officeAfter.revenue_uzs, (officeBefore?.revenue_uzs || 0) + 25000);
+    assert.equal(officeAfter.cost_uzs, (officeBefore?.cost_uzs || 0) + 10000);
   });
 });

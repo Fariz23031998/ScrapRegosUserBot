@@ -69,7 +69,6 @@ function attachSmsGateway(httpServer, { db }) {
   httpServer.on('upgrade', (req, socket, head) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
     if (pathname !== WS_PATH) {
-      socket.destroy();
       return;
     }
 

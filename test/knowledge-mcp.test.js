@@ -221,6 +221,8 @@ describe('knowledge MCP HTTP', () => {
       'knowledge_update_category',
       'knowledge_delete_category',
     ]);
+    assert.ok(!names.includes('knowledge_confirm'));
+    assert.ok(!names.includes('knowledge_unconfirm'));
   });
 
   it('omits write tools when MCP_KNOWLEDGE_READONLY=1', async () => {
@@ -259,7 +261,10 @@ describe('knowledge MCP HTTP', () => {
     assert.equal(created.isError, false);
     assert.ok(created.data.article.id);
     assert.equal(created.data.article.title, 'MCP unique test article');
+    assert.equal(created.data.article.is_confirmed, false);
+    assert.equal(created.data.article.creator, 'mcp');
     assert.equal(getKnowledgeArticle(db, created.data.article.id)?.title, 'MCP unique test article');
+    assert.equal(getKnowledgeArticle(db, created.data.article.id)?.is_confirmed, false);
 
     const audit = listAdminAuditLogs(db, { query: 'MCP unique test article', limit: 5 });
     assert.ok(audit.logs.some((row) => row.actor_type === 'mcp' && row.actor_name === 'MCP'));

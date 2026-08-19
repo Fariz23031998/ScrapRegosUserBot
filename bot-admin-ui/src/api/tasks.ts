@@ -75,10 +75,13 @@ export function postTask(id: number) {
   return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${id}/post`, { method: "POST" });
 }
 
-export function unpostTask(id: number, options?: { deleteRefunds?: boolean }) {
+export function unpostTask(id: number, options?: { deleteRefunds?: boolean; deleteReturns?: boolean }) {
   return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${id}/unpost`, {
     method: "POST",
-    body: JSON.stringify({ delete_refunds: Boolean(options?.deleteRefunds) }),
+    body: JSON.stringify({
+      delete_refunds: Boolean(options?.deleteRefunds),
+      delete_returns: Boolean(options?.deleteReturns),
+    }),
   });
 }
 
@@ -118,6 +121,19 @@ export function listTaskEmployees() {
 
 export function searchTaskClients(q: string) {
   return apiFetch<{ clients: TaskClient[] }>(`/bot-admin/api/tasks/clients?q=${encodeURIComponent(q)}`);
+}
+
+export function createTaskClient(payload: {
+  name?: string;
+  phone?: string;
+  email?: string;
+  description?: string;
+  external_id?: string;
+}) {
+  return apiFetch<{ client: TaskClient }>("/bot-admin/api/tasks/clients", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function addTaskDevice(

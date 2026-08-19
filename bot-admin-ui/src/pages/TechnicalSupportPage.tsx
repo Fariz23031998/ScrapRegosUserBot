@@ -1,5 +1,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Ban, Pencil, Trash2 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   createTechnicalSupportSubscription,
@@ -115,17 +116,35 @@ function subscriptionActions(
     <>
       {hasPermission("technical_support_edit") ? (
         <>
-          <button type="button" className="btn-secondary" onClick={() => onEdit(item)}>
-            Изменить
+          <button
+            type="button"
+            className="btn-secondary btn-icon btn-sm"
+            aria-label="Изменить"
+            title="Изменить"
+            onClick={() => onEdit(item)}
+          >
+            <Pencil size={15} aria-hidden="true" />
           </button>
-          <button type="button" className="btn-secondary" onClick={() => onDeactivate(item.id)}>
-            Деактивировать
+          <button
+            type="button"
+            className="btn-secondary btn-icon btn-sm"
+            aria-label="Деактивировать"
+            title="Деактивировать"
+            onClick={() => onDeactivate(item.id)}
+          >
+            <Ban size={15} aria-hidden="true" />
           </button>
         </>
       ) : null}
       {hasPermission("technical_support_delete") ? (
-        <button type="button" className="btn-danger" onClick={() => void onDelete(item.id)}>
-          Удалить
+        <button
+          type="button"
+          className="btn-danger btn-icon btn-sm"
+          aria-label="Удалить"
+          title="Удалить"
+          onClick={() => void onDelete(item.id)}
+        >
+          <Trash2 size={15} aria-hidden="true" />
         </button>
       ) : null}
     </>

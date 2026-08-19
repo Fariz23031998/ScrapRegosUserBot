@@ -1,6 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  BadgeCheck,
+  BadgeX,
+  Eye,
+  Lock,
+  Pencil,
+  Trash2,
+  Unlock,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
+  confirmKnowledgeArticle,
   createKnowledgeArticle,
   createKnowledgeCategory,
   deleteKnowledgeArticle,
@@ -11,22 +22,49 @@ import {
   lockKnowledgeArticle,
   resetKbSession,
   sendKbChat,
+  unconfirmKnowledgeArticle,
   unlockKnowledgeArticle,
   updateKnowledgeArticle,
   updateKnowledgeCategory,
 } from "../api/ai";
-import AgentChatFiles from "../components/AgentChatFiles";
+import AgentChatMessages from "../components/AgentChatMessages";
 import ChatCompose, { type ChatComposeHandle } from "../components/ChatCompose";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import LoadingState from "../components/LoadingState";
+import MarkdownPreview from "../components/MarkdownPreview";
 import Modal from "../components/Modal";
 import SearchField from "../components/SearchField";
 import { useAuth } from "../hooks/useAuth";
+import { useAgentChatThread } from "../hooks/useAgentChatThread";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { filesFromDataTransfer, isFileDrag } from "../lib/ticket-chat";
 import type { KnowledgeArticle, KnowledgeCategory } from "../lib/types";
+
+function IconAction({
+  label,
+  icon: Icon,
+  onClick,
+  variant = "secondary",
+}: {
+  label: string;
+  icon: LucideIcon;
+  onClick: () => void;
+  variant?: "secondary" | "primary" | "danger";
+}) {
+  return (
+    <button
+      type="button"
+      className={`btn-${variant} btn-icon btn-sm`}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      <Icon size={15} aria-hidden="true" />
+    </button>
+  );
+}
 
 type WorkspaceView = "chat" | "content";
 type CategoryFilter = "all" | "none" | number;
@@ -46,12 +84,15 @@ export default function KnowledgePage() {
   const canEdit = hasPermission("knowledge_edit");
   const canLock = hasPermission("knowledge_lock");
   const canUnlock = hasPermission("knowledge_unlock");
+  const canConfirm = hasPermission("knowledge_confirm");
   const [view, setView] = useState<WorkspaceView>("chat");
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [message, setMessage] = useState("");
   const [sessionId, setSessionId] = useState<number | undefined>();
   const [editor, setEditor] = useState<Partial<KnowledgeArticle> | null>(null);
+  const [editorPreview, setEditorPreview] = useState(false);
+  const [preview, setPreview] = useState<KnowledgeArticle | null>(null);
   const [formError, setFormError] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categoryEditor, setCategoryEditor] = useState<Partial<KnowledgeCategory> | null>(null);
@@ -87,6 +128,7 @@ export default function KnowledgePage() {
       return data;
     },
   });
+  const thread = useAgentChatThread(sessionQuery.data?.messages || []);
 
   function invalidateKnowledge() {
     void queryClient.invalidateQueries({ queryKey: ["knowledge-articles"] });
@@ -110,8 +152,9 @@ export default function KnowledgePage() {
       if (editor?.id) return updateKnowledgeArticle(editor.id, payload);
       return createKnowledgeArticle(payload);
     },
-    onSuccess: () => {
+            onSuccess: () => {
       setEditor(null);
+      setEditorPreview(false);
       invalidateKnowledge();
     },
     onError: (error: Error) => setFormError(error.message),
@@ -156,13 +199,29 @@ export default function KnowledgePage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["knowledge-articles"] }),
   });
 
+  const confirmArticle = useMutation({
+    mutationFn: confirmKnowledgeArticle,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["knowledge-articles"] }),
+  });
+
+  const unconfirmArticle = useMutation({
+    mutationFn: unconfirmKnowledgeArticle,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["knowledge-articles"] }),
+  });
+
   const chatMutation = useMutation({
     mutationFn: (payload: { message: string; files?: Array<{ name: string; extension: string; data: string }> }) =>
-      sendKbChat({ session_id: sessionId, message: payload.message, files: payload.files }),
+      sendKbChat(
+        { session_id: sessionId, message: payload.message, files: payload.files },
+        { onDelta: thread.appendDelta },
+      ),
     onSuccess: (data) => {
       setSessionId(data.session_id);
-      setMessage("");
+      thread.finishTurn();
       queryClient.setQueryData(["knowledge-session"], data);
+    },
+    onError: () => {
+      thread.failTurn();
     },
   });
 
@@ -171,26 +230,34 @@ export default function KnowledgePage() {
     onSuccess: (data) => {
       setSessionId(data.session_id);
       setMessage("");
+      thread.finishTurn();
       queryClient.setQueryData(["knowledge-session"], data);
     },
   });
 
   const articles = articlesQuery.items;
   const total = articlesQuery.total;
-  const messages = sessionQuery.data?.messages || [];
+  const messages = thread.messages;
   useEffect(() => {
     const node = listRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [messages.length, chatMutation.isPending, view]);
+  }, [messages.length, thread.streamingAssistant?.content, chatMutation.isPending, view]);
 
   function openNewArticle() {
     setFormError("");
+    setEditorPreview(false);
     setEditor({
       title: "",
       body: "",
       tags: "",
       category_id: typeof categoryFilter === "number" ? categoryFilter : null,
     });
+  }
+
+  function openEditor(article: KnowledgeArticle) {
+    setFormError("");
+    setEditorPreview(false);
+    setEditor(article);
   }
 
   async function handleDelete(article: KnowledgeArticle) {
@@ -217,6 +284,22 @@ export default function KnowledgePage() {
       confirmLabel: "Разблокировать",
     });
     if (ok) unlockArticle.mutate(article.id);
+  }
+
+  async function handleConfirm(article: KnowledgeArticle) {
+    const ok = await confirm({
+      message: `Подтвердить статью «${article.title}»? После этого её увидят агенты.`,
+      confirmLabel: "Подтвердить",
+    });
+    if (ok) confirmArticle.mutate(article.id);
+  }
+
+  async function handleUnconfirm(article: KnowledgeArticle) {
+    const ok = await confirm({
+      message: `Снять подтверждение со статьи «${article.title}»? Агенты перестанут её видеть.`,
+      confirmLabel: "Снять подтверждение",
+    });
+    if (ok) unconfirmArticle.mutate(article.id);
   }
 
   async function handleDeleteCategory(category: KnowledgeCategory) {
@@ -350,43 +433,56 @@ export default function KnowledgePage() {
             <ul className="knowledge-list">
               {articles.map((article) => {
                 const locked = Boolean(article.locked);
-                const showActions = (canEdit && !locked) || (canLock && !locked) || (canUnlock && locked);
+                const confirmed = Boolean(article.is_confirmed);
                 return (
                   <li key={article.id} className="knowledge-list__item">
                     <div className="knowledge-list__title">
                       <strong>{article.title}</strong>
                       {article.category?.name ? <span className="badge badge--muted">{article.category.name}</span> : null}
                       {locked ? <span className="badge badge--warn">Заблокирована</span> : null}
+                      {confirmed ? null : <span className="badge badge--warn">Не подтверждена</span>}
                     </div>
                     {article.tags ? <small>{article.tags}</small> : null}
+                    {article.creator ? <small>Создал: {article.creator}</small> : null}
                     <p>
                       {article.body.slice(0, 180)}
                       {article.body.length > 180 ? "…" : ""}
                     </p>
-                    {showActions ? (
-                      <div className="cell-actions">
-                        {canEdit && !locked ? (
-                          <button type="button" className="btn-secondary btn-sm" onClick={() => setEditor(article)}>
-                            Изменить
-                          </button>
-                        ) : null}
-                        {canLock && !locked ? (
-                          <button type="button" className="btn-secondary btn-sm" onClick={() => void handleLock(article)}>
-                            Заблокировать
-                          </button>
-                        ) : null}
-                        {canUnlock && locked ? (
-                          <button type="button" className="btn-secondary btn-sm" onClick={() => void handleUnlock(article)}>
-                            Разблокировать
-                          </button>
-                        ) : null}
-                        {canEdit && !locked ? (
-                          <button type="button" className="btn-danger btn-sm" onClick={() => void handleDelete(article)}>
-                            Удалить
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
+                    <div className="cell-actions">
+                      <IconAction label="Просмотр" icon={Eye} onClick={() => setPreview(article)} />
+                      {canEdit && !locked ? (
+                        <IconAction label="Изменить" icon={Pencil} onClick={() => openEditor(article)} />
+                      ) : null}
+                      {canConfirm && !confirmed ? (
+                        <IconAction
+                          label="Подтвердить"
+                          icon={BadgeCheck}
+                          variant="primary"
+                          onClick={() => void handleConfirm(article)}
+                        />
+                      ) : null}
+                      {canConfirm && confirmed ? (
+                        <IconAction
+                          label="Снять подтверждение"
+                          icon={BadgeX}
+                          onClick={() => void handleUnconfirm(article)}
+                        />
+                      ) : null}
+                      {canLock && !locked ? (
+                        <IconAction label="Заблокировать" icon={Lock} onClick={() => void handleLock(article)} />
+                      ) : null}
+                      {canUnlock && locked ? (
+                        <IconAction label="Разблокировать" icon={Unlock} onClick={() => void handleUnlock(article)} />
+                      ) : null}
+                      {canEdit && !locked ? (
+                        <IconAction
+                          label="Удалить"
+                          icon={Trash2}
+                          variant="danger"
+                          onClick={() => void handleDelete(article)}
+                        />
+                      ) : null}
+                    </div>
                   </li>
                 );
               })}
@@ -429,18 +525,7 @@ export default function KnowledgePage() {
           ref={listRef}
         >
           {sessionQuery.isLoading ? <LoadingState /> : null}
-          {messages.map((item) => (
-            <div
-              key={item.id}
-              className={`ticket-chat__msg ticket-chat__msg--${item.role === "user" ? "staff" : "client"}`}
-            >
-              <div className="ticket-chat__meta">
-                <span className="ticket-chat__author">{item.role === "user" ? "Вы" : "Агент"}</span>
-              </div>
-              {item.content.trim() ? <p className="ticket-chat__text">{item.content}</p> : null}
-              <AgentChatFiles files={item.files} />
-            </div>
-          ))}
+          <AgentChatMessages messages={messages} />
         </div>
         {canEdit ? (
           <ChatCompose
@@ -451,6 +536,8 @@ export default function KnowledgePage() {
             className={dropActive ? "ticket-chat__compose--drop" : ""}
             onSubmit={async ({ text, files }) => {
               if (!text.trim() && !files.length) return;
+              setMessage("");
+              thread.beginUserTurn(text, files, { stream: true });
               await chatMutation.mutateAsync({ message: text.trim(), files });
             }}
             placeholder="Введите сообщение или перетащите файл…"
@@ -472,7 +559,10 @@ export default function KnowledgePage() {
       <Modal
         open={editor != null}
         title={editor?.id ? "Редактирование статьи" : "Новая статья"}
-        onClose={() => setEditor(null)}
+        onClose={() => {
+          setEditor(null);
+          setEditorPreview(false);
+        }}
         size="workspace"
       >
         <form
@@ -508,15 +598,28 @@ export default function KnowledgePage() {
               ))}
             </select>
           </label>
-          <label className="knowledge-article-form__body">
-            Текст
-            <textarea
-              rows={8}
-              value={editor?.body || ""}
-              onChange={(event) => setEditor((prev) => ({ ...prev, body: event.target.value }))}
-              required
-            />
-          </label>
+          <div className="knowledge-article-form__body">
+            <div className="knowledge-article-form__body-head">
+              <span>Текст (Markdown)</span>
+              <IconAction
+                label={editorPreview ? "Редактировать" : "Просмотр"}
+                icon={editorPreview ? Pencil : Eye}
+                onClick={() => setEditorPreview((prev) => !prev)}
+              />
+            </div>
+            {editorPreview ? (
+              <div className="knowledge-article-form__preview">
+                <MarkdownPreview source={editor?.body || ""} />
+              </div>
+            ) : (
+              <textarea
+                rows={8}
+                value={editor?.body || ""}
+                onChange={(event) => setEditor((prev) => ({ ...prev, body: event.target.value }))}
+                required
+              />
+            )}
+          </div>
           <label>
             Теги
             <input
@@ -524,9 +627,17 @@ export default function KnowledgePage() {
               onChange={(event) => setEditor((prev) => ({ ...prev, tags: event.target.value }))}
             />
           </label>
+          {editor?.creator ? <small>Создал: {editor.creator}</small> : null}
           {formError ? <p className="message error">{formError}</p> : null}
           <div className="form-actions">
-            <button type="button" className="btn-secondary" onClick={() => setEditor(null)}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setEditor(null);
+                setEditorPreview(false);
+              }}
+            >
               Отмена
             </button>
             <button type="submit" className="btn-primary" disabled={saveArticle.isPending || Boolean(editor?.locked)}>
@@ -534,6 +645,15 @@ export default function KnowledgePage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={preview != null}
+        title={preview?.title || "Просмотр статьи"}
+        onClose={() => setPreview(null)}
+        size="wide"
+      >
+        {preview ? <MarkdownPreview source={preview.body} className="markdown-preview--article" /> : null}
       </Modal>
 
       <Modal

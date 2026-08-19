@@ -32,6 +32,7 @@ const PROMPT_TABS: Array<{ slug: AiPromptSlug; title: string }> = [
   { slug: "customer", title: "Агент поддержки" },
   { slug: "customer_assist", title: "Агент поддержки (сотрудник)" },
   { slug: "kb", title: "База знаний" },
+  { slug: "ops", title: "Задачи" },
   { slug: "ticket_summary", title: "Сводка обращения" },
 ];
 

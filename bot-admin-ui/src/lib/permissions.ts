@@ -9,6 +9,8 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   { to: "/tickets", label: "Тикеты", permission: "tickets_read" },
   { to: "/tasks", label: "Задачи", permission: "tasks_read" },
+  { to: "/finances", label: "Финансы", permission: "finances_read" },
+  { to: "/repair-returns", label: "Возврат устройств", permission: "tasks_read" },
   { to: "/reports", label: "Отчёты", permission: "see_all_report" },
   { to: "/devices", label: "Устройства", permission: "devices_read" },
   { to: "/services", label: "Услуги", permission: "services_read" },
@@ -26,6 +28,8 @@ export const NAV_ITEMS: NavItem[] = [
 
 export const LANDING_REDIRECTS: NavItem[] = NAV_ITEMS;
 
+const SIDEBAR_HIDDEN = new Set(["/logs"]);
+
 export function hasPermission(permissions: Permissions | undefined, key: string): boolean {
   return Boolean(permissions?.[key]);
 }
@@ -38,5 +42,7 @@ export function firstAllowedPath(permissions: Permissions | undefined): string |
 }
 
 export function navItemsForPermissions(permissions: Permissions | undefined): NavItem[] {
-  return NAV_ITEMS.filter((item) => hasPermission(permissions, item.permission));
+  return NAV_ITEMS.filter(
+    (item) => !SIDEBAR_HIDDEN.has(item.to) && hasPermission(permissions, item.permission),
+  );
 }

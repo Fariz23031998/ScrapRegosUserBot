@@ -4,7 +4,9 @@ const {
   REPORT_JOB_TYPES,
   actorKey,
   actorOwnsReportJob,
+  deleteReportJob,
   getReportJob,
+  listReportJobsForActor,
   presentReportJob,
 } = require('../db/report-jobs');
 const { reportEventHub } = require('./report-events');
@@ -42,6 +44,17 @@ function writeSseEvent(res, event) {
 
 function readReportInput(req) {
   return { ...(req.query || {}), ...(req.body || {}) };
+}
+
+function parsePaginationQuery(req) {
+  const allowedLimits = [10, 25, 50, 100];
+  let limit = Number(req.query.limit) || 25;
+  if (!allowedLimits.includes(limit)) {
+    limit = 25;
+  }
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const offset = (page - 1) * limit;
+  return { page, limit, offset };
 }
 
 function sendReportError(res, error, label) {
@@ -90,6 +103,34 @@ function registerReportRoutes(router, db, deps = {}) {
     }
   );
 
+  router.get('/api/reports/jobs', requireRight(db, 'see_all_report'), (req, res) => {
+    try {
+      let { page, limit, offset } = parsePaginationQuery(req);
+      const type = String(req.query.type || '').trim();
+      const actor = getSessionActor(req);
+      const listOptions = {
+        offset,
+        limit,
+        type: REPORT_JOB_TYPES.includes(type) ? type : undefined,
+      };
+      let result = listReportJobsForActor(db, actor, listOptions);
+      const totalPages = Math.max(1, Math.ceil(result.total / limit) || 1);
+      if (page > totalPages) {
+        page = totalPages;
+        offset = (page - 1) * limit;
+        result = listReportJobsForActor(db, actor, { ...listOptions, offset });
+      }
+      return res.json({
+        jobs: result.jobs.map((job) => presentReportJob(job, { includeResult: false })),
+        total: result.total,
+        page,
+        limit,
+      });
+    } catch (error) {
+      return sendReportError(res, error, 'List report jobs error');
+    }
+  });
+
   router.get('/api/reports/jobs/:id', requireRight(db, 'see_all_report'), (req, res) => {
     const job = getReportJob(db, req.params.id);
     const actor = getSessionActor(req);
@@ -97,6 +138,16 @@ function registerReportRoutes(router, db, deps = {}) {
       return res.status(404).json({ message: 'Отчёт не найден.' });
     }
     return res.json(presentReportJob(job));
+  });
+
+  router.delete('/api/reports/jobs/:id', requireRight(db, 'see_all_report'), (req, res) => {
+    const job = getReportJob(db, req.params.id);
+    const actor = getSessionActor(req);
+    if (!job || !actorOwnsReportJob(db, job, actor)) {
+      return res.status(404).json({ message: 'Отчёт не найден.' });
+    }
+    deleteReportJob(db, job.id);
+    return res.json({ ok: true });
   });
 
   router.get('/api/reports/events', requireRight(db, 'see_all_report'), (req, res) => {

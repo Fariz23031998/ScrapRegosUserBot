@@ -14,6 +14,7 @@ import {
   updateTaskCategory,
 } from "../api/tasks";
 import EntityCards from "../components/EntityCards";
+import OpsAgentFab from "../components/OpsAgentFab";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
@@ -546,6 +547,7 @@ export default function TasksPage() {
           </div>
         </form>
       </Modal>
+      <OpsAgentFab />
     </section>
   );
 }

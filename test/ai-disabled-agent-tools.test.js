@@ -88,6 +88,7 @@ describe('disabled agent tools migration', () => {
     assert.deepEqual(map.customer, ['search_knowledge']);
     assert.deepEqual(map.customer_assist, ['search_knowledge', 'reply_to_customer']);
     assert.deepEqual(map.kb, ['search_knowledge']);
+    assert.deepEqual(map.ops, []);
   });
 
   it('derives fully disabled names from a per-agent map', () => {

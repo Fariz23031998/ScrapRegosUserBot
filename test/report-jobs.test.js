@@ -14,8 +14,12 @@ const { setUsdUzsRate } = require('../src/db/money');
 const { addTaskService, createTask, postTask } = require('../src/db/tasks');
 const {
   actorOwnsReportJob,
+  deleteReportJob,
+  getReportJob,
+  listReportJobsForActor,
+  presentReportJob,
 } = require('../src/db/report-jobs');
-const { createOrReuseReportJob, createReportWorker } = require('../src/admin/report-worker');
+const { buildReportPageUrl, createOrReuseReportJob, createReportWorker } = require('../src/admin/report-worker');
 const { buildCommissionReport } = require('../src/db/staff-reports');
 
 function makeTempDbPath() {
@@ -198,35 +202,127 @@ describe('report jobs', () => {
   });
 
   it('sends Telegram when the actor has a telegram id and skips password admin', async () => {
-    const telegramId = 777001;
-    linkEmployeeTelegram(db, manager.id, telegramId, { firstName: 'Менеджер' });
-    const sent = [];
+    const previousBase = process.env.PUBLIC_BASE_URL;
+    process.env.PUBLIC_BASE_URL = 'https://example.test';
+    try {
+      const telegramId = 777001;
+      linkEmployeeTelegram(db, manager.id, telegramId, { firstName: 'Менеджер' });
+      const sent = [];
+      const worker = createReportWorker(db, {
+        sendTelegram: async (id, text) => {
+          sent.push({ id, text });
+          return { sent: true };
+        },
+      });
+
+      const passwordJob = createOrReuseReportJob(db, {
+        type: 'commission',
+        input: { from_date: period.fromUnix + 1, to_date: period.toUnix },
+        actor: { type: 'password' },
+      }).job;
+      await worker.enqueue(passwordJob.id);
+      assert.equal(sent.length, 0);
+
+      const telegramJob = createOrReuseReportJob(db, {
+        type: 'commission',
+        input: { from_date: period.fromUnix + 2, to_date: period.toUnix },
+        actor: { type: 'telegram', telegramId },
+      }).job;
+      const finished = await worker.enqueue(telegramJob.id);
+      assert.equal(finished.status, 'ready');
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0].id, telegramId);
+      assert.match(sent[0].text, /Баллы техника|Комиссия менеджера/);
+      assert.match(sent[0].text, /готов/);
+      assert.match(sent[0].text, /https:\/\/example\.test\/bot-admin\/reports\/\d+/);
+    } finally {
+      if (previousBase === undefined) delete process.env.PUBLIC_BASE_URL;
+      else process.env.PUBLIC_BASE_URL = previousBase;
+    }
+  });
+
+  it('does not delete old report jobs when creating or resuming', () => {
     const worker = createReportWorker(db, {
-      sendTelegram: async (id, text) => {
-        sent.push({ id, text });
-        return { sent: true };
-      },
+      schedule: () => {},
+      sendTelegram: async () => ({ sent: false, reason: 'no_telegram_id' }),
+    });
+    const actor = { type: 'password' };
+    const { job } = createOrReuseReportJob(db, {
+      type: 'finance',
+      input: { from_date: period.fromUnix + 400, to_date: period.toUnix },
+      actor,
+    });
+    const twoDaysAgo = Math.floor(Date.now() / 1000) - 48 * 3600;
+    db.prepare('UPDATE report_jobs SET created_at = ? WHERE id = ?').run(twoDaysAgo, job.id);
+
+    createOrReuseReportJob(db, {
+      type: 'commission',
+      input: { from_date: period.fromUnix + 401, to_date: period.toUnix },
+      actor,
+    });
+    worker.resume();
+
+    const kept = getReportJob(db, job.id);
+    assert.ok(kept);
+    assert.equal(kept.id, job.id);
+  });
+
+  it('lists jobs for an actor newest first without loading results', () => {
+    const alice = { type: 'user', userId: manager.id };
+    const bob = { type: 'user', userId: technician.id };
+    const older = createOrReuseReportJob(db, {
+      type: 'finance',
+      input: { from_date: period.fromUnix + 500, to_date: period.toUnix },
+      actor: alice,
+    }).job;
+    const newer = createOrReuseReportJob(db, {
+      type: 'commission',
+      input: { from_date: period.fromUnix + 501, to_date: period.toUnix },
+      actor: alice,
+    }).job;
+    createOrReuseReportJob(db, {
+      type: 'finance',
+      input: { from_date: period.fromUnix + 502, to_date: period.toUnix },
+      actor: bob,
     });
 
-    const passwordJob = createOrReuseReportJob(db, {
-      type: 'commission',
-      input: { from_date: period.fromUnix + 1, to_date: period.toUnix },
-      actor: { type: 'password' },
-    }).job;
-    await worker.enqueue(passwordJob.id);
-    assert.equal(sent.length, 0);
+    const listed = listReportJobsForActor(db, alice, { offset: 0, limit: 25 });
+    assert.ok(listed.total >= 2);
+    const ids = listed.jobs.map((job) => job.id);
+    assert.ok(ids.includes(older.id));
+    assert.ok(ids.includes(newer.id));
+    assert.ok(ids.indexOf(newer.id) < ids.indexOf(older.id));
+    const presented = presentReportJob(listed.jobs[0], { includeResult: false });
+    assert.equal(Object.hasOwn(presented, 'result'), false);
+    assert.equal(presented.params.viewer, undefined);
 
-    const telegramJob = createOrReuseReportJob(db, {
-      type: 'commission',
-      input: { from_date: period.fromUnix + 2, to_date: period.toUnix },
-      actor: { type: 'telegram', telegramId },
-    }).job;
-    const finished = await worker.enqueue(telegramJob.id);
-    assert.equal(finished.status, 'ready');
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].id, telegramId);
-    assert.match(sent[0].text, /Баллы техника|Комиссия менеджера/);
-    assert.match(sent[0].text, /готов/);
+    const financeOnly = listReportJobsForActor(db, alice, { offset: 0, limit: 25, type: 'finance' });
+    assert.ok(financeOnly.jobs.every((job) => job.type === 'finance'));
+    assert.ok(financeOnly.jobs.some((job) => job.id === older.id));
+    assert.equal(financeOnly.jobs.some((job) => job.id === newer.id), false);
+  });
+
+  it('deletes a report job by id', () => {
+    const actor = { type: 'password' };
+    const { job } = createOrReuseReportJob(db, {
+      type: 'finance',
+      input: { from_date: period.fromUnix + 700, to_date: period.toUnix },
+      actor,
+    });
+    assert.equal(deleteReportJob(db, job.id), true);
+    assert.equal(getReportJob(db, job.id), null);
+    assert.equal(deleteReportJob(db, job.id), false);
+  });
+
+  it('builds a stable /reports/:id admin URL', () => {
+    const previous = process.env.PUBLIC_BASE_URL;
+    process.env.PUBLIC_BASE_URL = 'https://example.test';
+    try {
+      assert.equal(buildReportPageUrl({ id: 42 }), 'https://example.test/bot-admin/reports/42');
+    } finally {
+      if (previous === undefined) delete process.env.PUBLIC_BASE_URL;
+      else process.env.PUBLIC_BASE_URL = previous;
+    }
   });
 });
 
@@ -329,6 +425,10 @@ describe('report job HTTP API', () => {
     assert.ok(ready.parsed.result);
     assert.ok(Array.isArray(ready.parsed.result.rows));
     assert.ok(ready.parsed.result.totals);
+    assert.ok(ready.parsed.params);
+    assert.equal(ready.parsed.params.from_date, period.fromUnix);
+    assert.equal(ready.parsed.params.to_date, period.toUnix);
+    assert.equal(ready.parsed.params.viewer, undefined);
   });
 
   it('hides another user\'s report job', async () => {
@@ -366,5 +466,116 @@ describe('report job HTTP API', () => {
     });
     assert.equal(own.statusCode, 200);
     assert.equal(JSON.parse(own.body).id, jobId);
+  });
+
+  it('lets the owner delete a report and hides it from others', async () => {
+    createEmployeeUser(db, {
+      phone: '+998901000071',
+      displayName: 'Елена',
+      adminLogin: 'elena',
+      password: 'elena-secret',
+      rights: { see_all_report: 1 },
+    });
+    createEmployeeUser(db, {
+      phone: '+998901000072',
+      displayName: 'Игорь',
+      adminLogin: 'igor',
+      password: 'igor-secret',
+      rights: { see_all_report: 1 },
+    });
+
+    const elenaCookie = await login('elena', 'elena-secret');
+    const created = await request(server, 'POST', '/bot-admin/api/reports/commission', {
+      headers: { Cookie: elenaCookie },
+      body: { from_date: period.fromUnix, to_date: period.toUnix },
+    });
+    assert.equal(created.statusCode, 202);
+    const jobId = JSON.parse(created.body).id;
+
+    const igorCookie = await login('igor', 'igor-secret');
+    const forbidden = await request(server, 'DELETE', `/bot-admin/api/reports/jobs/${jobId}`, {
+      headers: { Cookie: igorCookie },
+    });
+    assert.equal(forbidden.statusCode, 404);
+
+    const stillThere = await request(server, 'GET', `/bot-admin/api/reports/jobs/${jobId}`, {
+      headers: { Cookie: elenaCookie },
+    });
+    assert.equal(stillThere.statusCode, 200);
+
+    const deleted = await request(server, 'DELETE', `/bot-admin/api/reports/jobs/${jobId}`, {
+      headers: { Cookie: elenaCookie },
+    });
+    assert.equal(deleted.statusCode, 200);
+    assert.equal(JSON.parse(deleted.body).ok, true);
+
+    const missing = await request(server, 'GET', `/bot-admin/api/reports/jobs/${jobId}`, {
+      headers: { Cookie: elenaCookie },
+    });
+    assert.equal(missing.statusCode, 404);
+  });
+
+  it('lists only the current user\'s jobs newest first without results', async () => {
+    createEmployeeUser(db, {
+      phone: '+998901000061',
+      displayName: 'Катя',
+      adminLogin: 'katya',
+      password: 'katya-secret',
+      rights: { see_all_report: 1 },
+    });
+    createEmployeeUser(db, {
+      phone: '+998901000062',
+      displayName: 'Дима',
+      adminLogin: 'dima',
+      password: 'dima-secret',
+      rights: { see_all_report: 1 },
+    });
+
+    const katyaCookie = await login('katya', 'katya-secret');
+    const first = await request(server, 'POST', '/bot-admin/api/reports/finance', {
+      headers: { Cookie: katyaCookie },
+      body: { from_date: period.fromUnix, to_date: period.toUnix },
+    });
+    const second = await request(server, 'POST', '/bot-admin/api/reports/commission', {
+      headers: { Cookie: katyaCookie },
+      body: { from_date: period.fromUnix + 60, to_date: period.toUnix },
+    });
+    assert.equal(first.statusCode, 202);
+    assert.equal(second.statusCode, 202);
+    const firstId = JSON.parse(first.body).id;
+    const secondId = JSON.parse(second.body).id;
+
+    const dimaCookie = await login('dima', 'dima-secret');
+    await request(server, 'POST', '/bot-admin/api/reports/finance', {
+      headers: { Cookie: dimaCookie },
+      body: { from_date: period.fromUnix + 120, to_date: period.toUnix },
+    });
+
+    const listed = await request(server, 'GET', '/bot-admin/api/reports/jobs?limit=25', {
+      headers: { Cookie: katyaCookie },
+    });
+    assert.equal(listed.statusCode, 200);
+    const body = JSON.parse(listed.body);
+    assert.equal(body.total, 2);
+    assert.equal(body.jobs.length, 2);
+    assert.deepEqual(body.jobs.map((job) => job.id), [secondId, firstId]);
+    for (const job of body.jobs) {
+      assert.equal(Object.hasOwn(job, 'result'), false);
+      assert.ok(job.params);
+      assert.equal(job.params.viewer, undefined);
+    }
+
+    const financeListed = await request(server, 'GET', '/bot-admin/api/reports/jobs?type=finance', {
+      headers: { Cookie: katyaCookie },
+    });
+    const financeBody = JSON.parse(financeListed.body);
+    assert.equal(financeBody.total, 1);
+    assert.equal(financeBody.jobs[0].id, firstId);
+    assert.equal(financeBody.jobs[0].type, 'finance');
+
+    const dimaListed = await request(server, 'GET', '/bot-admin/api/reports/jobs', {
+      headers: { Cookie: dimaCookie },
+    });
+    assert.equal(JSON.parse(dimaListed.body).total, 1);
   });
 });

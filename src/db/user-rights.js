@@ -141,6 +141,18 @@ const RIGHTS = {
     column: 'settings_edit',
     label: 'Админ: настройки — изменение',
   },
+  finances_read: {
+    column: 'finances_read',
+    label: 'Админ: финансы — просмотр',
+  },
+  finances_create: {
+    column: 'finances_create',
+    label: 'Админ: финансы — создание',
+  },
+  finances_delete: {
+    column: 'finances_delete',
+    label: 'Админ: финансы — удаление',
+  },
   knowledge_read: {
     column: 'knowledge_read',
     label: 'Админ: база знаний — просмотр',
@@ -156,6 +168,10 @@ const RIGHTS = {
   knowledge_unlock: {
     column: 'knowledge_unlock',
     label: 'Админ: база знаний — разблокировка',
+  },
+  knowledge_confirm: {
+    column: 'knowledge_confirm',
+    label: 'Админ: база знаний — подтверждение',
   },
   ai_customer_test: {
     column: 'ai_customer_test',
@@ -278,10 +294,14 @@ const ADMIN_PERMISSION_KEYS = [
   'prices_delete',
   'settings_read',
   'settings_edit',
+  'finances_read',
+  'finances_create',
+  'finances_delete',
   'knowledge_read',
   'knowledge_edit',
   'knowledge_lock',
   'knowledge_unlock',
+  'knowledge_confirm',
   'ai_customer_test',
   'ai_customer_test_history',
   'prompt_variables_create',

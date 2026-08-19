@@ -21,6 +21,7 @@ async function runKbAgent({
   files = [],
   canWrite = true,
   deps = {},
+  onDelta,
 } = {}) {
   const text = String(message || '').trim();
   const uploads = Array.isArray(files) ? files : [];
@@ -60,6 +61,7 @@ async function runKbAgent({
     reasoningEffort: settings.reasoningEffort,
     hasVision: historyHasVisionParts(history),
     hasAudio: historyHasAudioTranscript(history),
+    onDelta,
   });
 
   const reply = truncateText(result.content) || 'Готово.';

@@ -85,7 +85,22 @@ const {
   getTaskPayment,
 } = require('../db/task-payments');
 const { refundTaskLine, listTaskRefunds, hasRefundPaymentInput } = require('../db/task-refunds');
-const { RegosCrmError, searchClients } = require('../integrations/regos-crm');
+const {
+  listRepairDeviceReturns,
+  createTaskDeviceReturn,
+  deleteTaskDeviceReturn,
+} = require('../db/task-device-returns');
+const { RegosCrmError, searchClients, createClient, getClientById } = require('../integrations/regos-crm');
+const { listPrintTemplates, updatePrintTemplate } = require('../db/print-templates');
+const { getSerialByCode } = require('../db/task-device-serials');
+const { enqueueLabelJobs, enqueueSerialLabelsForTask, enqueueTaskDocument, enqueueTestPrint, uniqueLabelPrinterForLocation } = require('../print/print-dispatch');
+const { getPrintHub } = require('../print/print-gateway-ws');
+const { getPrintSettingsPublic, savePrintSettings } = require('../print/print-settings');
+const {
+  getRepairReturnSettingsPublic,
+  isRepairReturnRequireSerials,
+  saveRepairReturnSettings,
+} = require('../db/repair-return-settings');
 
 function parsePaginationQuery(req) {
   const allowedLimits = [10, 25, 50, 100];
@@ -128,6 +143,30 @@ function mapTaskClient(client) {
     external_id: client.external_id || null,
     photo_url: client.photo_url || null,
   };
+}
+
+async function createMappedTaskClient(body = {}) {
+  const created = await createClient({
+    name: body.name,
+    phone: body.phone,
+    email: body.email,
+    description: body.description,
+    external_id: body.external_id,
+  });
+  let fetched = null;
+  try {
+    fetched = await getClientById(created.id);
+  } catch {
+    fetched = null;
+  }
+  return mapTaskClient(
+    fetched || {
+      id: created.id,
+      name: body.name || null,
+      phone: body.phone || null,
+      email: body.email || null,
+    }
+  );
 }
 
 function catalogMoneyFromBody(body = {}) {
@@ -188,7 +227,7 @@ function paymentTypeWriteErrorMessage(code) {
 function accountWriteErrorMessage(code) {
   if (code === 'INVALID_ACCOUNT_NAME') return 'Укажите название счёта.';
   if (code === 'INVALID_ACCOUNT_CURRENCY') return 'Валюта счёта: UZS или USD.';
-  if (code === 'ACCOUNT_IN_USE') return 'Счёт используется в типах оплаты и не может быть удалён.';
+  if (code === 'ACCOUNT_IN_USE') return 'Счёт используется и не может быть удалён.';
   return null;
 }
 
@@ -224,7 +263,24 @@ function taskWriteErrorMessage(code) {
     TASK_CART_LOCKED: 'Проведённую задачу нельзя изменить.',
     TASK_NOT_DONE: 'Возврат доступен только для выполненной задачи.',
     TASK_NOT_POSTED: 'Возврат доступен только после проведения задачи.',
+    TASK_NOT_REPAIR: 'Возврат устройства доступен только для задач типа «Ремонт».',
     TASK_HAS_REFUNDS: 'Нельзя отменить проведение: по задаче есть возвраты.',
+    TASK_HAS_DEVICE_RETURNS: 'Нельзя отменить проведение: по задаче есть возвраты устройств.',
+    INVALID_TASK_RETURN_LINE: 'Выберите устройство для возврата.',
+    INVALID_TASK_RETURN_QUANTITY: 'Укажите количество для возврата устройства.',
+    INVALID_TASK_RETURN_NOTE: 'Слишком длинный комментарий к возврату устройства.',
+    INVALID_TASK_RETURN_STATUS: 'Некорректный фильтр возврата устройств.',
+    TASK_RETURN_SERIALS_REQUIRED: 'Укажите серийные номера для возврата устройства.',
+    INVALID_TASK_RETURN_SERIAL:
+      'Серийный номер не найден, уже возвращён или не относится к этому устройству.',
+    SERIALS_LOCKED: 'Нельзя уменьшить количество: серийные номера уже напечатаны или возвращены.',
+    PRINT_SERIALS_EMPTY: 'Нет серийных номеров для печати.',
+    INVALID_PRINT_KIND: 'Можно печатать этикетку, чек или счёт.',
+    INVALID_PRINT_TEMPLATE: 'Некорректный шаблон печати.',
+    INVALID_PRINT_TOKEN: 'Слишком длинный токен Print Service.',
+    PRINT_GATEWAY_DISABLED: 'Print Service выключен. Задайте токен и включите шлюз в настройках.',
+    PRINT_PRINTER_REQUIRED: 'Выберите принтер.',
+    PRINT_PRINTER_UNAVAILABLE: 'Этот принтер недоступен: агент офлайн или принтер выключен.',
   };
   return messages[code] || null;
 }
@@ -1135,6 +1191,146 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     }
   });
 
+  router.post(
+    '/api/tasks/clients',
+    requireAnyRight(db, ['tasks_create', 'tasks_edit']),
+    express.json(),
+    async (req, res) => {
+      try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const client = await createMappedTaskClient(body);
+        auditAdminChange(db, req, {
+          entityType: 'client',
+          entityId: client.id,
+          action: 'create',
+          summary: `Создан клиент REGOS «${client.name || client.phone || client.id}»`,
+          details: buildAuditDetails({ before: null, after: client }),
+        });
+        return res.status(201).json({ client });
+      } catch (error) {
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status).json({ message: error.message });
+        }
+        console.error('Create task client error:', error);
+        return res.status(500).json({ message: 'Не удалось создать клиента REGOS.' });
+      }
+    }
+  );
+
+  router.get('/api/repair-returns', requireRight(db, 'tasks_read'), (req, res) => {
+    try {
+      const query = String(req.query.q || '').trim();
+      const status = String(req.query.status || 'pending').trim() || 'pending';
+      const locationId = String(req.query.location_id || '').trim();
+      const viewer = taskViewer(req);
+      let { page, limit, offset } = parsePaginationQuery(req);
+      let result = listRepairDeviceReturns(db, {
+        query,
+        status,
+        locationId: locationId || undefined,
+        viewer,
+        offset,
+        limit,
+      });
+      const totalPages = Math.max(1, Math.ceil(result.total / limit) || 1);
+      if (page > totalPages) {
+        page = totalPages;
+        offset = (page - 1) * limit;
+        result = listRepairDeviceReturns(db, {
+          query,
+          status,
+          locationId: locationId || undefined,
+          viewer,
+          offset,
+          limit,
+        });
+      }
+      return res.json({
+        items: result.items,
+        total: result.total,
+        page,
+        limit,
+        require_serials: isRepairReturnRequireSerials(db),
+      });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        'Не удалось загрузить возвраты устройств.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
+  router.post('/api/repair-returns', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
+    try {
+      const result = createTaskDeviceReturn(
+        db,
+        {
+          device_line_id: req.body?.device_line_id,
+          quantity: req.body?.quantity,
+          serial_ids: req.body?.serial_ids,
+          serial_codes: req.body?.serial_codes,
+          note: req.body?.note,
+          created_by_user_id: sessionUserId(req),
+        },
+        taskViewer(req)
+      );
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: result.task?.id,
+        action: 'update',
+        summary: `Возврат устройства «${result.item?.device_name || result.item?.device_line_id}» по задаче #${result.task?.id}`,
+        details: buildAuditDetails({ after: result.task }),
+      });
+      try {
+        if (result.serials?.length) {
+          const printer = uniqueLabelPrinterForLocation(result.task?.location_id);
+          if (printer) {
+            enqueueLabelJobs(db, {
+              task: result.task,
+              serials: result.serials,
+              deviceName: result.item?.device_name,
+              printer_name: printer.name,
+              station_id: printer.station_id,
+            });
+          }
+        }
+      } catch (printError) {
+        console.error('Repair return print failed:', printError);
+      }
+      return res.status(201).json({ item: result.item, task: result.task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Устройство не найдено.' : 'Не удалось оформить возврат устройства.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
+  router.delete('/api/repair-returns/:id', requireRight(db, 'tasks_edit'), (req, res) => {
+    try {
+      const result = deleteTaskDeviceReturn(db, req.params.id, taskViewer(req));
+      auditAdminChange(db, req, {
+        entityType: 'task',
+        entityId: result.task?.id,
+        action: 'update',
+        summary: `Отменён возврат устройства по задаче #${result.task?.id}`,
+        details: buildAuditDetails({ after: result.task }),
+      });
+      return res.json({ ok: true, task: result.task });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Возврат устройства не найден.' : 'Не удалось отменить возврат устройства.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
   router.get('/api/tasks', requireRight(db, 'tasks_read'), (req, res) => {
     try {
       const query = String(req.query.q || '').trim();
@@ -1214,14 +1410,18 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       const before = requireVisibleTask(req, res);
       if (!before) return;
       const deleteRefunds = Boolean(req.body?.delete_refunds);
+      const deleteReturns = Boolean(req.body?.delete_returns);
       const refundCount = Array.isArray(before.refunds) ? before.refunds.length : 0;
-      const task = unpostTask(db, before.id, taskViewer(req), { deleteRefunds });
+      const hasDeviceReturns = (before.devices || []).some(
+        (line) => (Number(line.returned_quantity) || 0) > 0
+      );
+      const task = unpostTask(db, before.id, taskViewer(req), { deleteRefunds, deleteReturns });
       auditAdminChange(db, req, {
         entityType: 'task',
         entityId: task.id,
         action: 'update',
         summary:
-          refundCount > 0 && deleteRefunds
+          (refundCount > 0 && deleteRefunds) || (hasDeviceReturns && deleteReturns)
             ? `Отменено проведение задачи #${task.id}: удалены возвраты`
             : `Отменено проведение задачи #${task.id}`,
         details: buildAuditDetails({ before, after: task }),
@@ -1637,6 +1837,128 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       return res.json({ ok: true });
     } catch (error) {
       return respondWriteError(res, error, 'Не удалось удалить задачу.', taskWriteErrorMessage);
+    }
+  });
+
+  router.get('/api/settings/repair-returns', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json(getRepairReturnSettingsPublic(db));
+    } catch (error) {
+      console.error('Get repair return settings error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить настройки возврата устройств.' });
+    }
+  });
+
+  router.put('/api/settings/repair-returns', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      return res.json(saveRepairReturnSettings(db, req.body || {}));
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        'Не удалось сохранить настройки возврата устройств.',
+        taskWriteErrorMessage
+      );
+    }
+  });
+
+  router.get('/api/settings/print', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      const hub = getPrintHub();
+      return res.json({
+        ...getPrintSettingsPublic(db),
+        connected: hub?.connectedCount() || 0,
+        stations: hub?.listStations() || [],
+      });
+    } catch (error) {
+      console.error('Get print settings error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить настройки печати.' });
+    }
+  });
+
+  router.put('/api/settings/print', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const settings = savePrintSettings(db, req.body || {});
+      const hub = getPrintHub();
+      return res.json({
+        ...settings,
+        connected: hub?.connectedCount() || 0,
+        stations: hub?.listStations() || [],
+      });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось сохранить настройки печати.', taskWriteErrorMessage);
+    }
+  });
+
+  router.post('/api/print/test', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const settings = getPrintSettingsPublic(db);
+      if (!settings.token_configured) throw new Error('PRINT_GATEWAY_DISABLED');
+      const job = enqueueTestPrint(db, {
+        kind: req.body?.kind,
+        location_id: req.body?.location_id,
+        copies: req.body?.copies,
+        printer_name: req.body?.printer_name,
+        station_id: req.body?.station_id,
+      });
+      return res.status(201).json({ job, connected: getPrintHub()?.connectedCount() || 0 });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось отправить тестовую печать.', taskWriteErrorMessage);
+    }
+  });
+
+  router.get('/api/print/templates', requireRight(db, 'settings_read'), (_req, res) => {
+    try {
+      return res.json({ templates: listPrintTemplates(db) });
+    } catch (error) {
+      console.error('List print templates error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить шаблоны печати.' });
+    }
+  });
+
+  router.put('/api/print/templates/:id', requireRight(db, 'settings_edit'), express.json(), (req, res) => {
+    try {
+      const template = updatePrintTemplate(db, req.params.id, req.body || {});
+      const hub = getPrintHub();
+      if (hub) hub.pushTemplates();
+      return res.json({ template });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось сохранить шаблон печати.', taskWriteErrorMessage);
+    }
+  });
+
+  router.get('/api/print/serials/:code', requireRight(db, 'tasks_read'), (req, res) => {
+    try {
+      const serial = getSerialByCode(db, req.params.code);
+      if (!serial) return res.status(404).json({ message: 'Серийный номер не найден.' });
+      const task = getTask(db, serial.task_id, taskViewer(req));
+      if (!task) return res.status(404).json({ message: 'Серийный номер не найден.' });
+      return res.json({ serial, task });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось найти серийный номер.', taskWriteErrorMessage);
+    }
+  });
+
+  router.post('/api/tasks/:id/print', requireRight(db, 'tasks_edit'), express.json(), (req, res) => {
+    try {
+      const task = requireVisibleTask(req, res);
+      if (!task) return;
+      const kind = String(req.body?.kind || '').trim().toLowerCase();
+      const printer = {
+        printer_name: req.body?.printer_name,
+        station_id: req.body?.station_id,
+      };
+      let jobs;
+      if (kind === 'label') {
+        jobs = enqueueSerialLabelsForTask(db, task, req.body?.serial_ids, printer);
+      } else if (kind === 'receipt' || kind === 'invoice') {
+        jobs = [enqueueTaskDocument(db, task, kind, printer)];
+      } else {
+        throw new Error('INVALID_PRINT_KIND');
+      }
+      return res.status(201).json({ jobs, connected: getPrintHub()?.connectedCount() || 0 });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось отправить на печать.', taskWriteErrorMessage);
     }
   });
 }

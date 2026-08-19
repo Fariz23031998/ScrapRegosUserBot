@@ -131,6 +131,7 @@ async function runEmployeeTestAgent({
   clientPhone,
   allowAnyUser = false,
   deps = {},
+  onDelta,
 } = {}) {
   const text = String(message || '').trim();
   const uploads = Array.isArray(files) ? files : [];
@@ -240,6 +241,7 @@ async function runEmployeeTestAgent({
       hasVision: historyHasVisionParts(history),
       hasAudio: historyHasAudioTranscript(history),
       tools,
+      onDelta,
     });
 
     const reply = truncateText(result.content) || 'Готово.';

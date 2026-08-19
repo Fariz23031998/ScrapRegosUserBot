@@ -2,7 +2,7 @@ const { ensureDeviceTables, getDevice } = require('./devices');
 const { ensureServiceTables, getService } = require('./services');
 const { attachCatalogImages } = require('./catalog-images');
 const { getBotUserById } = require('./bot-users-db');
-const { CURRENCIES, getUsdUzsRate, presentTaskLineMoney, snapshotMoney, sumMoneyTotals, emptyMoneyTotals, normalizeDiscountInput, emptyDiscount } = require('./money');
+const { CURRENCIES, getUsdUzsRate, presentTaskLineMoney, snapshotMoney, emptyLineMoneySnapshot, sumMoneyTotals, emptyMoneyTotals, normalizeDiscountInput, emptyDiscount } = require('./money');
 const {
   ensureTaskPaymentTables,
   emptyTaskPaymentTotals,
@@ -185,6 +185,8 @@ function ensureTaskTables(db) {
   ensureLocationTables(db);
   ensureTaskPaymentTables(db);
   require('./task-refunds').ensureTaskRefundTables(db);
+  require('./task-device-returns').ensureTaskDeviceReturnTables(db);
+  require('./task-device-serials').ensureTaskDeviceSerialTables(db);
 }
 
 function employeeLabel(row, prefix) {
@@ -202,8 +204,14 @@ function mapEmployeeSummary(id, name) {
   return { id, name: name || `Сотрудник #${id}` };
 }
 
-function mapTaskDevice(row, rate) {
+function mapTaskDevice(row, rate, { returnedQuantity = 0 } = {}) {
   if (!row) return null;
+  const quantity = Number(row.quantity) > 0 ? Number(row.quantity) : 1;
+  const returned = Math.max(0, Number(returnedQuantity) || 0);
+  const repair = (row.task_action || row.action) === 'repair';
+  const moneyRow = repair
+    ? { ...row, ...emptyLineMoneySnapshot(), ...emptyDiscount() }
+    : row;
   return {
     id: row.id,
     task_id: row.task_id,
@@ -213,9 +221,11 @@ function mapTaskDevice(row, rate) {
     action: row.action,
     action_label: TASK_ACTION_LABELS[row.action] || row.action,
     notes: row.notes || '',
-    quantity: Number(row.quantity) > 0 ? Number(row.quantity) : 1,
+    quantity,
+    returned_quantity: returned,
+    remaining_return_quantity: Math.max(0, quantity - returned),
     sort_order: row.sort_order ?? 0,
-    ...presentTaskLineMoney(row, rate),
+    ...presentTaskLineMoney(moneyRow, rate),
   };
 }
 
@@ -498,7 +508,7 @@ function normalizeTaskDeviceLine(db, item, index = 0, fallbackAction = 'install'
     notes,
     quantity,
     sort_order: index,
-    ...snapshotMoney(device),
+    ...(fallbackAction === 'repair' ? emptyLineMoneySnapshot() : snapshotMoney(device)),
   };
 }
 
@@ -610,21 +620,28 @@ function listTaskDevicesForIds(db, taskIds, rate) {
       `SELECT td.id, td.task_id, td.device_id, td.action, td.notes, td.quantity, td.sort_order,
               td.cost_amount, td.cost_currency, td.price_uzs, td.price_usd,
               td.discount_type, td.discount_value, td.discount_currency,
+              t.action AS task_action,
               d.name AS device_name,
               d.description AS device_description
        FROM task_devices td
+       LEFT JOIN tasks t ON t.id = td.task_id
        LEFT JOIN devices d ON d.id = td.device_id
        WHERE td.task_id IN (${placeholders})
        ORDER BY td.sort_order ASC, td.id ASC`
     )
     .all(...taskIds);
+  const returnedByLine = require('./task-device-returns').returnedQuantitiesByLineIds(
+    db,
+    rows.map((row) => row.id)
+  );
   for (const row of rows) {
     const list = map.get(row.task_id) || [];
-    list.push(mapTaskDevice(row, rate));
+    list.push(mapTaskDevice(row, rate, { returnedQuantity: returnedByLine.get(row.id) || 0 }));
     map.set(row.task_id, list);
   }
   const allLines = [...map.values()].flat();
   attachCatalogImages(db, allLines, 'device', 'device_id');
+  require('./task-device-serials').attachSerials(db, allLines);
   return map;
 }
 
@@ -664,6 +681,8 @@ function getTaskRow(db, id) {
 function assembleTask(db, row) {
   const rate = getUsdUzsRate(db);
   const devices = listTaskDevicesForIds(db, [row.id], rate).get(row.id) || [];
+  require('./task-device-serials').ensureSerialsForDevices(db, row.id, devices);
+  require('./task-device-serials').attachSerials(db, devices);
   const services = listTaskServicesForIds(db, [row.id], rate).get(row.id) || [];
   const totals = sumMoneyTotals([...devices, ...services], rate);
   const allPayments = listTaskPayments(db, row.id);
@@ -934,6 +953,7 @@ function updateTaskDevice(db, taskId, lineId, input = {}) {
     .get(id, current.id);
   if (!row) throw new Error('NOT_FOUND');
   const quantity = input.quantity !== undefined ? normalizeQuantity(input.quantity) : row.quantity || 1;
+  require('./task-device-serials').syncSerialsForLine(db, current.id, id, quantity);
   const discount =
     input.discount_type !== undefined || input.type !== undefined || input.clear
       ? input.clear
@@ -1188,9 +1208,13 @@ function unpostTask(db, id, viewer, options = {}) {
   if (!current.posted) return current;
   const refundCount = countTaskRefunds(db, current.id);
   if (refundCount > 0 && !options.deleteRefunds) throw new Error('TASK_HAS_REFUNDS');
+  const deviceReturns = require('./task-device-returns');
+  const returnCount = deviceReturns.countTaskDeviceReturns(db, current.id);
+  if (returnCount > 0 && !options.deleteReturns) throw new Error('TASK_HAS_DEVICE_RETURNS');
   db.exec('BEGIN');
   try {
     if (refundCount > 0) require('./task-refunds').deleteTaskRefunds(db, current.id);
+    if (returnCount > 0) deviceReturns.deleteTaskDeviceReturns(db, current.id);
     db.prepare(`UPDATE tasks SET posted = 0, updated_at = datetime('now') WHERE id = ?`).run(current.id);
     db.exec('COMMIT');
   } catch (error) {

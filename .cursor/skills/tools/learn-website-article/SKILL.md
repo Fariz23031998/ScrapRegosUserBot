@@ -22,8 +22,8 @@ Always load the tool schema with `GetMcpTools` before the first `CallMcpTool` in
 | --- | --- | --- |
 | Find duplicates | `knowledge_search` | Query title keywords + product name. Empty query = recent articles. |
 | Read style / existing | `knowledge_get` | Load a close match before writing. |
-| Create | `knowledge_create` | `title` (max 200), `body` (max 20000), `tags` (comma-separated, max 300). |
-| Refresh | `knowledge_update` | Same limits. Skip locked articles. |
+| Create | `knowledge_create` | `title` (max 200), Markdown `body` (max 20000), `tags` (comma-separated, max 300). New articles are unconfirmed until an admin confirms them. |
+| Refresh | `knowledge_update` | Same limits. Body is Markdown. Skip locked articles. |
 | Delete | `knowledge_delete` | Only if the user asked. |
 
 If tools are missing, call `mcp_auth` on this server, then `GetMcpTools` again. Do not print the MCP bearer token from `.cursor/mcp.json`.
@@ -63,6 +63,8 @@ If `WebFetch` is thin or blocked, try `WebSearch` for the same title, then fetch
 
 Language: **Russian**, same register as existing KB articles (short factual paragraphs for support staff).
 
+Write the **body as Markdown** (headings, lists, links). Do not wrap the whole article in a code fence.
+
 Structure:
 
 1. First sentence: what it is. Include the canonical source URL in the first paragraph.
@@ -86,6 +88,7 @@ Rules:
 - **title** and **tags**
 - source URL(s)
 - created vs updated
+- that a new article is **unconfirmed** until an admin confirms it
 
 ## Examples
 

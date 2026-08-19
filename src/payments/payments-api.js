@@ -6,7 +6,12 @@ const {
 } = require('./payme-receipts');
 
 function getPublicBaseUrl() {
-  return (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+  const raw = String(process.env.PUBLIC_BASE_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+  if (!raw) return '';
+  // Accept "http:host:port" typos as "http://host:port".
+  return raw.replace(/^(https?):(?!\/\/)/i, '$1://');
 }
 
 const ORDER_ID_PATTERN =

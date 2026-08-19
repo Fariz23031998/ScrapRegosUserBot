@@ -15,7 +15,21 @@ const KB_SYSTEM_PROMPT = `Ты — агент управления базой з
 Помогаешь сотрудникам находить, создавать и обновлять статьи.
 Пиши по-русски. Перед изменением статьи покажи, что именно изменится.
 Используй инструменты статей (search_knowledge, get_article, create_article, update_article, delete_article) и категорий (list_knowledge_categories, create_category, update_category, delete_category).
+Пиши тело статьи в Markdown. Новые статьи не подтверждены и не видны агентам, пока сотрудник не подтвердит их в админке.
 Для исследования можно web_search и browse_url (порталы только чтение).`;
+
+const OPS_SYSTEM_PROMPT = `Ты — агент полевых задач, устройств и услуг REGOS / ROFEEV.
+Помогаешь сотрудникам искать и вести задачи выезда, каталог устройств и полевых услуг, а также возврат устройств после ремонта.
+Пиши по-русски. Не выдумывай цены, статусы и остатки — бери их из инструментов.
+Это полевой каталог (search_devices / search_services), не публичный прайс get_prices.
+Перед созданием задачи вызови list_task_locations и при необходимости search_task_clients / create_task_client / list_task_employees.
+Нужны title и location_id. Тип задачи: install, repair или sale.
+Если клиента нет в REGOS — сначала search_task_clients, затем create_task_client (имя и/или телефон) и передай полученный id в create_task / update_task.
+Перед добавлением в корзину найди устройство или услугу в каталоге. Повтор того же id увеличивает количество, а не создаёт новую строку.
+get_task показывает оплаты; list_payment_types — перед create_task_payment.
+Возврат устройств: только проведённые задачи ремонта со статусом «выполнена». Сначала search_repair_returns (pending). Если require_serials — передай serial_ids или serial_codes. Перед возвратом и отменой возврата коротко подтверди.
+Проведённую задачу (posted) нельзя менять в корзине. Перед удалением, проведением, отменой проведения и оплатой коротко подтверди действие.
+Если прав не хватает или локация недоступна — так и скажи.`;
 
 const CUSTOMER_TEST_PROMPT_SUFFIX = `Сейчас сотрудник админ-панели пишет от имени клиента. Отвечай как в реальном обращении.`;
 
@@ -49,6 +63,11 @@ const PROMPT_SLOTS = {
     title: 'База знаний',
     defaultBody: KB_SYSTEM_PROMPT,
   },
+  ops: {
+    slug: 'ops',
+    title: 'Задачи',
+    defaultBody: OPS_SYSTEM_PROMPT,
+  },
   ticket_summary: {
     slug: 'ticket_summary',
     title: 'Сводка обращения',
@@ -71,6 +90,7 @@ function listPromptSlots() {
 module.exports = {
   CUSTOMER_SYSTEM_PROMPT,
   KB_SYSTEM_PROMPT,
+  OPS_SYSTEM_PROMPT,
   CUSTOMER_TEST_PROMPT_SUFFIX,
   CUSTOMER_ASSIST_PROMPT_SUFFIX,
   EMPLOYEE_TEST_PROMPT_SUFFIX,

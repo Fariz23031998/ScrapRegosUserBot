@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { reportEventsUrl } from "../api/reports";
+import { reportEventsUrl, reportJobPath } from "../api/reports";
 import { useActiveReportJob } from "../contexts/ReportJobViewContext";
 import { useToast } from "../contexts/ToastContext";
 
@@ -39,19 +39,17 @@ export function useReportEvents(enabled: boolean) {
       const jobId = Number(event.job_id);
       if (Number.isFinite(jobId) && jobId > 0) {
         void queryClient.invalidateQueries({ queryKey: ["report-job-status", jobId] });
+        void queryClient.invalidateQueries({ queryKey: ["report-jobs"] });
       }
 
       if (Number.isFinite(jobId) && jobId === Number(activeJobIdRef.current)) return;
 
-      const tab = event.report_type === "commission" || event.report_type === "finance" || event.report_type === "technician"
-        ? event.report_type
-        : "technician";
       pushToast({
         message:
           event.message ||
           (event.type === "report_ready" ? "Отчёт готов." : "Не удалось построить отчёт."),
         tone: event.type === "report_ready" ? "success" : "error",
-        href: Number.isFinite(jobId) && jobId > 0 ? `/reports?tab=${tab}&job=${jobId}` : "/reports",
+        href: Number.isFinite(jobId) && jobId > 0 ? reportJobPath(jobId) : "/reports",
       });
     }
 

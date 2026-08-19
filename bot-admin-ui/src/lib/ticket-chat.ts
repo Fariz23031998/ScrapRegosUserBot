@@ -92,6 +92,19 @@ export function formatFileSize(bytes: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
+export function recordedVoiceFile(blob: Blob, now = Date.now()): File {
+  const mime = String(blob?.type || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  const useMp4 = mime.includes("mp4") || mime.includes("aac");
+  if (useMp4) {
+    const type = mime.startsWith("audio/") ? mime : "audio/mp4";
+    return new File([blob], `voice-${now}.m4a`, { type });
+  }
+  return new File([blob], `voice-${now}.weba`, { type: "audio/webm" });
+}
+
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

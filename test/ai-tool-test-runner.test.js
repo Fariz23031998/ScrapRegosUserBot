@@ -48,6 +48,11 @@ describe('ai tool test-runner', () => {
     assert.ok(tools.find((tool) => tool.name === 'create_category'));
     assert.ok(tools.find((tool) => tool.name === 'update_category'));
     assert.ok(tools.find((tool) => tool.name === 'delete_category'));
+    const searchDevices = tools.find((tool) => tool.name === 'search_devices');
+    assert.ok(searchDevices);
+    assert.equal(searchDevices.requires_ticket, false);
+    assert.ok(tools.find((tool) => tool.name === 'search_tasks'));
+    assert.ok(tools.find((tool) => tool.name === 'create_task_payment'));
   });
 
   it('settings catalog matches registered agent tools', () => {

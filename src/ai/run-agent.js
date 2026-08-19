@@ -110,6 +110,7 @@ async function runAgent({
   hasVision = false,
   hasAudio = false,
   promptCacheKey,
+  onDelta,
 } = {}) {
   const impl = provider || getProvider(providerName || 'openai');
   if (!impl || typeof impl.chat !== 'function') {
@@ -141,6 +142,7 @@ async function runAgent({
         signal: controller.signal,
         reasoningEffort,
         promptCacheKey,
+        onDelta,
       });
       lastUsage = response.usage || lastUsage;
       logPromptCache({

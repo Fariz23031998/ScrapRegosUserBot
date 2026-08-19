@@ -101,10 +101,24 @@ function parseSessionToken(password, token) {
   return null;
 }
 
+function decodeSessionTokenValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function getSessionToken(req) {
+  const auth = String(req.headers.authorization || '');
+  const bearer = auth.match(/^Bearer\s+(\S+)/i);
+  if (bearer) return decodeSessionTokenValue(bearer[1]);
+
   const cookieHeader = req.headers.cookie || '';
   const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
-  return match ? decodeURIComponent(match[1]) : null;
+  return match ? decodeSessionTokenValue(match[1]) : null;
 }
 
 function getSessionActor(req) {
@@ -132,6 +146,7 @@ function setSessionCookie(res, creds, actor = { type: 'password' }) {
     'Set-Cookie',
     `${SESSION_COOKIE}=${encodeURIComponent(token)}; ${buildSessionCookieAttributes({ maxAgeSeconds: maxAge })}`
   );
+  return token;
 }
 
 function clearSessionCookie(res) {

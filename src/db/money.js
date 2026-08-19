@@ -110,6 +110,15 @@ function snapshotMoney(item) {
   };
 }
 
+function emptyLineMoneySnapshot() {
+  return {
+    cost_amount: 0,
+    cost_currency: 'UZS',
+    price_uzs: 0,
+    price_usd: 0,
+  };
+}
+
 function lineQuantity(line) {
   const qty = Number(line?.quantity);
   if (!Number.isFinite(qty) || qty < 1) return 1;
@@ -280,6 +289,7 @@ module.exports = {
   presentMoneyFields,
   presentTaskLineMoney,
   snapshotMoney,
+  emptyLineMoneySnapshot,
   normalizeDiscountInput,
   emptyDiscount,
   applyDiscountToLineTotal,

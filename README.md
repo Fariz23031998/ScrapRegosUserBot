@@ -73,7 +73,7 @@ TELEGRAM_BOT_USERNAME=@YourBot
 - **Payme receipts**: `PAYME_*`
 - **SMS transports**: Android uses `SMS_GATEWAY_ENABLED`, `REDIS_URL`, and `SMS_GATEWAY_TOKEN`; GETSMS.UZ uses `ENABLE_GETSMS`, `GETSMS_LOGIN`, and `GETSMS_PASSWORD`; Eskiz.uz uses `ENABLE_ESKIZ`, `ESKIZ_EMAIL`, and `ESKIZ_PASSWORD`. The switches are independent and enabled providers may all send. Each transport can use its own template (`GETSMS_MESSAGE_TEMPLATE`, `ESKIZ_MESSAGE_TEMPLATE`, `SMS_GATEWAY_MESSAGE_TEMPLATE`, `TELEGRAM_MTPROTO_MESSAGE_TEMPLATE`) — see [docs/sms-gateway.md](docs/sms-gateway.md), [docs/getsms.md](docs/getsms.md), and [docs/eskiz.md](docs/eskiz.md)
 - **RPOS (optional)**: `{ACCOUNT}_RPOS_USERNAME`, `{ACCOUNT}_RPOS_PASSWORD`
-- **Knowledge-base MCP (optional)**: `MCP_TOKEN` enables Streamable HTTP MCP at `POST /bot-admin/mcp`. Set `MCP_KNOWLEDGE_READONLY=1` to expose search/get only. See [Knowledge-base MCP](#knowledge-base-mcp).
+- **Knowledge-base MCP (optional)**: `MCP_TOKEN` enables Streamable HTTP MCP at `POST /bot-admin/mcp`. Set `MCP_KNOWLEDGE_READONLY=1` to expose search/get only. Field tasks, devices, and services use `POST /bot-admin/mcp/ops` (`MCP_OPS_READONLY=1` for read-only). See [Knowledge-base MCP](#knowledge-base-mcp).
 
 See `.env.example` for the full annotated list.
 
@@ -110,11 +110,15 @@ npm run bot-admin-ui:build   # once per UI change / deploy
 npm run server
 ```
 
-Serves the payment pages, CLICK/Payme endpoints, the `/bot-admin/` React panel (including optional MCP at `/bot-admin/mcp`), the public bilingual price list at `/prices`, and the SMS gateway WebSocket. Listens on `CLICK_SERVER_PORT` (default `3000`).
+Serves the payment pages, CLICK/Payme endpoints, the `/bot-admin/` React panel (including optional MCP at `/bot-admin/mcp`), the public bilingual price list at `/prices`, the SMS gateway WebSocket, and the print gateway WebSocket for the independent Windows tray agent. Listens on `CLICK_SERVER_PORT` (default `3000`).
 
 Public price catalog: open `/prices` (Russian / O‘zbekcha switch). Edit it after logging into `/bot-admin/prices`. The Telegram `/prices` command is available to everyone and opens the public page.
 
 Local UI development (Vite on port 5301 with API proxy) is documented in [bot-admin-ui/README.md](bot-admin-ui/README.md).
+
+### Windows print agent
+
+The admin panel can send jobs to the independent Windows tray app in `print-service-windows`. Create named printers in the agent (name, type: label/receipt/invoice, Windows printer, enabled). Set `PRINT_GATEWAY_TOKEN` and point the tray app at `ws://HOST/print-gateway/ws`. In admin, print by the printer name when it is enabled and the station is online. Device serials (`SR00001234`) are generated automatically on task lines and printed as QR labels.
 
 ### Knowledge-base MCP
 
@@ -123,6 +127,7 @@ IDEs can search and (unless read-only) edit the same knowledge base as `/bot-adm
 1. Set a long random `MCP_TOKEN` in `.env`. Leave it unset to keep the endpoint disabled (`503`).
 2. Optionally set `MCP_KNOWLEDGE_READONLY=1` so only `knowledge_search` / `knowledge_get` / `knowledge_list_categories` are listed.
 3. Restart `npm run server`. Clients call `POST https://YOUR_HOST/bot-admin/mcp` with `Authorization: Bearer <MCP_TOKEN>` (or `X-MCP-Token`).
+4. Optionally set `MCP_OPS_READONLY=1`. The ops server is `POST https://YOUR_HOST/bot-admin/mcp/ops` with the same token (tasks, devices, services).
 
 Do not commit a real token. Copy [`.cursor/mcp.json.example`](.cursor/mcp.json.example) to `.cursor/mcp.json` and replace placeholders.
 
@@ -133,6 +138,12 @@ Do not commit a real token. Copy [`.cursor/mcp.json.example`](.cursor/mcp.json.e
   "mcpServers": {
     "scrapregos-knowledge": {
       "url": "https://HOST/bot-admin/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
+    },
+    "scrapregos-ops": {
+      "url": "https://HOST/bot-admin/mcp/ops",
       "headers": {
         "Authorization": "Bearer YOUR_MCP_TOKEN"
       }
@@ -152,6 +163,13 @@ Do not commit a real token. Copy [`.cursor/mcp.json.example`](.cursor/mcp.json.e
       "headers": {
         "Authorization": "Bearer YOUR_MCP_TOKEN"
       }
+    },
+    "scrapregos-ops": {
+      "type": "http",
+      "url": "https://HOST/bot-admin/mcp/ops",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
     }
   }
 }
@@ -162,6 +180,10 @@ Do not commit a real token. Copy [`.cursor/mcp.json.example`](.cursor/mcp.json.e
 ```toml
 [mcp_servers.scrapregos-knowledge]
 url = "https://HOST/bot-admin/mcp"
+http_headers = { Authorization = "Bearer YOUR_MCP_TOKEN" }
+
+[mcp_servers.scrapregos-ops]
+url = "https://HOST/bot-admin/mcp/ops"
 http_headers = { Authorization = "Bearer YOUR_MCP_TOKEN" }
 ```
 
@@ -208,10 +230,10 @@ apps/
   server/     Express server: payments, bot-admin, SMS gateway (npm run server)
 bot-admin-ui/ React admin SPA (npm run bot-admin-ui:build → served at /bot-admin/)
 cli/          Session warm-up and legacy stubs
-src/
-  admin/      Bot admin API + SPA/legacy page hosting
-  mcp/        Streamable HTTP MCP (knowledge base for IDEs)
-  bot/        Search, formatting, VIP/service/report/tech-support handlers
+    src/
+      admin/      Bot admin API + SPA/legacy page hosting
+      mcp/        Streamable HTTP MCP (knowledge + ops for IDEs)
+      bot/        Search, formatting, VIP/service/report/tech-support handlers
   db/         SQLite app-state schema (orders, users, TP, …)
   live/       Cookie sessions + HTTP client for portal queries
   sync/       Portal DataTables / RPOS clients + auth helpers

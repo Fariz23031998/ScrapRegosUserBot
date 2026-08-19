@@ -12,12 +12,13 @@ import type {
 import LoadingState from "./LoadingState";
 import ToolTestModal from "./ToolTestModal";
 
-const TOOL_AGENT_SLUGS: AiToolAgentSlug[] = ["customer", "customer_assist", "kb"];
+const TOOL_AGENT_SLUGS: AiToolAgentSlug[] = ["customer", "customer_assist", "kb", "ops"];
 
 const TOOL_AGENT_TITLES: Record<AiToolAgentSlug, string> = {
   customer: "Агент поддержки",
   customer_assist: "Агент поддержки (сотрудник)",
   kb: "База знаний",
+  ops: "Задачи",
 };
 
 const TICKET_REQUIRED_TOOLS = new Set([
@@ -31,7 +32,7 @@ const TICKET_REQUIRED_TOOLS = new Set([
 ]);
 
 function emptyDisabledAgentTools(): Record<AiToolAgentSlug, string[]> {
-  return { customer: [], customer_assist: [], kb: [] };
+  return { customer: [], customer_assist: [], kb: [], ops: [] };
 }
 
 function isToolAgentSlug(slug: string): slug is AiToolAgentSlug {

@@ -5,7 +5,6 @@ const {
   actorKeyFromJob,
   completeReportJob,
   createReportJob,
-  deleteExpiredReportJobs,
   failReportJob,
   findInFlightReportJob,
   getReportJob,
@@ -106,7 +105,7 @@ function reportTypeLabel(type) {
 function buildReportPageUrl(job) {
   const base = getPublicBaseUrl();
   if (!base || !job?.id) return null;
-  return `${base}/bot-admin/reports?tab=${encodeURIComponent(job.type)}&job=${encodeURIComponent(String(job.id))}`;
+  return `${base}/bot-admin/reports/${encodeURIComponent(String(job.id))}`;
 }
 
 function formatTelegramChatId(telegramId) {
@@ -216,7 +215,6 @@ function createOrReuseReportJob(db, { type, input, actor }) {
     error.status = 404;
     throw error;
   }
-  deleteExpiredReportJobs(db);
   const viewer = getLocationViewer(db, actor);
   const params = buildStoredParams(type, input, viewer);
   const paramsJson = JSON.stringify(params);
@@ -239,6 +237,7 @@ function createReportWorker(db, deps = {}) {
   let activeJobId = null;
 
   async function notifyJob(job) {
+    if (!job) return { sent: false, reason: 'missing_job' };
     const event = sseEventForJob(job);
     try {
       publishEvent(actorKeyFromJob(job), event);
@@ -263,6 +262,7 @@ function createReportWorker(db, deps = {}) {
     try {
       const result = await buildReport(db, current, fetchAllTickets);
       const ready = completeReportJob(db, jobId, result);
+      if (!ready) return null;
       await notifyJob(ready);
       return ready;
     } catch (error) {
@@ -270,6 +270,7 @@ function createReportWorker(db, deps = {}) {
         console.error('Report job error:', error);
       }
       const failed = failReportJob(db, jobId, jobErrorMessage(error));
+      if (!failed) return null;
       await notifyJob(failed);
       return failed;
     }
@@ -320,7 +321,6 @@ function createReportWorker(db, deps = {}) {
 
   function resume() {
     resetStuckRunningReportJobs(db);
-    deleteExpiredReportJobs(db);
     for (const job of listUnfinishedReportJobs(db)) {
       enqueue(job.id);
     }

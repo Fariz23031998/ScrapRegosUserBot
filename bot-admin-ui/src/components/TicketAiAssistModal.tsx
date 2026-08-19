@@ -1,14 +1,19 @@
+import { Sparkles } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
+  getTicketAiAssistPrompt,
   getTicketAiAssistSession,
   resetTicketAiAssistSession,
   sendTicketAiAssistChat,
 } from "../api/ai";
+import { useAuth } from "../hooks/useAuth";
 import { useConfirm } from "../contexts/ConfirmContext";
+import { useAgentChatThread } from "../hooks/useAgentChatThread";
 import { filesFromDataTransfer, isFileDrag } from "../lib/ticket-chat";
 import type { TicketAiAssistSession } from "../lib/types";
-import AgentChatFiles from "./AgentChatFiles";
+import AgentChatMessages from "./AgentChatMessages";
+import AgentPromptModal from "./AgentPromptModal";
 import ChatCompose, { type ChatComposeHandle } from "./ChatCompose";
 import LoadingState from "./LoadingState";
 import Modal from "./Modal";
@@ -27,11 +32,14 @@ export default function TicketAiAssistModal({
   onCustomerReply,
 }: TicketAiAssistModalProps) {
   const confirm = useConfirm();
+  const { hasPermission } = useAuth();
+  const canViewAiPrompt = hasPermission("tickets_ai_prompt");
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
   const [sessionId, setSessionId] = useState<number | undefined>();
   const [dropActive, setDropActive] = useState(false);
   const [sentNotice, setSentNotice] = useState<string | null>(null);
+  const [promptOpen, setPromptOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const composeRef = useRef<ChatComposeHandle>(null);
   const sessionKey = ["ticket-ai-assist", ticketId];
@@ -51,33 +59,43 @@ export default function TicketAiAssistModal({
     queryClient.setQueryData(sessionKey, data);
   }
 
+  const thread = useAgentChatThread(sessionQuery.data?.messages || []);
+
   const resetMutation = useMutation({
     mutationFn: () => resetTicketAiAssistSession(ticketId, { session_id: sessionId }),
     onSuccess: (data) => {
       setMessage("");
       setSentNotice(null);
+      thread.finishTurn();
       applySession(data);
     },
   });
 
   const chatMutation = useMutation({
     mutationFn: (payload: { message: string; files?: Array<{ name: string; extension: string; data: string }> }) =>
-      sendTicketAiAssistChat(ticketId, {
-        session_id: sessionId,
-        message: payload.message,
-        files: payload.files,
-      }),
+      sendTicketAiAssistChat(
+        ticketId,
+        {
+          session_id: sessionId,
+          message: payload.message,
+          files: payload.files,
+        },
+        { onDelta: thread.appendDelta },
+      ),
     onSuccess: (data) => {
-      setMessage("");
+      thread.finishTurn();
       applySession(data);
       if (data.replied_to_customer) {
         setSentNotice("Ответ отправлен клиенту.");
         onCustomerReply?.();
       }
     },
+    onError: () => {
+      thread.failTurn();
+    },
   });
 
-  const messages = sessionQuery.data?.messages || [];
+  const messages = thread.messages;
   const chatError = (chatMutation.error || resetMutation.error || sessionQuery.error) as Error | null;
   const composerEnabled = !chatMutation.isPending;
 
@@ -85,7 +103,7 @@ export default function TicketAiAssistModal({
     if (!open) return;
     const node = listRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [open, messages.length, chatMutation.isPending]);
+  }, [open, messages.length, thread.streamingAssistant?.content, chatMutation.isPending]);
 
   async function handleReset() {
     const ok = await confirm({
@@ -124,12 +142,16 @@ export default function TicketAiAssistModal({
   }
 
   return (
+    <>
     <Modal
       open={open}
       title="Агент поддержки"
       size="wide"
       className="modal--ai-assist"
-      onClose={onClose}
+      onClose={() => {
+        setPromptOpen(false);
+        onClose();
+      }}
     >
       <div
         className="ticket-ai-assist"
@@ -143,14 +165,27 @@ export default function TicketAiAssistModal({
             Закрытый чат с агентом поддержки. Ответы здесь клиент не видит — пока агент не отправит
             сообщение в обращение.
           </p>
-          <button
-            type="button"
-            className="btn-secondary btn-sm"
-            onClick={() => void handleReset()}
-            disabled={resetMutation.isPending || !sessionQuery.data}
-          >
-            Новый чат
-          </button>
+          <div className="ticket-ai-assist__toolbar-actions">
+            {canViewAiPrompt ? (
+              <button
+                type="button"
+                className="btn-secondary btn-icon"
+                aria-label="Промпт ИИ"
+                title="Промпт ИИ"
+                onClick={() => setPromptOpen(true)}
+              >
+                <Sparkles size={18} aria-hidden="true" />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => void handleReset()}
+              disabled={resetMutation.isPending || !sessionQuery.data}
+            >
+              Новый чат
+            </button>
+          </div>
         </div>
         <div
           className={`ticket-chat__messages${dropActive ? " ticket-chat__messages--drop" : ""}`}
@@ -160,18 +195,7 @@ export default function TicketAiAssistModal({
           {!sessionQuery.isLoading && messages.length === 0 ? (
             <p className="empty-state">Напишите подсказку агенту, например какую цену назвать клиенту.</p>
           ) : null}
-          {messages.map((item) => (
-            <div
-              key={item.id}
-              className={`ticket-chat__msg ticket-chat__msg--${item.role === "user" ? "staff" : "bot"}`}
-            >
-              <div className="ticket-chat__meta">
-                <span className="ticket-chat__author">{item.role === "user" ? "Вы" : "Агент"}</span>
-              </div>
-              {item.content.trim() ? <p className="ticket-chat__text">{item.content}</p> : null}
-              <AgentChatFiles files={item.files} />
-            </div>
-          ))}
+          <AgentChatMessages messages={messages} />
         </div>
         {sentNotice ? <p className="message success">{sentNotice}</p> : null}
         <ChatCompose
@@ -182,6 +206,8 @@ export default function TicketAiAssistModal({
           className={dropActive ? "ticket-chat__compose--drop" : ""}
           onSubmit={async ({ text, files }) => {
             if (!text.trim() && !files.length) return;
+            setMessage("");
+            thread.beginUserTurn(text, files, { stream: true });
             await chatMutation.mutateAsync({ message: text.trim(), files });
           }}
           placeholder="Подсказка агенту или перетащите файл…"
@@ -190,5 +216,14 @@ export default function TicketAiAssistModal({
         />
       </div>
     </Modal>
+      {canViewAiPrompt ? (
+        <AgentPromptModal
+          open={open && promptOpen}
+          onClose={() => setPromptOpen(false)}
+          queryKey={["ticket-ai-assist-prompt", ticketId, sessionId ?? "latest"]}
+          queryFn={() => getTicketAiAssistPrompt(ticketId, sessionId)}
+        />
+      ) : null}
+    </>
   );
 }

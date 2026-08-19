@@ -9,7 +9,7 @@ const express = require('express');
 const { openDb } = require('../src/db/partners-db');
 const { createBotAdminRouter } = require('../src/admin/bot-admin');
 const { SESSION_COOKIE } = require('../src/admin/bot-admin-auth');
-const { botAdminPublicDir } = require('../src/paths');
+const { botAdminPublicDir, botAdminUiDistDir } = require('../src/paths');
 
 const ADMIN_PAGES = [
   'index.html',
@@ -347,6 +347,10 @@ describe('Bot admin static assets and API auth', () => {
   });
 
   it('still redirects unauthenticated page requests to the login form', async () => {
+    const spaReady =
+      String(process.env.BOT_ADMIN_USE_LEGACY_UI || '').trim() !== '1' &&
+      fs.existsSync(path.join(botAdminUiDistDir(), 'index.html'));
+
     for (const urlPath of [
       '/bot-admin/',
       '/bot-admin/orders',
@@ -357,6 +361,16 @@ describe('Bot admin static assets and API auth', () => {
       '/bot-admin/settings',
     ]) {
       const response = await request(server, urlPath, { headers: { Accept: 'text/html' } });
+      if (spaReady) {
+        assert.equal(response.statusCode, 200, `${urlPath} should serve the SPA`);
+        assert.match(response.body, /root|Bot Admin/);
+        continue;
+      }
+      if (urlPath === '/bot-admin/') {
+        assert.equal(response.statusCode, 302);
+        assert.equal(response.headers.location, '/bot-admin/login');
+        continue;
+      }
       assert.equal(response.statusCode, 302);
       assert.equal(response.headers.location, '/bot-admin/login');
     }

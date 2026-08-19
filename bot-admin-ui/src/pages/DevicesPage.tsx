@@ -25,6 +25,7 @@ import CatalogStaffFields, {
   staffPayloadFromEditor,
 } from "../components/CatalogStaffFields";
 import EntityCards from "../components/EntityCards";
+import OpsAgentFab from "../components/OpsAgentFab";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
@@ -541,6 +542,7 @@ export default function DevicesPage() {
         }}
         onDelete={(category) => void handleDeleteCategory(category)}
       />
+      <OpsAgentFab />
     </section>
   );
 }

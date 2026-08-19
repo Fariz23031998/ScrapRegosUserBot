@@ -37,13 +37,13 @@ const AGENT_TOOL_CATALOG = [
   {
     name: 'create_article',
     title: 'Создать статью',
-    description: 'Создать новую статью в базе знаний и при необходимости назначить категорию.',
+    description: 'Создать новую статью в базе знаний (текст в Markdown). Новая статья не видна агентам, пока её не подтвердят.',
     agents: ['kb'],
   },
   {
     name: 'update_article',
     title: 'Обновить статью',
-    description: 'Изменить существующую статью базы знаний, в том числе категорию.',
+    description: 'Изменить существующую статью базы знаний (текст в Markdown), в том числе категорию.',
     agents: ['kb'],
   },
   {
@@ -160,11 +160,245 @@ const AGENT_TOOL_CATALOG = [
     description: 'Отправить сообщение клиенту в чат тикета (агент поддержки для сотрудников).',
     agents: ['customer_assist'],
   },
+  {
+    name: 'search_devices',
+    title: 'Поиск устройств',
+    description: 'Найти устройства полевого каталога по названию или описанию.',
+    agents: ['ops'],
+  },
+  {
+    name: 'get_device',
+    title: 'Карточка устройства',
+    description: 'Загрузить устройство каталога по id.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_device',
+    title: 'Создать устройство',
+    description: 'Добавить устройство в каталог (название и цена).',
+    agents: ['ops'],
+  },
+  {
+    name: 'update_device',
+    title: 'Изменить устройство',
+    description: 'Изменить устройство каталога.',
+    agents: ['ops'],
+  },
+  {
+    name: 'delete_device',
+    title: 'Удалить устройство',
+    description: 'Удалить устройство, если оно не используется в задачах.',
+    agents: ['ops'],
+  },
+  {
+    name: 'list_device_categories',
+    title: 'Категории устройств',
+    description: 'Список категорий устройств.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_device_category',
+    title: 'Категория устройств',
+    description: 'Создать категорию устройств.',
+    agents: ['ops'],
+  },
+  {
+    name: 'search_services',
+    title: 'Поиск услуг',
+    description: 'Найти полевые услуги каталога (не публичный прайс).',
+    agents: ['ops'],
+  },
+  {
+    name: 'get_service',
+    title: 'Карточка услуги',
+    description: 'Загрузить услугу каталога по id.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_service',
+    title: 'Создать услугу',
+    description: 'Добавить услугу в полевой каталог.',
+    agents: ['ops'],
+  },
+  {
+    name: 'update_service',
+    title: 'Изменить услугу',
+    description: 'Изменить услугу каталога.',
+    agents: ['ops'],
+  },
+  {
+    name: 'delete_service',
+    title: 'Удалить услугу',
+    description: 'Удалить услугу, если она не используется в задачах.',
+    agents: ['ops'],
+  },
+  {
+    name: 'list_service_categories',
+    title: 'Категории услуг',
+    description: 'Список категорий услуг.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_service_category',
+    title: 'Категория услуг',
+    description: 'Создать категорию услуг.',
+    agents: ['ops'],
+  },
+  {
+    name: 'search_tasks',
+    title: 'Поиск задач',
+    description: 'Найти полевые задачи по тексту, статусу, категории или филиалу.',
+    agents: ['ops'],
+  },
+  {
+    name: 'get_task',
+    title: 'Карточка задачи',
+    description: 'Загрузить задачу с корзиной, оплатами и итогами.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_task',
+    title: 'Создать задачу',
+    description: 'Создать задачу (нужны название и филиал).',
+    agents: ['ops'],
+  },
+  {
+    name: 'update_task',
+    title: 'Изменить задачу',
+    description: 'Изменить поля задачи. Проведённую корзину менять нельзя.',
+    agents: ['ops'],
+  },
+  {
+    name: 'delete_task',
+    title: 'Удалить задачу',
+    description: 'Удалить задачу.',
+    agents: ['ops'],
+  },
+  {
+    name: 'add_task_device',
+    title: 'Устройство в задачу',
+    description: 'Добавить устройство в корзину. Повтор того же id увеличивает количество.',
+    agents: ['ops'],
+  },
+  {
+    name: 'update_task_device',
+    title: 'Количество устройства',
+    description: 'Изменить количество позиции устройства в задаче.',
+    agents: ['ops'],
+  },
+  {
+    name: 'delete_task_device',
+    title: 'Убрать устройство',
+    description: 'Удалить позицию устройства из задачи.',
+    agents: ['ops'],
+  },
+  {
+    name: 'add_task_service',
+    title: 'Услуга в задачу',
+    description: 'Добавить услугу в корзину. Повтор того же id увеличивает количество.',
+    agents: ['ops'],
+  },
+  {
+    name: 'update_task_service',
+    title: 'Количество услуги',
+    description: 'Изменить количество позиции услуги в задаче.',
+    agents: ['ops'],
+  },
+  {
+    name: 'delete_task_service',
+    title: 'Убрать услугу',
+    description: 'Удалить позицию услуги из задачи.',
+    agents: ['ops'],
+  },
+  {
+    name: 'list_task_categories',
+    title: 'Категории задач',
+    description: 'Список категорий задач.',
+    agents: ['ops'],
+  },
+  {
+    name: 'list_task_locations',
+    title: 'Филиалы задач',
+    description: 'Филиалы, доступные текущему сотруднику.',
+    agents: ['ops'],
+  },
+  {
+    name: 'list_task_employees',
+    title: 'Сотрудники задач',
+    description: 'Сотрудники для назначения менеджером или техником.',
+    agents: ['ops'],
+  },
+  {
+    name: 'search_task_clients',
+    title: 'Клиенты REGOS',
+    description: 'Найти клиента REGOS для привязки к задаче.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_task_client',
+    title: 'Создать клиента REGOS',
+    description: 'Создать клиента в REGOS CRM (имя, телефон и остальные поля).',
+    agents: ['ops'],
+  },
+  {
+    name: 'list_payment_types',
+    title: 'Типы оплаты',
+    description: 'Типы оплаты для приёма платежа по задаче.',
+    agents: ['ops'],
+  },
+  {
+    name: 'advance_task_status',
+    title: 'Следующий статус',
+    description: 'Сдвинуть статус: Новая → В работе → Выполнена.',
+    agents: ['ops'],
+  },
+  {
+    name: 'post_task',
+    title: 'Провести задачу',
+    description: 'Провести задачу и зафиксировать корзину.',
+    agents: ['ops'],
+  },
+  {
+    name: 'unpost_task',
+    title: 'Отменить проведение',
+    description: 'Снять проведение. При возвратах нужны delete_refunds / delete_returns.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_task_payment',
+    title: 'Оплата по задаче',
+    description: 'Принять оплату по задаче.',
+    agents: ['ops'],
+  },
+  {
+    name: 'delete_task_payment',
+    title: 'Удалить оплату',
+    description: 'Удалить платёж по задаче.',
+    agents: ['ops'],
+  },
+  {
+    name: 'search_repair_returns',
+    title: 'Поиск возвратов',
+    description: 'Найти устройства, ожидающие возврата, или уже возвращённые.',
+    agents: ['ops'],
+  },
+  {
+    name: 'create_repair_return',
+    title: 'Оформить возврат',
+    description: 'Вернуть устройство по строке задачи ремонта.',
+    agents: ['ops'],
+  },
+  {
+    name: 'delete_repair_return',
+    title: 'Отменить возврат',
+    description: 'Отменить запись о возврате устройства.',
+    agents: ['ops'],
+  },
 ];
 
 const KNOWN_TOOL_NAMES = new Set(AGENT_TOOL_CATALOG.map((tool) => tool.name));
 const TOOL_AGENTS_BY_NAME = new Map(AGENT_TOOL_CATALOG.map((tool) => [tool.name, tool.agents]));
-const TOOL_AGENT_SLUGS = ['customer', 'customer_assist', 'kb'];
+const TOOL_AGENT_SLUGS = ['customer', 'customer_assist', 'kb', 'ops'];
 
 function isKnownAgentTool(name) {
   return KNOWN_TOOL_NAMES.has(String(name || ''));

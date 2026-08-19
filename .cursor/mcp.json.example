@@ -5,6 +5,12 @@
       "headers": {
         "Authorization": "Bearer YOUR_MCP_TOKEN"
       }
+    },
+    "scrapregos-ops": {
+      "url": "https://HOST/bot-admin/mcp/ops",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
     }
   }
 }

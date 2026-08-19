@@ -1,5 +1,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Banknote, Bell, Trash2, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
@@ -212,27 +213,36 @@ function orderActionButtons(
   hasPermission: (key: string) => boolean,
   onAction: (action: string, id: string) => void,
 ): ReactNode {
-  const actions: Array<{ key: string; label: string; className?: string }> = [];
+  const actions: Array<{ key: string; label: string; className?: string; icon: LucideIcon }> = [];
   if (order.status === "pending") {
-    if (hasPermission("renotify_order")) actions.push({ key: "renotify", label: "Уведомить" });
-    if (hasPermission("mark_paid_cash")) actions.push({ key: "paid-cash", label: "Наличные" });
+    if (hasPermission("renotify_order")) {
+      actions.push({ key: "renotify", label: "Уведомить", icon: Bell });
+    }
+    if (hasPermission("mark_paid_cash")) {
+      actions.push({ key: "paid-cash", label: "Наличные", icon: Banknote });
+    }
     if (hasPermission("delete_unpaid_order")) {
-      actions.push({ key: "delete", label: "Удалить", className: "btn-danger" });
+      actions.push({ key: "delete", label: "Удалить", className: "btn-danger", icon: Trash2 });
     }
   } else if (order.status === "paid_cash" && hasPermission("delete_cash_order")) {
-    actions.push({ key: "delete-cash", label: "Удалить", className: "btn-danger" });
+    actions.push({ key: "delete-cash", label: "Удалить", className: "btn-danger", icon: Trash2 });
   }
   if (!actions.length) return null;
-  return actions.map((a) => (
-    <button
-      key={a.key}
-      type="button"
-      className={a.className || "btn-secondary"}
-      onClick={() => void onAction(a.key, order.id)}
-    >
-      {a.label}
-    </button>
-  ));
+  return actions.map((a) => {
+    const Icon = a.icon;
+    return (
+      <button
+        key={a.key}
+        type="button"
+        className={`${a.className || "btn-secondary"} btn-icon btn-sm`}
+        aria-label={a.label}
+        title={a.label}
+        onClick={() => void onAction(a.key, order.id)}
+      >
+        <Icon size={15} aria-hidden="true" />
+      </button>
+    );
+  });
 }
 
 export default function OrdersPage() {

@@ -66,7 +66,7 @@ function loadPostedTasks(db, { from = null, to = null, viewer = null } = {}) {
 
   return db
     .prepare(
-      `SELECT t.id, t.manager_user_id, t.technician_user_id, t.location_id
+      `SELECT t.id, t.manager_user_id, t.technician_user_id, t.location_id, t.action
        FROM tasks t
        WHERE ${where.join(' AND ')}`
     )
@@ -80,7 +80,8 @@ function listReportDeviceLines(db, taskIds) {
       SELECT td.task_id, td.quantity, td.cost_amount, td.cost_currency, td.price_uzs, td.price_usd,
              td.discount_type, td.discount_value, td.discount_currency,
              IFNULL(d.manager_sale_percent, 0) AS manager_sale_percent,
-             IFNULL(d.technician_score, 0) AS technician_score
+             IFNULL(d.technician_score, 0) AS technician_score,
+             'device' AS line_kind
       FROM task_devices td
       LEFT JOIN devices d ON d.id = td.device_id
       WHERE td.task_id IN (${placeholders})
@@ -97,7 +98,8 @@ function listReportServiceLines(db, taskIds) {
       SELECT ts.task_id, ts.quantity, ts.cost_amount, ts.cost_currency, ts.price_uzs, ts.price_usd,
              ts.discount_type, ts.discount_value, ts.discount_currency,
              IFNULL(s.manager_sale_percent, 0) AS manager_sale_percent,
-             IFNULL(s.technician_score, 0) AS technician_score
+             IFNULL(s.technician_score, 0) AS technician_score,
+             'service' AS line_kind
       FROM task_services ts
       LEFT JOIN services s ON s.id = ts.service_id
       WHERE ts.task_id IN (${placeholders})
@@ -173,6 +175,10 @@ function ensureMapRow(byUser, userId, factory) {
   if (!Number.isFinite(id) || id <= 0) return null;
   if (!byUser.has(id)) byUser.set(id, factory(id));
   return byUser.get(id);
+}
+
+function isRepairDeviceLine(task, line) {
+  return task?.action === 'repair' && line?.line_kind === 'device';
 }
 
 function addLineCommission(row, line, rate) {
@@ -361,7 +367,7 @@ function buildCommissionReport(db, { fromUnix = null, toUnix = null, viewer = nu
     const named = nameOf(task.manager_user_id);
     if (!named) continue;
     const row = ensureMapRow(byUser, named.user_id, (id) => emptyCommissionRow(id, named.name));
-    if (row) addLineCommission(row, line, rate);
+    if (row && !isRepairDeviceLine(task, line)) addLineCommission(row, line, rate);
   }
 
   const rows = sortNamedRows(
@@ -381,6 +387,7 @@ module.exports = {
   loadPostedTasks,
   listPostedTaskLines,
   loadPostedTaskReportContext,
+  isRepairDeviceLine,
   buildTechnicianReport,
   buildCommissionReport,
 };

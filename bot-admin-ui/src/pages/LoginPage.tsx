@@ -2,6 +2,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { login } from "../api/auth";
+import LoadingState from "../components/LoadingState";
 import { useAuth } from "../hooks/useAuth";
 
 export default function LoginPage() {
@@ -26,8 +27,10 @@ export default function LoginPage() {
     const form = new FormData(event.currentTarget);
     try {
       await login(String(form.get("login") || ""), String(form.get("password") || ""));
-      await refreshSession();
-      navigate("/", { replace: true });
+      const ok = await refreshSession();
+      if (!ok) {
+        setError("Сессия не установилась. Попробуйте ещё раз или откройте панель в обычном браузере.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось войти");
     } finally {
@@ -35,25 +38,21 @@ export default function LoginPage() {
     }
   }
 
-  if (isLoading) return null;
-  if (isAuthenticated) return <Navigate to={landingPath} replace />;
-
-  if (webAppDenied) {
+  if (isLoading) {
     return (
       <div className="login-page">
-        <main className="page login-card">
-          <h1>Вход в Bot Admin</h1>
-          <p className="message error">{webAppDenied}</p>
-        </main>
+        <LoadingState message="Проверка сессии…" />
       </div>
     );
   }
+  if (isAuthenticated) return <Navigate to={landingPath} replace />;
 
   return (
     <div className="login-page">
       <main className="page login-card">
         <h1>Вход в Bot Admin</h1>
         <p>Используйте логин и пароль администратора или сотрудника.</p>
+        {webAppDenied ? <p className="message error">{webAppDenied}</p> : null}
         <form className="stack-form" onSubmit={handleSubmit}>
           <label>
             Логин

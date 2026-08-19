@@ -142,4 +142,24 @@ describe('accounts and system payment types', () => {
     assert.equal(getAccount(db, account.id).value, 35000);
     assert.equal(getAccount(db, otherAccount.id).value, 5000);
   });
+
+  it('adds in payments and subtracts out payments from the snapshot account', () => {
+    const { createAccountPayment, deleteAccountPayment } = require('../src/db/account-payments');
+    const account = createAccount(db, { name: 'Касса прихода', currency: 'UZS' });
+    createAccountPayment(db, { account_id: account.id, direction: 'in', amount: 80000 });
+    createAccountPayment(db, { account_id: account.id, direction: 'out', amount: 20000 });
+    assert.equal(getAccount(db, account.id).value, 60000);
+
+    const usdIn = createAccountPayment(db, {
+      account_id: account.id,
+      direction: 'in',
+      amount: 1,
+      currency: 'USD',
+    });
+    assert.equal(getAccount(db, account.id).value, 72500);
+    assert.equal(deleteAccountPayment(db, usdIn.id), true);
+    assert.equal(getAccount(db, account.id).value, 60000);
+
+    assert.throws(() => deleteAccount(db, account.id), /ACCOUNT_IN_USE/);
+  });
 });

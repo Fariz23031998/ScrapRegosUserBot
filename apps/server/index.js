@@ -12,10 +12,12 @@ const { startPaymeReceiptReconciler } = require('../../src/payments/payme-reconc
 const { getPaymentOptionsForOrder, getPublicDir, isOrderId } = require('../../src/payments/payments-api');
 const { createBotAdminRouter } = require('../../src/admin/bot-admin');
 const { attachSmsGateway } = require('../../src/sms/sms-gateway-ws');
+const { attachPrintGateway } = require('../../src/print/print-gateway-ws');
 const { ensureCreatorPaidNotification } = require('../../src/bot/payment-notification');
 const { getServicePricesCatalog } = require('../../src/db/service-prices');
 const { sendVersionedHtmlFile } = require('../../src/http/asset-cache');
 const { applyCors } = require('../../src/http/cors');
+const { createAppBodyParsers, payloadTooLargeHandler } = require('../../src/http/body-parser');
 const {
   createRegosTicketWebhookHandler,
   createRegosTicketWebhookRouter,
@@ -27,8 +29,7 @@ const port = Number(process.env.CLICK_SERVER_PORT || 3000);
 const publicStatic = express.static(getPublicDir());
 
 app.use(applyCors);
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+app.use(createAppBodyParsers());
 app.use((req, res, next) => {
   if (req.path === '/bot-admin' || req.path.startsWith('/bot-admin/')) {
     return next();
@@ -205,8 +206,11 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+app.use(payloadTooLargeHandler);
+
 const server = http.createServer(app);
 attachSmsGateway(server, { db });
+attachPrintGateway(server, { db });
 
 const paymeReconciler = startPaymeReceiptReconciler(db);
 

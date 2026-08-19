@@ -2,7 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getAiSettings, saveAiSettings } from "../api/ai";
-import { getExchangeRate, saveExchangeRate } from "../api/settings";
+import {
+  getExchangeRate,
+  getRepairReturnSettings,
+  saveExchangeRate,
+  saveRepairReturnSettings,
+} from "../api/settings";
 import {
   getChannelSettings,
   getTelegramTicketSettings,
@@ -14,6 +19,7 @@ import EntityCards from "../components/EntityCards";
 import GroupTopicTestModal from "../components/GroupTopicTestModal";
 import LoadingState from "../components/LoadingState";
 import SettingsLocationsTab from "../components/SettingsLocationsTab";
+import SettingsPrintTab from "../components/SettingsPrintTab";
 import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -33,7 +39,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Gemini",
 };
 
-type SettingsTab = "ai" | "channels" | "telegram" | "currency" | "locations";
+type SettingsTab = "ai" | "channels" | "telegram" | "currency" | "locations" | "tasks" | "print";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
   { id: "ai", title: "AI" },
@@ -41,6 +47,8 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
   { id: "telegram", title: "Telegram" },
   { id: "currency", title: "Валюта" },
   { id: "locations", title: "Филиалы и оплата" },
+  { id: "tasks", title: "Задачи" },
+  { id: "print", title: "Печать" },
 ];
 
 function emptyTelegramTicketSettings(): TelegramTicketSettings {
@@ -59,6 +67,7 @@ const AGENT_TITLES: Record<AiPromptSlug, string> = {
   customer: "Агент поддержки",
   customer_assist: "Агент поддержки (сотрудник)",
   kb: "База знаний",
+  ops: "Задачи",
   ticket_summary: "Сводка обращения",
 };
 
@@ -101,6 +110,7 @@ export default function SettingsPage() {
   const [groupTestOpen, setGroupTestOpen] = useState(false);
   const [telegramDraft, setTelegramDraft] = useState<TelegramTicketSettings | null>(null);
   const [rateDraft, setRateDraft] = useState("");
+  const [tasksDraft, setTasksDraft] = useState<{ require_serials: boolean } | null>(null);
   const [fallbackClientQuery, setFallbackClientQuery] = useState("");
   const [fallbackClients, setFallbackClients] = useState<
     Array<{ id: number; name?: string | null; phone?: string | null; email?: string | null }>
@@ -172,6 +182,16 @@ export default function SettingsPage() {
       return data;
     },
     enabled: tab === "currency" || Boolean(rateDraft),
+  });
+
+  const tasksQuery = useQuery({
+    queryKey: ["repair-return-settings"],
+    queryFn: async () => {
+      const data = await getRepairReturnSettings();
+      setTasksDraft(data);
+      return data;
+    },
+    enabled: tab === "tasks" || Boolean(tasksDraft),
   });
 
   useEffect(() => {
@@ -302,6 +322,19 @@ export default function SettingsPage() {
     onError: (error: Error) => setMessage({ text: error.message, type: "error" }),
   });
 
+  const saveTasksMutation = useMutation({
+    mutationFn: () =>
+      saveRepairReturnSettings({ require_serials: Boolean(tasksDraft?.require_serials) }),
+    onSuccess: (data) => {
+      setTasksDraft(data);
+      setMessage({ text: "Настройки задач сохранены.", type: "success" });
+      queryClient.setQueryData(["repair-return-settings"], data);
+      void queryClient.invalidateQueries({ queryKey: ["repair-return-settings"] });
+      void queryClient.invalidateQueries({ queryKey: ["repair-returns"] });
+    },
+    onError: (error: Error) => setMessage({ text: error.message, type: "error" }),
+  });
+
   const channels = draft.length ? draft : query.data?.channels || [];
   const canEdit = hasPermission("settings_edit");
   const ai = aiDraft || aiQuery.data;
@@ -399,6 +432,16 @@ export default function SettingsPage() {
               className="btn-primary"
               onClick={() => saveRateMutation.mutate()}
               disabled={saveRateMutation.isPending}
+            >
+              Сохранить
+            </button>
+          ) : null}
+          {canEdit && tab === "tasks" ? (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => saveTasksMutation.mutate()}
+              disabled={saveTasksMutation.isPending || !tasksDraft}
             >
               Сохранить
             </button>
@@ -1214,6 +1257,32 @@ export default function SettingsPage() {
         ) : null}
 
         {tab === "locations" ? <SettingsLocationsTab canEdit={canEdit} /> : null}
+        {tab === "tasks" ? (
+          tasksQuery.isLoading && !tasksDraft ? (
+            <LoadingState />
+          ) : !tasksDraft ? (
+            <p className="empty-state">Не удалось загрузить настройки задач.</p>
+          ) : (
+            <form className="stack-form settings-form" onSubmit={(event) => event.preventDefault()}>
+              <label className="field-checkbox">
+                <input
+                  type="checkbox"
+                  checked={tasksDraft.require_serials}
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    setTasksDraft({ ...tasksDraft, require_serials: event.target.checked })
+                  }
+                />
+                <span>Требовать серийные номера при возврате отремонтированного устройства</span>
+              </label>
+              <p className="muted-copy">
+                Если включено, при возврате нужно выбрать или отсканировать серийные номера. Если
+                выключено, устройства возвращаются по количеству.
+              </p>
+            </form>
+          )
+        ) : null}
+        {tab === "print" ? <SettingsPrintTab canEdit={canEdit} /> : null}
 
         {tab === "currency" ? (
           rateQuery.isLoading ? (

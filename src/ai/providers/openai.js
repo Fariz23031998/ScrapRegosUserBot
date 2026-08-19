@@ -84,7 +84,104 @@ function buildChatRequest({ model, messages, tools, reasoningEffort, promptCache
   return request;
 }
 
-async function chat({ model, messages, tools, signal, reasoningEffort, promptCacheKey } = {}) {
+function mapToolCalls(toolCalls) {
+  return (toolCalls || []).map((call) => ({
+    id: call.id,
+    name: call.function?.name || call.name,
+    arguments: call.function?.arguments || call.arguments || '{}',
+  }));
+}
+
+function toRawAssistantMessage({ content, toolCalls, role = 'assistant' } = {}) {
+  const message = {
+    role,
+    content: content || (toolCalls?.length ? null : ''),
+  };
+  if (toolCalls?.length) {
+    message.tool_calls = toolCalls.map((call) => ({
+      id: call.id,
+      type: 'function',
+      function: {
+        name: call.name,
+        arguments: call.arguments || '{}',
+      },
+    }));
+  }
+  return message;
+}
+
+async function consumeChatStream(stream, { onDelta } = {}) {
+  let content = '';
+  let finishReason = null;
+  let role = 'assistant';
+  let usage = null;
+  let sawToolCalls = false;
+  const toolCallsByIndex = new Map();
+
+  for await (const chunk of stream) {
+    if (chunk?.usage) usage = normalizeUsage(chunk.usage);
+    const choice = chunk?.choices?.[0];
+    if (!choice) continue;
+    finishReason = choice.finish_reason || finishReason;
+    const delta = choice.delta || {};
+    if (delta.role) role = delta.role;
+    const parts = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+    if (parts.length) {
+      sawToolCalls = true;
+      for (const part of parts) {
+        const index = Number.isInteger(part.index) ? part.index : 0;
+        const current = toolCallsByIndex.get(index) || { id: '', name: '', arguments: '' };
+        if (part.id) current.id = part.id;
+        if (part.function?.name) current.name += part.function.name;
+        if (part.function?.arguments) current.arguments += part.function.arguments;
+        toolCallsByIndex.set(index, current);
+      }
+    }
+    const piece = normalizeChatContent(delta.content);
+    if (!piece) continue;
+    content += piece;
+    if (typeof onDelta === 'function' && !sawToolCalls) await onDelta(piece);
+  }
+
+  const toolCalls = [...toolCallsByIndex.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([, call]) => call)
+    .filter((call) => call.id || call.name);
+  return {
+    content,
+    toolCalls,
+    finishReason,
+    raw: toRawAssistantMessage({ content, toolCalls, role }),
+    usage,
+  };
+}
+
+function completionFromMessage(choice, usage) {
+  const message = choice?.message || {};
+  const toolCalls = mapToolCalls(message.tool_calls);
+  return {
+    content: normalizeChatContent(message.content),
+    toolCalls,
+    finishReason: choice?.finish_reason || null,
+    raw: message,
+    usage: normalizeUsage(usage),
+  };
+}
+
+async function completeChat(client, { request, signal, onDelta } = {}) {
+  const options = signal ? { signal } : undefined;
+  if (typeof onDelta === 'function') {
+    const stream = await client.chat.completions.create(
+      { ...request, stream: true, stream_options: { include_usage: true } },
+      options
+    );
+    return consumeChatStream(stream, { onDelta });
+  }
+  const completion = await client.chat.completions.create(request, options);
+  return completionFromMessage(completion.choices?.[0], completion.usage);
+}
+
+async function chat({ model, messages, tools, signal, reasoningEffort, promptCacheKey, onDelta } = {}) {
   const { apiKey, baseURL } = getOpenAiConfig();
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -93,26 +190,14 @@ async function chat({ model, messages, tools, signal, reasoningEffort, promptCac
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey, baseURL });
   const request = buildChatRequest({ model, messages, tools, reasoningEffort, promptCacheKey });
-
-  const completion = await client.chat.completions.create(request, signal ? { signal } : undefined);
-  const choice = completion.choices?.[0];
-  const message = choice?.message || {};
-  return {
-    content: normalizeChatContent(message.content),
-    toolCalls: (message.tool_calls || []).map((call) => ({
-      id: call.id,
-      name: call.function?.name,
-      arguments: call.function?.arguments || '{}',
-    })),
-    finishReason: choice?.finish_reason || null,
-    raw: message,
-    usage: normalizeUsage(completion.usage),
-  };
+  return completeChat(client, { request, signal, onDelta });
 }
 
 module.exports = {
   name: 'openai',
   chat,
+  completeChat,
+  consumeChatStream,
   getOpenAiConfig,
   buildChatRequest,
   normalizeChatContent,

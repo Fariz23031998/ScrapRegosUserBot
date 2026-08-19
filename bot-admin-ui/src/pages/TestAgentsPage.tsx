@@ -11,13 +11,14 @@ import {
   sendCustomerTestChat,
   sendEmployeeTestChat,
 } from "../api/ai";
-import AgentChatFiles from "../components/AgentChatFiles";
+import AgentChatMessages from "../components/AgentChatMessages";
 import AgentRunTrace from "../components/AgentRunTrace";
 import ChatCompose, { type ChatComposeHandle } from "../components/ChatCompose";
 import LoadingState from "../components/LoadingState";
 import TestAgentModelPrompt from "../components/TestAgentModelPrompt";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
+import { useAgentChatThread } from "../hooks/useAgentChatThread";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { filesFromDataTransfer, isFileDrag } from "../lib/ticket-chat";
 import type { CustomerTestSession, TestAgentSessionSummary } from "../lib/types";
@@ -77,6 +78,8 @@ export default function TestAgentsPage() {
     },
   });
 
+  const thread = useAgentChatThread(sessionQuery.data?.messages || []);
+
   const historyQuery = useQuery({
     queryKey: historyKey(agentKind, showAllUsers),
     queryFn: () => listTestAgentSessions(agentKind, showAllUsers),
@@ -88,7 +91,8 @@ export default function TestAgentsPage() {
     setOpenedSessionId(null);
     setTicketId("");
     setClientPhone("");
-  }, [agentKind]);
+    thread.finishTurn();
+  }, [agentKind, thread.finishTurn]);
 
   function applySession(data: CustomerTestSession) {
     setOpenedSessionId(data.session_id);
@@ -126,6 +130,7 @@ export default function TestAgentsPage() {
     onSuccess: (data) => {
       applySession(data);
       invalidateHistory();
+      thread.finishTurn();
     },
   });
 
@@ -138,12 +143,17 @@ export default function TestAgentsPage() {
         ticket_id: ticketId.trim() || null,
         client_phone: clientPhone.trim() || null,
       };
-      return isEmployee ? sendEmployeeTestChat(body) : sendCustomerTestChat(body);
+      return isEmployee
+        ? sendEmployeeTestChat(body, { onDelta: thread.appendDelta })
+        : sendCustomerTestChat(body, { onDelta: thread.appendDelta });
     },
     onSuccess: (data) => {
-      setMessage("");
+      thread.finishTurn();
       applySession(data);
       invalidateHistory();
+    },
+    onError: () => {
+      thread.failTurn();
     },
   });
 
@@ -168,7 +178,7 @@ export default function TestAgentsPage() {
   });
 
   const session = sessionQuery.data;
-  const messages = session?.messages || [];
+  const messages = thread.messages;
   const ticket = session?.ticket;
   const history = historyQuery.data?.sessions || [];
   const contextError = (contextMutation.error || resetMutation.error || clearMutation.error || deleteMutation.error) as
@@ -179,7 +189,7 @@ export default function TestAgentsPage() {
   useEffect(() => {
     const node = listRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [messages.length, chatMutation.isPending, view, agentKind]);
+  }, [messages.length, thread.streamingAssistant?.content, chatMutation.isPending, view, agentKind]);
 
   async function handleReset() {
     const ok = await confirm({
@@ -452,44 +462,31 @@ export default function TestAgentsPage() {
                   : "Напишите сообщение от имени клиента."}
               </p>
             ) : null}
-            {messages.map((item) => {
-              const run = item.run;
-              const isUser = item.role === "user";
-              const userLabel = isEmployee ? "Сотрудник" : "Клиент";
-              const msgSide = isUser ? (isEmployee ? "staff" : "client") : "staff";
-              return (
-                <div key={item.id} className="test-agents-turn">
-                  <div className={`ticket-chat__msg ticket-chat__msg--${msgSide}`}>
-                    <div className="ticket-chat__bubble">
-                      <div className="ticket-chat__meta">
-                        <span className="ticket-chat__author">{isUser ? userLabel : "Агент"}</span>
-                      </div>
-                      {item.content.trim() ? <p className="ticket-chat__text">{item.content}</p> : null}
-                      <AgentChatFiles files={item.files} />
-                    </div>
+            <AgentChatMessages
+              messages={messages}
+              userSide={isEmployee ? "staff" : "client"}
+              agentSide={isEmployee ? "bot" : "staff"}
+              renderAfter={(item) => {
+                if (item.role !== "assistant" || !item.run) return null;
+                const run = item.run;
+                return (
+                  <div className="test-agents-turn__trace">
+                    {run.replied_to_customer ? (
+                      <p className="muted-copy agent-run-trace__sim">
+                        reply_to_customer (имитация): {run.customer_reply || "—"}
+                      </p>
+                    ) : null}
+                    <AgentRunTrace
+                      trace={run.trace}
+                      steps={run.steps}
+                      usage={run.usage}
+                      stopped={run.stopped}
+                    />
+                    <TestAgentModelPrompt prompt={run} />
                   </div>
-                  {item.role === "assistant" && run ? (
-                    <div className="test-agents-turn__trace">
-                      {run.replied_to_customer ? (
-                        <p className="muted-copy agent-run-trace__sim">
-                          reply_to_customer (имитация): {run.customer_reply || "—"}
-                        </p>
-                      ) : null}
-                      <AgentRunTrace
-                        trace={run.trace}
-                        steps={run.steps}
-                        usage={run.usage}
-                        stopped={run.stopped}
-                      />
-                      <TestAgentModelPrompt prompt={run} />
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-            {chatMutation.isPending ? (
-              <p className="empty-state agent-run-trace__pending">Агент выполняется…</p>
-            ) : null}
+                );
+              }}
+            />
           </div>
           <ChatCompose
             ref={composeRef}
@@ -499,6 +496,8 @@ export default function TestAgentsPage() {
             className={dropActive ? "ticket-chat__compose--drop" : ""}
             onSubmit={async ({ text, files }) => {
               if (!text.trim() && !files.length) return;
+              setMessage("");
+              thread.beginUserTurn(text, files, { stream: true });
               await chatMutation.mutateAsync({ message: text.trim(), files });
             }}
             placeholder="Введите сообщение или перетащите файл…"

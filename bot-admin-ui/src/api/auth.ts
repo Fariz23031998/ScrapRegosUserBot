@@ -1,28 +1,45 @@
 import { apiFetch } from "./client";
 import type { SessionResponse } from "../lib/types";
+import { setStoredSessionToken } from "./session-token";
+
+type AuthOk = { ok: boolean; token?: string };
+
+async function storeAuthToken<T extends AuthOk>(data: T): Promise<T> {
+  if (data.token) setStoredSessionToken(data.token);
+  return data;
+}
 
 export function getSession() {
   return apiFetch<SessionResponse>("/bot-admin/api/session", { skipAuthRedirect: true });
 }
 
-export function login(login: string, password: string) {
-  return apiFetch<{ ok: boolean }>("/bot-admin/api/login", {
+export async function login(login: string, password: string) {
+  const data = await apiFetch<AuthOk>("/bot-admin/api/login", {
     method: "POST",
     body: JSON.stringify({ login, password }),
     skipAuthRedirect: true,
   });
+  return storeAuthToken(data);
 }
 
-export function loginTelegramWebApp(initData: string) {
-  return apiFetch<{ ok: boolean }>("/bot-admin/api/auth/telegram-webapp", {
+export async function loginTelegramWebApp(initData: string) {
+  const data = await apiFetch<AuthOk>("/bot-admin/api/auth/telegram-webapp", {
     method: "POST",
     body: JSON.stringify({ initData }),
     skipAuthRedirect: true,
   });
+  return storeAuthToken(data);
 }
 
-export function logout() {
-  return apiFetch<{ ok: boolean }>("/bot-admin/api/logout", { method: "POST", skipAuthRedirect: true });
+export async function logout() {
+  try {
+    return await apiFetch<{ ok: boolean }>("/bot-admin/api/logout", {
+      method: "POST",
+      skipAuthRedirect: true,
+    });
+  } finally {
+    setStoredSessionToken(null);
+  }
 }
 
 export function updateAccount(payload: {

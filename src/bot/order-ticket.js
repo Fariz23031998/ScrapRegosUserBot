@@ -1,7 +1,11 @@
 const { field, link } = require('./telegram-html');
 
 function getPublicBaseUrl() {
-  return (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+  const raw = String(process.env.PUBLIC_BASE_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+  if (!raw) return '';
+  return raw.replace(/^(https?):(?!\/\/)/i, '$1://');
 }
 
 function formatTicketAdminUrl(ticketId) {

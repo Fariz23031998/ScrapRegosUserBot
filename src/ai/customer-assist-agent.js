@@ -87,6 +87,98 @@ function serializeTicketAssistSession(db, session, extra = {}) {
   };
 }
 
+function serializePreviewTools(tools) {
+  return (tools || []).map((tool) => ({
+    name: tool.name,
+    description: tool.description || '',
+    parameters: tool.parameters || { type: 'object', properties: {} },
+  }));
+}
+
+async function assembleTicketAssistPrompt({
+  db,
+  ticket,
+  session,
+  settings,
+  deps = {},
+  history,
+  onReplySent,
+} = {}) {
+  const modelHistory = history || toModelHistory(listTicketAssistMessages(db, session.id));
+  const chatId = ticket.chat_id != null ? String(ticket.chat_id).trim() : '';
+  let filesById = new Map();
+  let chatSnapshot = '';
+  if (chatId) {
+    const context = await loadCustomerAgentChatContext({
+      chatId,
+      historyLimit: settings.historyLimit,
+      ticket,
+      deps,
+    });
+    filesById = context.filesById || new Map();
+    chatSnapshot = formatTicketChatSnapshot(context.messages, filesById);
+  }
+  const tools = prepareAgentTools(
+    [
+      ...createCustomerTools({
+        db,
+        ticket,
+        chatId,
+        filesById,
+        deps: { ...deps, transcribeModel: settings.transcribeModel },
+      }),
+      createReplyToCustomerTool({
+        ticket,
+        chatId,
+        deps,
+        onSent: onReplySent,
+      }),
+    ],
+    { db, settings, agentSlug: 'customer_assist', ticket },
+  );
+  return {
+    system: buildCustomerAssistSystemPrompt(db, ticket),
+    messages: prependUserContext(
+      modelHistory,
+      buildCustomerAssistContextContent(db, { ticket, chatSnapshot }),
+    ),
+    tools,
+    chatId,
+    history: modelHistory,
+  };
+}
+
+async function previewTicketAssistPrompt({ db, userId, ticketId, sessionId, deps = {} } = {}) {
+  const findTicket = deps.findTicketById || require('../integrations/regos-crm').findTicketById;
+  const ticket = await findTicket(ticketId);
+  if (!ticket) {
+    throw new Error('TICKET_NOT_FOUND');
+  }
+  const loadSettings = deps.loadAiSettings || loadAiSettings;
+  const settings = loadSettings(db);
+  const session = getOrCreateTicketAssistSession(db, {
+    sessionId,
+    userId,
+    ticketId: ticket.id,
+  });
+  const assembled = await assembleTicketAssistPrompt({ db, ticket, session, settings, deps });
+  return {
+    system: assembled.system,
+    messages: assembled.messages,
+    tools: serializePreviewTools(assembled.tools),
+    settings: {
+      enabled: Boolean(settings.enabled),
+      test_mode: Boolean(settings.testMode),
+      provider: settings.provider || null,
+      model: resolveAgentModel(settings, 'customer_assist'),
+      history_limit: settings.historyLimit,
+    },
+    session_id: session.id,
+    ticket_id: ticket.id,
+    chat_id: assembled.chatId || null,
+  };
+}
+
 async function loadTicketAssistSession({ db, userId, ticketId, sessionId, reset = false, deps = {} } = {}) {
   const findTicket = deps.findTicketById || require('../integrations/regos-crm').findTicketById;
   const ticket = await findTicket(ticketId);
@@ -161,6 +253,7 @@ async function runTicketAssistAgent({
   message,
   files = [],
   deps = {},
+  onDelta,
 } = {}) {
   const text = String(message || '').trim();
   const uploads = Array.isArray(files) ? files : [];
@@ -202,59 +295,33 @@ async function runTicketAssistAgent({
 
     const run = deps.runAgent || runAgent;
     const provider = deps.provider || getProvider(settings.provider);
-    const chatId = ticket.chat_id != null ? String(ticket.chat_id).trim() : '';
-
-    let filesById = new Map();
-    let chatSnapshot = '';
-    if (chatId) {
-      const context = await loadCustomerAgentChatContext({
-        chatId,
-        historyLimit: settings.historyLimit,
-        ticket,
-        deps,
-      });
-      filesById = context.filesById || new Map();
-      chatSnapshot = formatTicketChatSnapshot(context.messages, filesById);
-    }
-
     let repliedToCustomer = false;
     let customerReply = null;
-    const tools = prepareAgentTools(
-      [
-        ...createCustomerTools({
-          db,
-          ticket,
-          chatId,
-          filesById,
-          deps: { ...deps, transcribeModel: settings.transcribeModel },
-        }),
-        createReplyToCustomerTool({
-          ticket,
-          chatId,
-          deps,
-          onSent: (reply) => {
-            repliedToCustomer = true;
-            customerReply = reply;
-          },
-        }),
-      ],
-      { db, settings, agentSlug: 'customer_assist', ticket },
-    );
+    const assembled = await assembleTicketAssistPrompt({
+      db,
+      ticket,
+      session,
+      settings,
+      deps,
+      history,
+      onReplySent: (reply) => {
+        repliedToCustomer = true;
+        customerReply = reply;
+      },
+    });
 
     const result = await run({
       provider,
       providerName: settings.provider,
       model: resolveAgentModel(settings, 'customer_assist'),
-      system: buildCustomerAssistSystemPrompt(db, ticket),
-      messages: prependUserContext(
-        history,
-        buildCustomerAssistContextContent(db, { ticket, chatSnapshot }),
-      ),
+      system: assembled.system,
+      messages: assembled.messages,
       promptCacheKey: buildPromptCacheKey('customer_assist', ticket.id),
-      tools,
+      tools: assembled.tools,
       reasoningEffort: settings.reasoningEffort,
-      hasVision: historyHasVisionParts(history),
-      hasAudio: historyHasAudioTranscript(history),
+      hasVision: historyHasVisionParts(assembled.history),
+      hasAudio: historyHasAudioTranscript(assembled.history),
+      onDelta,
     });
 
     const reply = truncateText(result.content) || 'Готово.';
@@ -281,6 +348,7 @@ module.exports = {
   createReplyToCustomerTool,
   formatTicketChatSnapshot,
   loadTicketAssistSession,
+  previewTicketAssistPrompt,
   runTicketAssistAgent,
   resetTicketAssistLocks,
 };

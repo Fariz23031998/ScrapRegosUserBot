@@ -64,6 +64,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
           query: queryUsed,
           limit: 8,
           categoryId: parsed.categoryId,
+          confirmedOnly: true,
         });
         const result = {
           query_used: queryUsed,
@@ -91,7 +92,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
         required: ['id'],
       },
       execute: async ({ id }) => {
-        const article = getKnowledgeArticle(db, id);
+        const article = getKnowledgeArticle(db, id, { confirmedOnly: true });
         return article || { ok: false, error: 'not_found' };
       },
     },
@@ -129,7 +130,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
         type: 'object',
         properties: {
           title: { type: 'string' },
-          body: { type: 'string' },
+          body: { type: 'string', description: 'Markdown article body (max 20000)' },
           tags: { type: 'string', description: 'Comma-separated tags' },
           category_id: {
             type: ['number', 'null'],
@@ -140,7 +141,10 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
       },
       execute: async ({ title, body, tags, category_id }) =>
         runWritable(() =>
-          createKnowledgeArticle(db, { title, body, tags, category_id }, { updatedBy: userId })
+          createKnowledgeArticle(db, { title, body, tags, category_id }, {
+            updatedBy: userId,
+            creator: userId != null ? String(userId) : null,
+          })
         ),
     },
     {
@@ -151,7 +155,7 @@ function createKnowledgeTools({ db, userId = null, write = false, deps = {} } = 
         properties: {
           id: { type: 'number' },
           title: { type: 'string' },
-          body: { type: 'string' },
+          body: { type: 'string', description: 'Markdown article body (max 20000)' },
           tags: { type: 'string' },
           category_id: {
             type: ['number', 'null'],

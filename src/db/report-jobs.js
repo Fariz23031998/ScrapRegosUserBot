@@ -1,8 +1,9 @@
 const { getBotUserById, getBotUserByTelegramId } = require('./bot-users-db');
 
-const REPORT_JOB_TTL_SECONDS = 24 * 60 * 60;
 const REPORT_JOB_TYPES = Object.freeze(['technician', 'commission', 'finance']);
 const IN_FLIGHT_STATUSES = Object.freeze(['pending', 'running']);
+const LIST_JOB_COLUMNS = `id, type, status, params_json, error_message,
+      created_by_type, created_by_telegram_id, created_by_user_id, created_at, updated_at`;
 
 function nowUnix() {
   return Math.floor(Date.now() / 1000);
@@ -57,17 +58,25 @@ function mapReportJobRow(row) {
   };
 }
 
-function presentReportJob(job) {
+function publicReportParams(params) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return {};
+  const { viewer, ...rest } = params;
+  return rest;
+}
+
+function presentReportJob(job, { includeResult = true } = {}) {
   if (!job) return null;
-  return {
+  const presented = {
     id: job.id,
     type: job.type,
     status: job.status,
+    params: publicReportParams(job.params),
     error_message: job.error_message,
-    result: job.result,
     created_at: job.created_at,
     updated_at: job.updated_at,
   };
+  if (includeResult) presented.result = job.result;
+  return presented;
 }
 
 function snapshotActor(db, actor) {
@@ -137,6 +146,35 @@ function actorOwnsReportJob(db, job, actor) {
   return false;
 }
 
+function actorOwnershipFilter(db, actor) {
+  if (!actor || actor.type === 'password') {
+    return { where: "created_by_type = 'password'", params: [] };
+  }
+  if (actor.type === 'telegram') {
+    const telegramId = positiveId(actor.telegramId);
+    if (telegramId == null) return { where: '0', params: [] };
+    return { where: 'created_by_telegram_id = ?', params: [telegramId] };
+  }
+  if (actor.type === 'user') {
+    const userId = positiveId(actor.userId);
+    const user = userId != null ? getBotUserById(db, userId) : null;
+    const telegramId = positiveId(user?.telegram_id);
+    const clauses = [];
+    const params = [];
+    if (userId != null) {
+      clauses.push('created_by_user_id = ?');
+      params.push(userId);
+    }
+    if (telegramId != null) {
+      clauses.push('created_by_telegram_id = ?');
+      params.push(telegramId);
+    }
+    if (!clauses.length) return { where: '0', params: [] };
+    return { where: `(${clauses.join(' OR ')})`, params };
+  }
+  return { where: '0', params: [] };
+}
+
 function resolveActorTelegramId(job) {
   return positiveId(job?.created_by_telegram_id);
 }
@@ -178,6 +216,35 @@ function listUnfinishedReportJobs(db) {
     )
     .all()
     .map(mapReportJobRow);
+}
+
+function listReportJobsForActor(db, actor, { offset = 0, limit = 25, type } = {}) {
+  ensureReportJobTables(db);
+  const ownership = actorOwnershipFilter(db, actor);
+  const clauses = [ownership.where];
+  const params = [...ownership.params];
+  if (REPORT_JOB_TYPES.includes(type)) {
+    clauses.push('type = ?');
+    params.push(type);
+  }
+  const where = clauses.join(' AND ');
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 25));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const totalRow = db.prepare(`SELECT COUNT(*) AS total FROM report_jobs WHERE ${where}`).get(...params);
+  const jobs = db
+    .prepare(
+      `SELECT ${LIST_JOB_COLUMNS}
+       FROM report_jobs
+       WHERE ${where}
+       ORDER BY id DESC
+       LIMIT ? OFFSET ?`
+    )
+    .all(...params, safeLimit, safeOffset)
+    .map(mapReportJobRow);
+  return {
+    jobs,
+    total: Number(totalRow?.total) || 0,
+  };
 }
 
 function createReportJob(db, { type, paramsJson, actor }) {
@@ -235,14 +302,15 @@ function resetStuckRunningReportJobs(db) {
   ).run(nowUnix());
 }
 
-function deleteExpiredReportJobs(db, { now = nowUnix(), ttlSeconds = REPORT_JOB_TTL_SECONDS } = {}) {
+function deleteReportJob(db, jobId) {
   ensureReportJobTables(db);
-  const cutoff = Number(now) - Number(ttlSeconds);
-  db.prepare('DELETE FROM report_jobs WHERE created_at < ?').run(cutoff);
+  const id = Number(jobId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  const result = db.prepare('DELETE FROM report_jobs WHERE id = ?').run(id);
+  return Number(result.changes) > 0;
 }
 
 module.exports = {
-  REPORT_JOB_TTL_SECONDS,
   REPORT_JOB_TYPES,
   IN_FLIGHT_STATUSES,
   ensureReportJobTables,
@@ -251,14 +319,16 @@ module.exports = {
   actorKeyFromJob,
   actorOwnsReportJob,
   resolveActorTelegramId,
+  publicReportParams,
   presentReportJob,
   getReportJob,
   findInFlightReportJob,
   listUnfinishedReportJobs,
+  listReportJobsForActor,
   createReportJob,
   markReportJobRunning,
   completeReportJob,
   failReportJob,
   resetStuckRunningReportJobs,
-  deleteExpiredReportJobs,
+  deleteReportJob,
 };

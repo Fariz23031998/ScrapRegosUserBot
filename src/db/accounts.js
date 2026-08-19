@@ -82,6 +82,16 @@ function countPaymentTypesForAccount(db, accountId) {
   return Number(row?.n) || 0;
 }
 
+function countAccountPaymentsForAccount(db, accountId) {
+  if (!tableExists(db, 'account_payments')) return 0;
+  const row = db.prepare('SELECT COUNT(*) AS n FROM account_payments WHERE account_id = ?').get(accountId);
+  return Number(row?.n) || 0;
+}
+
+function signedAmountSql(alias, currencyPlaceholder) {
+  return `CASE WHEN ${currencyPlaceholder} = 'USD' THEN ${alias}.amount_usd ELSE ${alias}.amount_uzs END`;
+}
+
 function recalculateAccountValue(db, id) {
   ensureAccountTables(db);
   const account = getAccount(db, id);
@@ -92,8 +102,8 @@ function recalculateAccountValue(db, id) {
       .prepare(
         `SELECT COALESCE(SUM(
            CASE
-             WHEN p.kind = 'refund' THEN -CASE WHEN ? = 'USD' THEN p.amount_usd ELSE p.amount_uzs END
-             ELSE CASE WHEN ? = 'USD' THEN p.amount_usd ELSE p.amount_uzs END
+             WHEN p.kind = 'refund' THEN -${signedAmountSql('p', '?')}
+             ELSE ${signedAmountSql('p', '?')}
            END
          ), 0) AS value
          FROM task_payments p
@@ -101,6 +111,21 @@ function recalculateAccountValue(db, id) {
       )
       .get(account.currency, account.currency, account.id);
     value = roundMoney(Number(row?.value) || 0);
+  }
+  if (tableExists(db, 'account_payments')) {
+    const row = db
+      .prepare(
+        `SELECT COALESCE(SUM(
+           CASE
+             WHEN p.direction = 'out' THEN -${signedAmountSql('p', '?')}
+             ELSE ${signedAmountSql('p', '?')}
+           END
+         ), 0) AS value
+         FROM account_payments p
+         WHERE p.account_id = ?`
+      )
+      .get(account.currency, account.currency, account.id);
+    value = roundMoney(value + (Number(row?.value) || 0));
   }
   db.prepare(`UPDATE accounts SET value = ?, updated_at = datetime('now') WHERE id = ?`).run(
     value,
@@ -136,6 +161,7 @@ function deleteAccount(db, id) {
   const current = getAccount(db, id);
   if (!current) return false;
   if (countPaymentTypesForAccount(db, current.id) > 0) throw new Error('ACCOUNT_IN_USE');
+  if (countAccountPaymentsForAccount(db, current.id) > 0) throw new Error('ACCOUNT_IN_USE');
   db.prepare('DELETE FROM accounts WHERE id = ?').run(current.id);
   return true;
 }

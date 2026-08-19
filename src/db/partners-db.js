@@ -161,6 +161,8 @@ function migrateSchema(db) {
   ensureAppSettingsTable(db);
   const { ensureKnowledgeTables } = require('./knowledge-articles');
   ensureKnowledgeTables(db);
+  const { ensureOpsAgentSessionTables } = require('./ops-agent-sessions');
+  ensureOpsAgentSessionTables(db);
   const { ensureAiPromptsTable } = require('./ai-prompts');
   ensureAiPromptsTable(db);
   const { ensureAiPromptVariablesTable } = require('./ai-prompt-variables');
@@ -191,6 +193,8 @@ function migrateSchema(db) {
   ensureLocationTables(db);
   const { ensureAccountTables } = require('./accounts');
   ensureAccountTables(db);
+  const { ensureAccountPaymentTables } = require('./account-payments');
+  ensureAccountPaymentTables(db);
   const { ensurePaymentTypeTables } = require('./payment-types');
   ensurePaymentTypeTables(db);
 }

@@ -1424,7 +1424,7 @@ export default function TicketDetailPage() {
         accepted.push({
           id: `pending-${pendingSeqRef.current}`,
           file,
-          previewUrl: isChatImage(file) ? URL.createObjectURL(file) : "",
+          previewUrl: isChatImage(file) || isChatAudio(file) ? URL.createObjectURL(file) : "",
         });
       }
       if (!accepted.length) return prev;
@@ -1780,6 +1780,7 @@ export default function TicketDetailPage() {
           name: item.file.name,
           extension: fileExtension(item.file.name),
           data: await fileToBase64(item.file),
+          mime_type: item.file.type || undefined,
         })),
       );
       await sendTicketMessage(ticketId, { text, files });
@@ -1983,6 +1984,8 @@ export default function TicketDetailPage() {
               placeholder="Введите сообщение или перетащите файл…"
               disabled={!chatId}
               busy={sendBusy}
+              allowRecord
+              onRecordedFile={(file) => addPendingFiles([file])}
               onPaste={(event) => {
                 const files = [...(event.clipboardData?.files || [])].filter((file) => isChatImage(file));
                 if (!files.length) return;
@@ -2046,8 +2049,11 @@ export default function TicketDetailPage() {
                 <div className="ticket-chat__pending">
                   {pendingFiles.map((item) => (
                     <div key={item.id} className="ticket-chat__pending-item">
-                      {item.previewUrl ? (
+                      {item.previewUrl && isChatImage(item.file) ? (
                         <img className="ticket-chat__pending-thumb" src={item.previewUrl} alt="" />
+                      ) : null}
+                      {item.previewUrl && isChatAudio(item.file) ? (
+                        <audio className="ticket-chat__pending-audio" controls preload="metadata" src={item.previewUrl} />
                       ) : null}
                       <span className="ticket-chat__pending-name" title={item.file.name}>
                         {item.file.name}

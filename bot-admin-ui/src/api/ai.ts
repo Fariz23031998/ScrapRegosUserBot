@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, streamAgentChat, type AgentChatStreamHandlers } from "./client";
 import type {
   AiGroupTopic,
   AiPrompt,
@@ -16,6 +16,7 @@ import type {
   KnowledgeChatMessage,
   TestAgentSessionSummary,
   TicketAiAssistSession,
+  AgentPromptPreview,
 } from "../lib/types";
 
 export function getAiSettings() {
@@ -233,6 +234,18 @@ export function unlockKnowledgeArticle(id: number) {
   });
 }
 
+export function confirmKnowledgeArticle(id: number) {
+  return apiFetch<{ article: KnowledgeArticle }>(`/bot-admin/api/knowledge/articles/${id}/confirm`, {
+    method: "POST",
+  });
+}
+
+export function unconfirmKnowledgeArticle(id: number) {
+  return apiFetch<{ article: KnowledgeArticle }>(`/bot-admin/api/knowledge/articles/${id}/unconfirm`, {
+    method: "POST",
+  });
+}
+
 export function listKnowledgeCategories() {
   return apiFetch<{ categories: KnowledgeCategory[] }>("/bot-admin/api/knowledge/categories");
 }
@@ -266,17 +279,49 @@ export function resetKbSession(payload?: { session_id?: number }) {
   });
 }
 
-export function sendKbChat(payload: {
-  session_id?: number;
-  message: string;
-  files?: Array<{ name: string; extension: string; data: string }>;
-}) {
-  return apiFetch<{ session_id: number; reply: string; messages: KnowledgeChatMessage[] }>(
+export function sendKbChat(
+  payload: {
+    session_id?: number;
+    message: string;
+    files?: Array<{ name: string; extension: string; data: string }>;
+  },
+  handlers?: AgentChatStreamHandlers,
+) {
+  return streamAgentChat<{ session_id: number; reply: string; messages: KnowledgeChatMessage[] }>(
     "/bot-admin/api/ai/kb-chat",
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    },
+    payload,
+    handlers,
+  );
+}
+
+export function getOpsSession() {
+  return apiFetch<{ session_id: number; messages: KnowledgeChatMessage[] }>("/bot-admin/api/ai/ops-session");
+}
+
+export function getOpsAgentPrompt(sessionId?: number) {
+  const query = sessionId ? `?session_id=${sessionId}` : "";
+  return apiFetch<AgentPromptPreview>(`/bot-admin/api/ai/ops-prompt${query}`);
+}
+
+export function resetOpsSession(payload?: { session_id?: number }) {
+  return apiFetch<{ session_id: number; messages: KnowledgeChatMessage[] }>("/bot-admin/api/ai/ops-session", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, reset: true }),
+  });
+}
+
+export function sendOpsChat(
+  payload: {
+    session_id?: number;
+    message: string;
+    files?: Array<{ name: string; extension: string; data: string }>;
+  },
+  handlers?: AgentChatStreamHandlers,
+) {
+  return streamAgentChat<{ session_id: number; reply: string; messages: KnowledgeChatMessage[] }>(
+    "/bot-admin/api/ai/ops-chat",
+    payload,
+    handlers,
   );
 }
 
@@ -297,17 +342,17 @@ export function saveCustomerTestSession(payload: {
   });
 }
 
-export function sendCustomerTestChat(payload: {
-  session_id?: number;
-  message: string;
-  files?: Array<{ name: string; extension: string; data: string }>;
-  ticket_id?: number | string | null;
-  client_phone?: string | null;
-}) {
-  return apiFetch<CustomerTestSession>("/bot-admin/api/ai/customer-test-chat", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export function sendCustomerTestChat(
+  payload: {
+    session_id?: number;
+    message: string;
+    files?: Array<{ name: string; extension: string; data: string }>;
+    ticket_id?: number | string | null;
+    client_phone?: string | null;
+  },
+  handlers?: AgentChatStreamHandlers,
+) {
+  return streamAgentChat<CustomerTestSession>("/bot-admin/api/ai/customer-test-chat", payload, handlers);
 }
 
 export function getEmployeeTestSession(sessionId?: number) {
@@ -327,17 +372,17 @@ export function saveEmployeeTestSession(payload: {
   });
 }
 
-export function sendEmployeeTestChat(payload: {
-  session_id?: number;
-  message: string;
-  files?: Array<{ name: string; extension: string; data: string }>;
-  ticket_id?: number | string | null;
-  client_phone?: string | null;
-}) {
-  return apiFetch<CustomerTestSession>("/bot-admin/api/ai/employee-test-chat", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export function sendEmployeeTestChat(
+  payload: {
+    session_id?: number;
+    message: string;
+    files?: Array<{ name: string; extension: string; data: string }>;
+    ticket_id?: number | string | null;
+    client_phone?: string | null;
+  },
+  handlers?: AgentChatStreamHandlers,
+) {
+  return streamAgentChat<CustomerTestSession>("/bot-admin/api/ai/employee-test-chat", payload, handlers);
 }
 
 export function listTestAgentSessions(agentKind: "customer" | "employee", allUsers = false) {
@@ -365,6 +410,11 @@ export function getTicketAiAssistSession(ticketId: number) {
   return apiFetch<TicketAiAssistSession>(`/bot-admin/api/tickets/${ticketId}/ai-assist`);
 }
 
+export function getTicketAiAssistPrompt(ticketId: number, sessionId?: number) {
+  const query = sessionId ? `?session_id=${sessionId}` : "";
+  return apiFetch<AgentPromptPreview>(`/bot-admin/api/tickets/${ticketId}/ai-assist-prompt${query}`);
+}
+
 export function resetTicketAiAssistSession(ticketId: number, payload?: { session_id?: number }) {
   return apiFetch<TicketAiAssistSession>(`/bot-admin/api/tickets/${ticketId}/ai-assist`, {
     method: "POST",
@@ -379,9 +429,11 @@ export function sendTicketAiAssistChat(
     message: string;
     files?: Array<{ name: string; extension: string; data: string }>;
   },
+  handlers?: AgentChatStreamHandlers,
 ) {
-  return apiFetch<TicketAiAssistSession>(`/bot-admin/api/tickets/${ticketId}/ai-assist-chat`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return streamAgentChat<TicketAiAssistSession>(
+    `/bot-admin/api/tickets/${ticketId}/ai-assist-chat`,
+    payload,
+    handlers,
+  );
 }

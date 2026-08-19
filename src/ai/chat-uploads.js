@@ -13,7 +13,8 @@ const MAX_CHAT_FILES = 5;
 const MAX_CHAT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_CHAT_FILE_NAME = 200;
 const MAX_CHAT_FILE_EXTENSION = 10;
-const CHAT_MESSAGE_JSON_LIMIT = '12mb';
+// 10MB file + base64 (~4/3) + JSON envelope. Default express.json() is 100kb.
+const CHAT_MESSAGE_JSON_LIMIT = '16mb';
 
 const MIME_BY_EXTENSION = {
   jpg: 'image/jpeg',
@@ -25,10 +26,12 @@ const MIME_BY_EXTENSION = {
   svg: 'image/svg+xml',
   mp3: 'audio/mpeg',
   ogg: 'audio/ogg',
+  oga: 'audio/ogg',
   wav: 'audio/wav',
   m4a: 'audio/mp4',
   aac: 'audio/aac',
   opus: 'audio/opus',
+  weba: 'audio/webm',
   mp4: 'video/mp4',
   webm: 'video/webm',
   mov: 'video/quicktime',

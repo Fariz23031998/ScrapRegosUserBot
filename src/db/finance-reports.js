@@ -1,6 +1,6 @@
 const { ensureLocationTables, getLocation } = require('./locations');
 const { computeLineMoney, roundMoney } = require('./money');
-const { loadPostedTaskReportContext, queryInChunks, tableExists } = require('./staff-reports');
+const { loadPostedTaskReportContext, queryInChunks, tableExists, isRepairDeviceLine } = require('./staff-reports');
 const { ensureTaskPaymentTables } = require('./task-payments');
 const { ensureTaskRefundTables } = require('./task-refunds');
 
@@ -188,6 +188,7 @@ function buildFinanceReport(db, { fromUnix = null, toUnix = null, viewer = null 
   for (const line of lines) {
     const task = taskById.get(line.task_id);
     if (!task) continue;
+    if (isRepairDeviceLine(task, line)) continue;
     const money = computeLineMoney(line, rate);
     const row = ensureFinanceRow(byLocation, db, task.location_id);
     addMoney(row, 'revenue', money.price_uzs, money.price_usd);

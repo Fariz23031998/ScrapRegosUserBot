@@ -32,6 +32,7 @@ const {
   getSessionActor,
   getSessionPermissions,
   actorHasPermission,
+  actorHasAnyPermission,
   setSessionCookie,
   clearSessionCookie,
   requireAdminAuth,
@@ -163,9 +164,20 @@ function aiCredentialErrorMessage(error) {
   }
   return 'AI не настроен. Укажите API-ключ OpenAI в настройках или OPENAI_API_KEY.';
 }
+
+function mapAgentChatError(error, fallback) {
+  if (error?.message === 'EMPTY_MESSAGE') {
+    return 'Введите текст сообщения или прикрепите файл.';
+  }
+  if (isAiCredentialError(error)) return aiCredentialErrorMessage(error);
+  return fallback;
+}
+
+const { respondAgentChat } = require('../http/agent-chat-sse');
 const { notifyGroupTopic } = require('../ai/tools/notify-group');
 const { listToolSchemas, runAgentToolTest } = require('../ai/tools/test-runner');
 const { runKbAgent } = require('../ai/kb-agent');
+const { runOpsAgent, previewOpsAgentPrompt } = require('../ai/ops-agent');
 const { previewCustomerAgentPrompt } = require('../ai/customer-agent');
 const { loadCustomerTestSession, runCustomerTestAgent } = require('../ai/customer-test-agent');
 const { loadEmployeeTestSession, runEmployeeTestAgent } = require('../ai/employee-test-agent');
@@ -174,8 +186,9 @@ const {
   deleteCustomerTestSession,
   clearCustomerTestSessions,
 } = require('../db/customer-agent-sessions');
-const { loadTicketAssistSession, runTicketAssistAgent } = require('../ai/customer-assist-agent');
+const { loadTicketAssistSession, runTicketAssistAgent, previewTicketAssistPrompt } = require('../ai/customer-assist-agent');
 const { CHAT_MESSAGE_JSON_LIMIT, parseChatUploadFiles } = require('../ai/chat-uploads');
+const { payloadTooLargeHandler } = require('../http/body-parser');
 const {
   listKnowledgeArticles,
   getKnowledgeArticle,
@@ -183,6 +196,7 @@ const {
   updateKnowledgeArticle,
   deleteKnowledgeArticle,
   setKnowledgeArticleLocked,
+  setKnowledgeArticleConfirmed,
   getOrCreateKbSession,
   listKbSessionMessages,
   clearKbSessionHistory,
@@ -192,6 +206,12 @@ const {
   updateKnowledgeCategory,
   deleteKnowledgeCategory,
 } = require('../db/knowledge-articles');
+const {
+  getOrCreateOpsSession,
+  listOpsSessionMessages,
+  clearOpsSessionHistory,
+} = require('../db/ops-agent-sessions');
+const { getLocationViewer } = require('../db/locations');
 const {
   listPromptTypes,
   getPrompt,
@@ -221,8 +241,10 @@ const {
 } = require('../db/ticket-summaries');
 const { resolveTicketClientId } = require('../ai/ticket-period');
 const { createKnowledgeMcpRouter } = require('../mcp/knowledge-mcp');
+const { createOpsMcpRouter } = require('../mcp/ops-mcp');
 const { registerTaskRoutes } = require('./tasks-admin');
 const { registerReportRoutes } = require('./reports-admin');
+const { registerFinancesRoutes } = require('./finances-admin');
 const { getTicketRecordingUrl } = require('./ticket-recording');
 const { buildDurationSummary } = require('./ticket-duration');
 const {
@@ -893,7 +915,9 @@ function createBotAdminRouter(db) {
   });
 
   router.use(createKnowledgeMcpRouter(db));
+  router.use(createOpsMcpRouter(db));
   registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails });
+  registerFinancesRoutes(router, db, { auditAdminChange, buildAuditDetails });
   registerReportRoutes(router, db);
 
   router.get('/auth/telegram', (req, res) => {
@@ -973,8 +997,8 @@ function createBotAdminRouter(db) {
       return res.status(403).json({ message: 'Доступ запрещён. Нет права на открытие админ-панели.' });
     }
 
-    setSessionCookie(res, creds, { type: 'telegram', telegramId });
-    return res.json({ ok: true });
+    const token = setSessionCookie(res, creds, { type: 'telegram', telegramId });
+    return res.json({ ok: true, token });
   });
 
   router.get('/api/session', (req, res) => {
@@ -1127,14 +1151,14 @@ function createBotAdminRouter(db) {
     const password = String(req.body?.password || '');
 
     if (login === creds.login && password === creds.password) {
-      setSessionCookie(res, creds, { type: 'password' });
-      return res.json({ ok: true });
+      const token = setSessionCookie(res, creds, { type: 'password' });
+      return res.json({ ok: true, token });
     }
 
     const employee = findEmployeeByAdminLogin(db, login);
     if (employee && verifyAdminPassword(password, employee.password_hash)) {
-      setSessionCookie(res, creds, { type: 'user', userId: employee.id });
-      return res.json({ ok: true });
+      const token = setSessionCookie(res, creds, { type: 'user', userId: employee.id });
+      return res.json({ ok: true, token });
     }
 
     return res.status(401).json({ message: 'Неверный логин или пароль.' });
@@ -2374,6 +2398,14 @@ function createBotAdminRouter(db) {
     return null;
   }
 
+  function resolveKnowledgeCreator(req) {
+    const userId = resolveKnowledgeActorUserId(req);
+    if (userId != null) return String(userId);
+    const actor = getSessionActor(req);
+    if (actor?.type === 'password') return 'admin';
+    return null;
+  }
+
   function knowledgeArticleLockMessage() {
     return 'Статья заблокирована. Изменение и удаление недоступны.';
   }
@@ -2534,7 +2566,10 @@ function createBotAdminRouter(db) {
       const article = createKnowledgeArticle(
         db,
         articleFieldsFromBody(req.body),
-        { updatedBy: resolveKnowledgeActorUserId(req) }
+        {
+          updatedBy: resolveKnowledgeActorUserId(req),
+          creator: resolveKnowledgeCreator(req),
+        }
       );
       auditAdminChange(db, req, {
         entityType: 'knowledge_article',
@@ -2625,6 +2660,44 @@ function createBotAdminRouter(db) {
     }
   });
 
+  router.post('/api/knowledge/articles/:id/confirm', requireRight(db, 'knowledge_confirm'), (req, res) => {
+    try {
+      const before = getKnowledgeArticle(db, req.params.id);
+      const article = setKnowledgeArticleConfirmed(db, req.params.id, true, {
+        updatedBy: resolveKnowledgeActorUserId(req),
+      });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_article',
+        entityId: article.id,
+        action: 'confirm',
+        summary: `Подтверждена статья #${article.id}`,
+        details: buildAuditDetails({ before, after: article }),
+      });
+      return res.json({ article });
+    } catch (error) {
+      return respondKnowledgeWriteError(res, error, 'Не удалось подтвердить статью.');
+    }
+  });
+
+  router.post('/api/knowledge/articles/:id/unconfirm', requireRight(db, 'knowledge_confirm'), (req, res) => {
+    try {
+      const before = getKnowledgeArticle(db, req.params.id);
+      const article = setKnowledgeArticleConfirmed(db, req.params.id, false, {
+        updatedBy: resolveKnowledgeActorUserId(req),
+      });
+      auditAdminChange(db, req, {
+        entityType: 'knowledge_article',
+        entityId: article.id,
+        action: 'unconfirm',
+        summary: `Снято подтверждение со статьи #${article.id}`,
+        details: buildAuditDetails({ before, after: article }),
+      });
+      return res.json({ article });
+    } catch (error) {
+      return respondKnowledgeWriteError(res, error, 'Не удалось снять подтверждение статьи.');
+    }
+  });
+
   router.delete('/api/knowledge/articles/:id', requireRight(db, 'knowledge_edit'), (req, res) => {
     try {
       const before = getKnowledgeArticle(db, req.params.id);
@@ -2693,15 +2766,21 @@ function createBotAdminRouter(db) {
       if (!message && files.length === 0) {
         return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
       }
-      const result = await runKbAgent({
-        db,
-        userId: resolveKnowledgeActorUserId(req),
-        sessionId: req.body?.session_id,
-        message,
-        files,
-        canWrite: actorHasPermission(db, getSessionActor(req), 'knowledge_edit'),
-      });
-      return res.json(result);
+      return respondAgentChat(
+        req,
+        res,
+        ({ onDelta }) =>
+          runKbAgent({
+            db,
+            userId: resolveKnowledgeActorUserId(req),
+            sessionId: req.body?.session_id,
+            message,
+            files,
+            canWrite: actorHasPermission(db, getSessionActor(req), 'knowledge_edit'),
+            onDelta,
+          }),
+        { mapError: (error) => mapAgentChatError(error, 'Не удалось получить ответ агента.') }
+      );
     } catch (error) {
       if (error.message === 'EMPTY_MESSAGE') {
         return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
@@ -2710,6 +2789,129 @@ function createBotAdminRouter(db) {
         return res.status(503).json({ message: aiCredentialErrorMessage(error) });
       }
       console.error('KB chat error:', error);
+      return res.status(500).json({ message: 'Не удалось получить ответ агента.' });
+    }
+  });
+
+  const OPS_READ_RIGHTS = ['tasks_read', 'devices_read', 'services_read'];
+  const OPS_WRITE_RIGHTS = [
+    'tasks_create',
+    'tasks_edit',
+    'tasks_delete',
+    'tasks_post',
+    'tasks_unpost',
+    'tasks_payment_create',
+    'tasks_payment_delete',
+    'devices_create',
+    'devices_edit',
+    'devices_delete',
+    'services_create',
+    'services_edit',
+    'services_delete',
+  ];
+
+  router.get('/api/ai/ops-session', requireAnyRight(db, OPS_READ_RIGHTS), (req, res) => {
+    try {
+      const session = getOrCreateOpsSession(db, { userId: resolveKnowledgeActorUserId(req) });
+      return res.json({
+        session_id: session.id,
+        messages: listOpsSessionMessages(db, session.id),
+      });
+    } catch (error) {
+      console.error('Load ops session error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить чат агента задач.' });
+    }
+  });
+
+  router.post('/api/ai/ops-session', requireAnyRight(db, OPS_READ_RIGHTS), express.json(), (req, res) => {
+    try {
+      const userId = resolveKnowledgeActorUserId(req);
+      const session = Boolean(req.body?.reset)
+        ? clearOpsSessionHistory(db, { sessionId: req.body?.session_id, userId })
+        : getOrCreateOpsSession(db, { sessionId: req.body?.session_id, userId });
+      return res.json({
+        session_id: session.id,
+        messages: listOpsSessionMessages(db, session.id),
+      });
+    } catch (error) {
+      if (error.message === 'FORBIDDEN') {
+        return res.status(403).json({ message: 'Нет доступа к этому чату.' });
+      }
+      console.error('Update ops session error:', error);
+      return res.status(500).json({ message: 'Не удалось обновить чат агента задач.' });
+    }
+  });
+
+  router.get(
+    '/api/ai/ops-prompt',
+    requireRight(db, 'tickets_ai_prompt'),
+    requireAnyRight(db, OPS_READ_RIGHTS),
+    (req, res) => {
+      try {
+        const actor = getSessionActor(req);
+        const preview = previewOpsAgentPrompt({
+          db,
+          userId: resolveKnowledgeActorUserId(req),
+          sessionId: req.query.session_id,
+          write: actorHasAnyPermission(db, actor, OPS_WRITE_RIGHTS),
+          viewer: getLocationViewer(db, actor),
+          permissions: getSessionPermissions(db, actor),
+        });
+        return res.json(preview);
+      } catch (error) {
+        if (error.message === 'FORBIDDEN') {
+          return res.status(403).json({ message: 'Нет доступа к этому чату.' });
+        }
+        console.error('Get ops AI prompt error:', error);
+        return res.status(500).json({ message: 'Не удалось загрузить промпт ИИ.' });
+      }
+    }
+  );
+
+  router.post(
+    '/api/ai/ops-chat',
+    requireAnyRight(db, OPS_READ_RIGHTS),
+    express.json({ limit: CHAT_MESSAGE_JSON_LIMIT }),
+    async (req, res) => {
+    try {
+      let files;
+      try {
+        files = parseChatUploadFiles(req.body?.files);
+      } catch (parseError) {
+        return res.status(parseError.status || 400).json({
+          message: parseError.message || 'Некорректный файл.',
+        });
+      }
+      const message = String(req.body?.message || '').trim();
+      if (!message && files.length === 0) {
+        return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+      }
+      const actor = getSessionActor(req);
+      return respondAgentChat(
+        req,
+        res,
+        ({ onDelta }) =>
+          runOpsAgent({
+            db,
+            userId: resolveKnowledgeActorUserId(req),
+            sessionId: req.body?.session_id,
+            message,
+            files,
+            write: actorHasAnyPermission(db, actor, OPS_WRITE_RIGHTS),
+            viewer: getLocationViewer(db, actor),
+            permissions: getSessionPermissions(db, actor),
+            onDelta,
+          }),
+        { mapError: (error) => mapAgentChatError(error, 'Не удалось получить ответ агента.') }
+      );
+    } catch (error) {
+      if (error.message === 'EMPTY_MESSAGE') {
+        return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
+      }
+      if (isAiCredentialError(error)) {
+        return res.status(503).json({ message: aiCredentialErrorMessage(error) });
+      }
+      console.error('Ops chat error:', error);
       return res.status(500).json({ message: 'Не удалось получить ответ агента.' });
     }
   });
@@ -2750,6 +2952,16 @@ function createBotAdminRouter(db) {
     }
     console.error('Customer test agent error:', error);
     return res.status(500).json({ message: 'Не удалось получить ответ агента поддержки.' });
+  }
+
+  function mapCustomerTestChatError(error) {
+    if (error.message === 'EMPTY_MESSAGE') return 'Введите текст сообщения или прикрепите файл.';
+    if (error.message === 'TICKET_NOT_FOUND') return 'Тикет не найден.';
+    if (error.message === 'SESSION_NOT_FOUND') return 'Сессия не найдена.';
+    if (error.message === 'SESSION_FORBIDDEN') return 'Нет доступа к этой тестовой сессии.';
+    if (error.message === 'SESSION_BUSY') return 'Агент ещё отвечает. Подождите.';
+    if (error instanceof RegosCrmError) return error.message;
+    return mapAgentChatError(error, 'Не удалось получить ответ агента поддержки.');
   }
 
   function canSeeAllTestHistory(req) {
@@ -2858,17 +3070,23 @@ function createBotAdminRouter(db) {
       if (!message && files.length === 0) {
         return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
       }
-      const result = await runCustomerTestAgent({
-        db,
-        userId: resolveKnowledgeActorUserId(req),
-        sessionId: req.body?.session_id,
-        message,
-        files,
-        ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
-        clientPhone: parseOptionalTestPhone(req.body?.client_phone),
-        allowAnyUser: canSeeAllTestHistory(req),
-      });
-      return res.json(result);
+      return respondAgentChat(
+        req,
+        res,
+        ({ onDelta }) =>
+          runCustomerTestAgent({
+            db,
+            userId: resolveKnowledgeActorUserId(req),
+            sessionId: req.body?.session_id,
+            message,
+            files,
+            ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
+            clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+            allowAnyUser: canSeeAllTestHistory(req),
+            onDelta,
+          }),
+        { mapError: mapCustomerTestChatError }
+      );
     } catch (error) {
       return sendCustomerTestError(res, error);
     }
@@ -2924,17 +3142,23 @@ function createBotAdminRouter(db) {
         if (!message && files.length === 0) {
           return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
         }
-        const result = await runEmployeeTestAgent({
-          db,
-          userId: resolveKnowledgeActorUserId(req),
-          sessionId: req.body?.session_id,
-          message,
-          files,
-          ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
-          clientPhone: parseOptionalTestPhone(req.body?.client_phone),
-          allowAnyUser: canSeeAllTestHistory(req),
-        });
-        return res.json(result);
+        return respondAgentChat(
+          req,
+          res,
+          ({ onDelta }) =>
+            runEmployeeTestAgent({
+              db,
+              userId: resolveKnowledgeActorUserId(req),
+              sessionId: req.body?.session_id,
+              message,
+              files,
+              ticketId: parseOptionalTestTicketId(req.body?.ticket_id),
+              clientPhone: parseOptionalTestPhone(req.body?.client_phone),
+              allowAnyUser: canSeeAllTestHistory(req),
+              onDelta,
+            }),
+          { mapError: mapCustomerTestChatError }
+        );
       } catch (error) {
         return sendCustomerTestError(res, error);
       }
@@ -3039,6 +3263,27 @@ function createBotAdminRouter(db) {
     }
   });
 
+  router.get('/api/tickets/:id/ai-assist-prompt', requireRight(db, 'tickets_ai_prompt'), async (req, res) => {
+    try {
+      const preview = await previewTicketAssistPrompt({
+        db,
+        userId: resolveKnowledgeActorUserId(req),
+        ticketId: req.params.id,
+        sessionId: req.query.session_id,
+      });
+      return res.json(preview);
+    } catch (error) {
+      if (error.message === 'TICKET_NOT_FOUND' || error.message === 'INVALID_TICKET_ID') {
+        return res.status(404).json({ message: 'Тикет не найден.' });
+      }
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      console.error('Get ticket assist AI prompt error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить промпт ИИ.' });
+    }
+  });
+
   async function resolveSummaryTicketContext(ticketId) {
     try {
       return await findTicketById(ticketId);
@@ -3132,6 +3377,14 @@ function createBotAdminRouter(db) {
     return res.status(500).json({ message: 'Не удалось получить ответ агента поддержки.' });
   }
 
+  function mapTicketAssistChatError(error) {
+    if (error.message === 'EMPTY_MESSAGE') return 'Введите текст сообщения или прикрепите файл.';
+    if (error.message === 'TICKET_NOT_FOUND' || error.message === 'INVALID_TICKET_ID') return 'Тикет не найден.';
+    if (error.message === 'SESSION_BUSY') return 'Агент ещё отвечает. Подождите.';
+    if (error instanceof RegosCrmError) return error.message;
+    return mapAgentChatError(error, 'Не удалось получить ответ агента поддержки.');
+  }
+
   router.get('/api/tickets/:id/ai-assist', requireRight(db, 'tickets_read'), async (req, res) => {
     try {
       const result = await loadTicketAssistSession({
@@ -3179,15 +3432,21 @@ function createBotAdminRouter(db) {
         if (!message && files.length === 0) {
           return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
         }
-        const result = await runTicketAssistAgent({
-          db,
-          userId: resolveKnowledgeActorUserId(req),
-          ticketId: req.params.id,
-          sessionId: req.body?.session_id,
-          message,
-          files,
-        });
-        return res.json(result);
+        return respondAgentChat(
+          req,
+          res,
+          ({ onDelta }) =>
+            runTicketAssistAgent({
+              db,
+              userId: resolveKnowledgeActorUserId(req),
+              ticketId: req.params.id,
+              sessionId: req.body?.session_id,
+              message,
+              files,
+              onDelta,
+            }),
+          { mapError: mapTicketAssistChatError }
+        );
       } catch (error) {
         return sendTicketAssistError(res, error);
       }
@@ -4780,11 +5039,13 @@ function createBotAdminRouter(db) {
       const suffix = req.originalUrl.includes('?') ? `?${query}` : '';
       return res.redirect(`${req.baseUrl}/${suffix}`);
     }
-    if (!isAuthenticated(req)) {
-      return res.redirect('/bot-admin/login');
-    }
+    // React SPA enforces auth client-side (and via APIs). Do not 302 to /login —
+    // Telegram Mini Apps break on that redirect (initData + cookies).
     if (reactUiReady) {
       return sendBotAdminReactUiIndex(res);
+    }
+    if (!isAuthenticated(req)) {
+      return res.redirect('/bot-admin/login');
     }
     const actor = getSessionActor(req);
     const permissions = getSessionPermissions(db, actor);
@@ -4810,6 +5071,8 @@ function createBotAdminRouter(db) {
   } else {
     router.use(requireAdminAuth, express.static(publicDir, { index: false }));
   }
+
+  router.use(payloadTooLargeHandler);
 
   return router;
 }

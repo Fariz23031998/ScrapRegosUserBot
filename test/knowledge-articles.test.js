@@ -25,6 +25,7 @@ const {
   formatKnowledgeCategoriesForTools,
   knowledgeCategoryContext,
   setKnowledgeArticleLocked,
+  setKnowledgeArticleConfirmed,
   updateKnowledgeArticle,
   updateKnowledgeCategory,
 } = require('../src/db/knowledge-articles');
@@ -123,6 +124,60 @@ describe('knowledge article lock', () => {
     const cols = db.prepare('PRAGMA table_info(user_rights)').all();
     assert.ok(cols.some((col) => col.name === 'knowledge_lock'));
     assert.ok(cols.some((col) => col.name === 'knowledge_unlock'));
+  });
+
+  it('exposes confirm permission', () => {
+    assert.ok(RIGHTS.knowledge_confirm);
+    assert.equal(DEFAULT_RIGHTS.knowledge_confirm, 0);
+    assert.ok(ADMIN_PERMISSION_KEYS.includes('knowledge_confirm'));
+    const cols = db.prepare('PRAGMA table_info(user_rights)').all();
+    assert.ok(cols.some((col) => col.name === 'knowledge_confirm'));
+  });
+
+  it('creates articles unconfirmed and ignores is_confirmed on write', () => {
+    const articleCols = db.prepare('PRAGMA table_info(knowledge_articles)').all();
+    assert.ok(articleCols.some((col) => col.name === 'is_confirmed'));
+    assert.ok(articleCols.some((col) => col.name === 'creator'));
+
+    const seeded = listKnowledgeArticles(db);
+    assert.ok(seeded.articles.length > 0);
+    assert.ok(seeded.articles.every((article) => article.is_confirmed === true));
+
+    const created = createKnowledgeArticle(
+      db,
+      {
+        title: 'Draft article',
+        body: 'Needs review',
+        tags: 'draft',
+        is_confirmed: true,
+        creator: 'hacked',
+      },
+      { creator: '42', updatedBy: 42 }
+    );
+    assert.equal(created.is_confirmed, false);
+    assert.equal(created.creator, '42');
+
+    const updated = updateKnowledgeArticle(db, created.id, {
+      title: 'Draft article',
+      body: 'Needs review still',
+      tags: 'draft',
+      is_confirmed: true,
+    });
+    assert.equal(updated.is_confirmed, false);
+    assert.equal(updated.creator, '42');
+
+    const confirmed = setKnowledgeArticleConfirmed(db, created.id, true);
+    assert.equal(confirmed.is_confirmed, true);
+    const listedConfirmed = listKnowledgeArticles(db, { confirmedOnly: true, query: 'Needs review still' });
+    assert.ok(listedConfirmed.articles.some((article) => article.id === created.id));
+    assert.ok(getKnowledgeArticle(db, created.id, { confirmedOnly: true }));
+
+    const unconfirmed = setKnowledgeArticleConfirmed(db, created.id, false);
+    assert.equal(unconfirmed.is_confirmed, false);
+    assert.equal(getKnowledgeArticle(db, created.id, { confirmedOnly: true }), null);
+    assert.equal(getKnowledgeArticle(db, created.id).id, created.id);
+    const hidden = listKnowledgeArticles(db, { confirmedOnly: true, query: 'Needs review still' });
+    assert.ok(!hidden.articles.some((article) => article.id === created.id));
   });
 
   it('blocks edit and delete while locked, then allows them after unlock', () => {
@@ -298,6 +353,44 @@ describe('knowledge article lock API', () => {
     });
     assert.equal(updated.statusCode, 200);
     assert.equal(JSON.parse(updated.body).article.title, 'Updated');
+  });
+
+  it('requires confirm right and keeps new articles unconfirmed', async () => {
+    const editor = await loginEmployee({ knowledge_edit: 1 });
+    const confirmer = await loginEmployee({ knowledge_confirm: 1 });
+
+    const created = await request(server, 'POST', '/bot-admin/api/knowledge/articles', {
+      headers: { Cookie: editor.cookie },
+      body: {
+        title: 'API draft',
+        body: 'Wait for confirm',
+        tags: 'draft',
+        is_confirmed: true,
+        creator: 'hacked',
+      },
+    });
+    assert.equal(created.statusCode, 201);
+    const article = JSON.parse(created.body).article;
+    assert.equal(article.is_confirmed, false);
+    assert.equal(article.creator, String(editor.employee.id));
+
+    const confirmDenied = await request(server, 'POST', `/bot-admin/api/knowledge/articles/${article.id}/confirm`, {
+      headers: { Cookie: editor.cookie },
+    });
+    assert.equal(confirmDenied.statusCode, 403);
+    assert.equal(getKnowledgeArticle(db, article.id).is_confirmed, false);
+
+    const confirmed = await request(server, 'POST', `/bot-admin/api/knowledge/articles/${article.id}/confirm`, {
+      headers: { Cookie: confirmer.cookie },
+    });
+    assert.equal(confirmed.statusCode, 200);
+    assert.equal(JSON.parse(confirmed.body).article.is_confirmed, true);
+
+    const unconfirmed = await request(server, 'POST', `/bot-admin/api/knowledge/articles/${article.id}/unconfirm`, {
+      headers: { Cookie: confirmer.cookie },
+    });
+    assert.equal(unconfirmed.statusCode, 200);
+    assert.equal(JSON.parse(unconfirmed.body).article.is_confirmed, false);
   });
 
   it('clears knowledge chat history for editors', async () => {

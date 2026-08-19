@@ -4,7 +4,7 @@ const MAX_TITLE = 200;
 const MAX_BODY = 20000;
 const MAX_TAGS = 300;
 const MAX_CATEGORY_NAME = 100;
-const ARTICLE_SELECT = `a.id, a.title, a.body, a.tags, a.locked, a.updated_by, a.created_at, a.updated_at,
+const ARTICLE_SELECT = `a.id, a.title, a.body, a.tags, a.locked, a.is_confirmed, a.creator, a.updated_by, a.created_at, a.updated_at,
        a.category_id, c.name AS category_name, c.tags AS category_tags`;
 const ARTICLE_FROM = `knowledge_articles a LEFT JOIN knowledge_categories c ON c.id = a.category_id`;
 
@@ -214,9 +214,27 @@ function categoryFilterClause(categoryId) {
   return { sql: ' AND a.category_id = ?', params: [Number(categoryId)] };
 }
 
-function searchArticlesByTokens(db, { queryTokens, limit, offset, categoryId }) {
+function articleListFilter({ categoryId, confirmedOnly } = {}) {
+  const category = categoryFilterClause(categoryId);
+  if (!confirmedOnly) return category;
+  return {
+    sql: `${category.sql} AND a.is_confirmed = 1`,
+    params: category.params,
+  };
+}
+
+function normalizeKnowledgeCreator({ creator, updatedBy } = {}) {
+  if (creator != null) {
+    const text = String(creator).trim();
+    if (text) return text;
+  }
+  if (updatedBy != null && updatedBy !== '') return String(updatedBy);
+  return null;
+}
+
+function searchArticlesByTokens(db, { queryTokens, limit, offset, categoryId, confirmedOnly } = {}) {
   if (!queryTokens.length) return { articles: [], total: 0 };
-  const filter = categoryFilterClause(categoryId);
+  const filter = articleListFilter({ categoryId, confirmedOnly });
   const rows = db
     .prepare(`SELECT ${ARTICLE_SELECT} FROM ${ARTICLE_FROM} WHERE 1=1${filter.sql}`)
     .all(...filter.params)
@@ -281,6 +299,8 @@ function ensureKnowledgeTables(db) {
   ensureColumn(db, 'ai_kb_messages', 'attachments', 'TEXT');
   ensureColumn(db, 'knowledge_articles', 'locked', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'knowledge_articles', 'category_id', 'INTEGER');
+  ensureColumn(db, 'knowledge_articles', 'is_confirmed', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'knowledge_articles', 'creator', 'TEXT');
   ensureKnowledgeFts(db);
   seedKnowledgeArticles(db);
 }
@@ -413,6 +433,8 @@ function mapArticle(row) {
         }
       : null,
     locked: Boolean(row.locked),
+    is_confirmed: Boolean(row.is_confirmed),
+    creator: row.creator ?? null,
     updated_by: row.updated_by ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -423,11 +445,11 @@ function assertArticleWritable(article) {
   if (article?.locked) throw new Error('ARTICLE_LOCKED');
 }
 
-function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId } = {}) {
+function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId, confirmedOnly = false } = {}) {
   ensureKnowledgeTables(db);
   const safeLimit = Math.min(200, Math.max(1, Number(limit) || 100));
   const safeOffset = Math.max(0, Number(offset) || 0);
-  const filter = categoryFilterClause(categoryId);
+  const filter = articleListFilter({ categoryId, confirmedOnly });
   const trimmed = String(query || '').trim();
   if (!trimmed) {
     const total = db
@@ -484,14 +506,15 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId 
     limit: safeLimit,
     offset: safeOffset,
     categoryId,
+    confirmedOnly,
   });
 }
 
-function getKnowledgeArticle(db, id) {
+function getKnowledgeArticle(db, id, { confirmedOnly = false } = {}) {
   ensureKnowledgeTables(db);
   const articleId = Number(id);
   if (!Number.isFinite(articleId) || articleId <= 0) return null;
-  return mapArticle(
+  const article = mapArticle(
     db
       .prepare(
         `SELECT ${ARTICLE_SELECT}
@@ -500,18 +523,22 @@ function getKnowledgeArticle(db, id) {
       )
       .get(articleId)
   );
+  if (!article) return null;
+  if (confirmedOnly && !article.is_confirmed) return null;
+  return article;
 }
 
-function createKnowledgeArticle(db, input, { updatedBy } = {}) {
+function createKnowledgeArticle(db, input, { updatedBy, creator } = {}) {
   ensureKnowledgeTables(db);
   const article = normalizeArticleInput(input);
   const categoryId = normalizeArticleCategoryId(db, input.category_id) ?? null;
+  const resolvedCreator = normalizeKnowledgeCreator({ creator, updatedBy });
   const result = db
     .prepare(
-      `INSERT INTO knowledge_articles (title, body, tags, category_id, updated_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+      `INSERT INTO knowledge_articles (title, body, tags, category_id, updated_by, creator, is_confirmed, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`
     )
-    .run(article.title, article.body, article.tags, categoryId, updatedBy ?? null);
+    .run(article.title, article.body, article.tags, categoryId, updatedBy ?? null, resolvedCreator);
   return getKnowledgeArticle(db, Number(result.lastInsertRowid));
 }
 
@@ -557,6 +584,17 @@ function setKnowledgeArticleLocked(db, id, locked, { updatedBy } = {}) {
      SET locked = ?, updated_by = COALESCE(?, updated_by), updated_at = datetime('now')
      WHERE id = ?`
   ).run(locked ? 1 : 0, updatedBy ?? null, current.id);
+  return getKnowledgeArticle(db, current.id);
+}
+
+function setKnowledgeArticleConfirmed(db, id, confirmed, { updatedBy } = {}) {
+  const current = getKnowledgeArticle(db, id);
+  if (!current) throw new Error('NOT_FOUND');
+  db.prepare(
+    `UPDATE knowledge_articles
+     SET is_confirmed = ?, updated_by = COALESCE(?, updated_by), updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(confirmed ? 1 : 0, updatedBy ?? null, current.id);
   return getKnowledgeArticle(db, current.id);
 }
 
@@ -651,6 +689,7 @@ module.exports = {
   updateKnowledgeArticle,
   deleteKnowledgeArticle,
   setKnowledgeArticleLocked,
+  setKnowledgeArticleConfirmed,
   getOrCreateKbSession,
   listKbSessionMessages,
   addKbSessionMessage,

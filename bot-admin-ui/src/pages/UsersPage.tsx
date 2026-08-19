@@ -1,5 +1,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Pencil, Trash2, UserPlus } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   createUser,
@@ -160,17 +161,25 @@ export default function UsersPage() {
         cell: ({ row }) => (
           <div className="cell-actions">
             {hasPermission("users_edit") ? (
-              <button type="button" className="btn-secondary" onClick={() => openModal("edit", row.original)}>
-                Изменить
+              <button
+                type="button"
+                className="btn-secondary btn-icon btn-sm"
+                aria-label="Изменить"
+                title="Изменить"
+                onClick={() => openModal("edit", row.original)}
+              >
+                <Pencil size={15} aria-hidden="true" />
               </button>
             ) : null}
             {hasPermission("users_delete") ? (
               <button
                 type="button"
-                className="btn-danger"
+                className="btn-danger btn-icon btn-sm"
+                aria-label="Удалить"
+                title="Удалить"
                 onClick={() => void handleDelete(row.original.id)}
               >
-                Удалить
+                <Trash2 size={15} aria-hidden="true" />
               </button>
             ) : null}
           </div>
@@ -207,9 +216,17 @@ export default function UsersPage() {
         enableSorting: false,
         cell: ({ row }) =>
           hasPermission("users_edit") ? (
-            <button type="button" className="btn-primary" onClick={() => openModal("promote", row.original)}>
-              Сделать сотрудником
-            </button>
+            <div className="cell-actions">
+              <button
+                type="button"
+                className="btn-primary btn-icon btn-sm"
+                aria-label="Сделать сотрудником"
+                title="Сделать сотрудником"
+                onClick={() => openModal("promote", row.original)}
+              >
+                <UserPlus size={15} aria-hidden="true" />
+              </button>
+            </div>
           ) : null,
       },
     ],
@@ -274,21 +291,39 @@ export default function UsersPage() {
   function userActions(user: BotUser): ReactNode {
     if (role === "customer") {
       return hasPermission("users_edit") ? (
-        <button type="button" className="btn-primary" onClick={() => openModal("promote", user)}>
-          Сделать сотрудником
+        <button
+          type="button"
+          className="btn-primary btn-icon btn-sm"
+          aria-label="Сделать сотрудником"
+          title="Сделать сотрудником"
+          onClick={() => openModal("promote", user)}
+        >
+          <UserPlus size={15} aria-hidden="true" />
         </button>
       ) : null;
     }
     return (
       <>
         {hasPermission("users_edit") ? (
-          <button type="button" className="btn-secondary" onClick={() => openModal("edit", user)}>
-            Изменить
+          <button
+            type="button"
+            className="btn-secondary btn-icon btn-sm"
+            aria-label="Изменить"
+            title="Изменить"
+            onClick={() => openModal("edit", user)}
+          >
+            <Pencil size={15} aria-hidden="true" />
           </button>
         ) : null}
         {hasPermission("users_delete") ? (
-          <button type="button" className="btn-danger" onClick={() => void handleDelete(user.id)}>
-            Удалить
+          <button
+            type="button"
+            className="btn-danger btn-icon btn-sm"
+            aria-label="Удалить"
+            title="Удалить"
+            onClick={() => void handleDelete(user.id)}
+          >
+            <Trash2 size={15} aria-hidden="true" />
           </button>
         ) : null}
       </>

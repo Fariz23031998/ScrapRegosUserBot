@@ -1,7 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   createTask,
+  createTaskClient,
   listTaskCategories,
   listTaskEmployees,
   listTaskLocations,
@@ -84,6 +86,140 @@ function editorFromTask(task: FieldTask): TaskEditor {
   };
 }
 
+function emptyCreateClientForm() {
+  return { name: "", phone: "", email: "", external_id: "", description: "" };
+}
+
+function prefillFromQuery(query: string) {
+  const text = query.trim();
+  const digits = text.replace(/\D/g, "");
+  const looksLikePhone =
+    digits.length >= 5 && digits.length >= text.replace(/[\s+()-]/g, "").length * 0.6;
+  return {
+    ...emptyCreateClientForm(),
+    name: looksLikePhone ? "" : text,
+    phone: looksLikePhone ? text : "",
+  };
+}
+
+function CreateTaskClientModal({
+  open,
+  initialQuery,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  initialQuery: string;
+  onClose: () => void;
+  onCreated: (client: TaskClient) => void;
+}) {
+  const [form, setForm] = useState(emptyCreateClientForm);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setForm(prefillFromQuery(initialQuery));
+    setError("");
+  }, [open, initialQuery]);
+
+  const createMutation = useMutation({
+    mutationFn: (payload: {
+      name?: string;
+      phone?: string;
+      email?: string;
+      description?: string;
+      external_id?: string;
+    }) => createTaskClient(payload),
+    onSuccess: (data) => onCreated(data.client),
+    onError: (err: Error) => setError(err.message),
+  });
+
+  return (
+    <Modal open={open} title="Новый клиент REGOS" onClose={onClose} size="wide">
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const name = form.name.trim();
+          const phone = form.phone.trim();
+          const email = form.email.trim();
+          const externalId = form.external_id.trim();
+          const description = form.description.trim();
+          if (!name && !phone) {
+            setError("Укажите имя или телефон.");
+            return;
+          }
+          setError("");
+          createMutation.mutate({
+            name: name || undefined,
+            phone: phone || undefined,
+            email: email || undefined,
+            external_id: externalId || undefined,
+            description: description || undefined,
+          });
+        }}
+      >
+        <p className="muted-copy">Укажите имя или телефон. Остальные поля необязательны.</p>
+        <label>
+          Имя
+          <input
+            value={form.name}
+            maxLength={200}
+            autoComplete="name"
+            onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+          />
+        </label>
+        <label>
+          Телефон
+          <input
+            type="tel"
+            value={form.phone}
+            maxLength={50}
+            autoComplete="tel"
+            onChange={(event) => setForm((prev) => ({ ...prev, phone: event.target.value }))}
+          />
+        </label>
+        <label>
+          Email
+          <input
+            type="email"
+            value={form.email}
+            maxLength={150}
+            autoComplete="email"
+            onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
+          />
+        </label>
+        <label>
+          Внешний ID
+          <input
+            value={form.external_id}
+            maxLength={150}
+            onChange={(event) => setForm((prev) => ({ ...prev, external_id: event.target.value }))}
+          />
+        </label>
+        <label>
+          Комментарий
+          <textarea
+            rows={4}
+            maxLength={4000}
+            value={form.description}
+            onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+          />
+        </label>
+        {error ? <p className="message error">{error}</p> : null}
+        <div className="form-actions">
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={createMutation.isPending}>
+            Отмена
+          </button>
+          <button type="submit" className="btn-primary" disabled={createMutation.isPending}>
+            {createMutation.isPending ? "Создание…" : "Создать"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export default function TaskEditorModal({
   open,
   task,
@@ -103,11 +239,13 @@ export default function TaskEditorModal({
   const canChangeTechnician = hasPermission("tasks_technician");
   const [editor, setEditor] = useState<TaskEditor>(() => (task ? editorFromTask(task) : emptyEditor()));
   const [formError, setFormError] = useState("");
+  const [createClientOpen, setCreateClientOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setEditor(task ? editorFromTask(task) : emptyEditor());
     setFormError("");
+    setCreateClientOpen(false);
   }, [open, task?.id]);
 
   const employeesQuery = useQuery({
@@ -170,6 +308,7 @@ export default function TaskEditorModal({
   }
 
   return (
+    <>
     <Modal
       open={open}
       title={editor.id ? "Редактирование задачи" : "Новая задача"}
@@ -302,6 +441,7 @@ export default function TaskEditorModal({
               <button
                 type="button"
                 className="btn-secondary btn-sm"
+                disabled={Boolean(task?.posted)}
                 onClick={() => setEditor((prev) => ({ ...prev, client: null, clientQuery: "" }))}
               >
                 Сбросить
@@ -314,7 +454,18 @@ export default function TaskEditorModal({
                   value={editor.clientQuery}
                   onChange={(event) => setEditor((prev) => ({ ...prev, clientQuery: event.target.value }))}
                   placeholder="Имя, телефон или email"
+                  disabled={Boolean(task?.posted)}
                 />
+                <button
+                  type="button"
+                  className="btn-secondary btn-icon btn-sm"
+                  aria-label="Создать клиента"
+                  title="Создать клиента"
+                  disabled={Boolean(task?.posted)}
+                  onClick={() => setCreateClientOpen(true)}
+                >
+                  <Plus size={16} aria-hidden="true" />
+                </button>
               </div>
               {clientQueryValue.trim().length >= 2 && !clients.length && !clientsQuery.isFetching ? (
                 <p className="firm-search-status">Клиенты не найдены.</p>
@@ -399,6 +550,16 @@ export default function TaskEditorModal({
         </div>
       </form>
     </Modal>
+    <CreateTaskClientModal
+      open={createClientOpen}
+      initialQuery={editor.clientQuery}
+      onClose={() => setCreateClientOpen(false)}
+      onCreated={(client) => {
+        setEditor((prev) => ({ ...prev, client, clientQuery: "" }));
+        setCreateClientOpen(false);
+      }}
+    />
+    </>
   );
 }
 

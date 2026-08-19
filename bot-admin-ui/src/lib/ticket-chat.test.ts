@@ -3,8 +3,11 @@ import {
   chatFileMimeType,
   chatMessageSearchText,
   findChatMessageMatchIds,
+  isChatAudio,
+  isChatVideo,
   mergeMessages,
   nextOlderMessagesOffset,
+  recordedVoiceFile,
   splitSearchHighlight,
 } from "./ticket-chat";
 import type { ChatMessage } from "./types";
@@ -75,5 +78,46 @@ describe("chatFileMimeType", () => {
         mime_type: "audio/mpeg",
       }),
     ).toBe("audio/mpeg");
+  });
+});
+
+describe("recordedVoiceFile", () => {
+  const stamp = 1_700_000_000_000;
+
+  it("wraps webm blobs as weba audio so they are not classified as video", () => {
+    const webm = recordedVoiceFile(new Blob(["opus"], { type: "audio/webm;codecs=opus" }), stamp);
+    expect(webm.name).toBe(`voice-${stamp}.weba`);
+    expect(webm.type).toBe("audio/webm");
+    expect(isChatAudio(webm)).toBe(true);
+    expect(isChatVideo(webm)).toBe(false);
+
+    const asVideoMime = recordedVoiceFile(new Blob(["opus"], { type: "video/webm" }), stamp);
+    expect(asVideoMime.name).toBe(`voice-${stamp}.weba`);
+    expect(asVideoMime.type).toBe("audio/webm");
+    expect(isChatAudio(asVideoMime)).toBe(true);
+    expect(isChatVideo(asVideoMime)).toBe(false);
+
+    const unlabeled = recordedVoiceFile(new Blob(["opus"]), stamp);
+    expect(unlabeled.name).toBe(`voice-${stamp}.weba`);
+    expect(unlabeled.type).toBe("audio/webm");
+  });
+
+  it("uses m4a for mp4/aac recorder output", () => {
+    const mp4 = recordedVoiceFile(new Blob(["aac"], { type: "audio/mp4" }), stamp);
+    expect(mp4.name).toBe(`voice-${stamp}.m4a`);
+    expect(mp4.type).toBe("audio/mp4");
+    expect(isChatAudio(mp4)).toBe(true);
+    expect(isChatVideo(mp4)).toBe(false);
+
+    const aac = recordedVoiceFile(new Blob(["aac"], { type: "audio/aac" }), stamp);
+    expect(aac.name).toBe(`voice-${stamp}.m4a`);
+    expect(aac.type).toBe("audio/aac");
+    expect(isChatAudio(aac)).toBe(true);
+  });
+
+  it("still treats a real .webm file as video", () => {
+    const clip = new File(["vid"], "clip.webm", { type: "video/webm" });
+    expect(isChatVideo(clip)).toBe(true);
+    expect(isChatAudio(clip)).toBe(false);
   });
 });

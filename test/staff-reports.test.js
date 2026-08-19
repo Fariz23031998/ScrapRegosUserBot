@@ -209,6 +209,34 @@ describe('staff reports', () => {
     const managerRow = commission.rows.find((row) => row.user_id === manager.id);
     assert.equal(managerRow.manager_task_count, 2);
   });
+
+  it('skips repair device commission but still scores the technician', () => {
+    const commissionBefore = buildCommissionReport(db, currentPeriod());
+    const scoresBefore = buildTechnicianReport(db, currentPeriod());
+    const managerBefore = commissionBefore.rows.find((row) => row.user_id === manager.id);
+    const technicianBefore = scoresBefore.rows.find((row) => row.user_id === technician.id);
+
+    const task = createTask(db, {
+      title: 'Ремонт терминала отчёт',
+      action: 'repair',
+      status: 'done',
+      manager_user_id: manager.id,
+      technician_user_id: technician.id,
+      devices: [{ device_id: device.id, quantity: 1 }],
+    });
+    addTaskService(db, task.id, { service_id: service.id, quantity: 1 });
+    postTask(db, task.id);
+
+    const commission = buildCommissionReport(db, currentPeriod());
+    const scores = buildTechnicianReport(db, currentPeriod());
+    const managerRow = commission.rows.find((row) => row.user_id === manager.id);
+    const technicianRow = scores.rows.find((row) => row.user_id === technician.id);
+
+    assert.equal(managerRow.manager_task_count, (managerBefore?.manager_task_count || 0) + 1);
+    assert.equal(managerRow.commission_uzs, (managerBefore?.commission_uzs || 0) + 10000);
+    assert.equal(technicianRow.technician_task_count, (technicianBefore?.technician_task_count || 0) + 1);
+    assert.equal(technicianRow.technician_task_score, (technicianBefore?.technician_task_score || 0) + 5);
+  });
 });
 
 describe('ticket duration counting for reports', () => {

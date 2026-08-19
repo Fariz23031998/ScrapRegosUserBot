@@ -16,7 +16,10 @@ const TicketDetailPage = lazy(() => import("./pages/TicketDetailPage"));
 const TasksPage = lazy(() => import("./pages/TasksPage"));
 const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
 const TaskRefundPage = lazy(() => import("./pages/TaskRefundPage"));
+const FinancesPage = lazy(() => import("./pages/FinancesPage"));
+const RepairReturnsPage = lazy(() => import("./pages/RepairReturnsPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
+const ReportDetailPage = lazy(() => import("./pages/ReportDetailPage"));
 const DevicesPage = lazy(() => import("./pages/DevicesPage"));
 const ServicesPage = lazy(() => import("./pages/ServicesPage"));
 const TechnicalSupportPage = lazy(() => import("./pages/TechnicalSupportPage"));
@@ -137,6 +140,24 @@ export default function App() {
                 </SuspensePage>
               }
             />
+            <Route
+              path="repair-returns"
+              element={
+                <SuspensePage>
+                  <RepairReturnsPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
+          <Route element={<ProtectedRoute permission="finances_read" />}>
+            <Route
+              path="finances"
+              element={
+                <SuspensePage>
+                  <FinancesPage />
+                </SuspensePage>
+              }
+            />
           </Route>
           <Route element={<ProtectedRoute permission="see_all_report" />}>
             <Route
@@ -144,6 +165,14 @@ export default function App() {
               element={
                 <SuspensePage>
                   <ReportsPage />
+                </SuspensePage>
+              }
+            />
+            <Route
+              path="reports/:id"
+              element={
+                <SuspensePage>
+                  <ReportDetailPage />
                 </SuspensePage>
               }
             />

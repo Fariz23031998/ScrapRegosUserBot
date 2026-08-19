@@ -7,9 +7,9 @@ const path = require('path');
 const { openDb } = require('../src/db/partners-db');
 const { createEmployeeUser, setBotUserRegosLink } = require('../src/db/bot-users-db');
 const { loadAiSettings, saveAiSettings, serializeAiSettings, resolveAgentModel } = require('../src/ai/settings');
-const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_TEST_PROMPT_SUFFIX, CUSTOMER_ASSIST_PROMPT_SUFFIX, KB_SYSTEM_PROMPT, TICKET_SUMMARY_SYSTEM_PROMPT } = require('../src/ai/default-prompts');
+const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_TEST_PROMPT_SUFFIX, CUSTOMER_ASSIST_PROMPT_SUFFIX, KB_SYSTEM_PROMPT, OPS_SYSTEM_PROMPT, TICKET_SUMMARY_SYSTEM_PROMPT } = require('../src/ai/default-prompts');
 const { getProvider, registerProvider, listProviders } = require('../src/ai/providers/registry');
-const { buildChatRequest, normalizeChatContent, normalizeUsage } = require('../src/ai/providers/openai');
+const { buildChatRequest, consumeChatStream, normalizeChatContent, normalizeUsage } = require('../src/ai/providers/openai');
 const { runAgent, resolveAgentTimeoutMs, prependUserContext, buildPromptCacheKey } = require('../src/ai/run-agent');
 const {
   listKnowledgeArticles,
@@ -19,6 +19,7 @@ const {
   deleteKnowledgeArticle,
   createKnowledgeCategory,
   knowledgeCategoryContext,
+  setKnowledgeArticleConfirmed,
 } = require('../src/db/knowledge-articles');
 const {
   listPrompts,
@@ -41,6 +42,7 @@ const {
   toImageUrlPart,
 } = require('../src/ai/chat-media');
 const { transcribeChatAudio, clearTranscribeCache } = require('../src/ai/transcribe');
+const { parseChatUploadFiles, toPublicAttachments } = require('../src/ai/chat-uploads');
 const { captionChatImage, clearCaptionCache } = require('../src/ai/image-caption');
 const {
   getChatFileExtraction,
@@ -79,6 +81,7 @@ const {
 const {
   loadTicketAssistSession,
   runTicketAssistAgent,
+  previewTicketAssistPrompt,
   resetTicketAssistLocks,
 } = require('../src/ai/customer-assist-agent');
 const { upsertTelegramTicketSession } = require('../src/db/telegram-ticket-sessions');
@@ -168,6 +171,7 @@ describe('AI settings', () => {
       customer: '',
       customer_assist: '',
       kb: '',
+      ops: '',
       ticket_summary: '',
     });
     assert.equal(initial.groupChatId, '');
@@ -347,7 +351,7 @@ describe('AI prompts', () => {
   it('resolves defaults, saves, and resets', () => {
     const database = createDb();
     const listed = listPrompts(database);
-    assert.equal(listed.length, 4);
+    assert.equal(listed.length, 5);
     const customerType = listed.find((item) => item.slug === 'customer');
     assert.equal(customerType.active_id, null);
     assert.equal(customerType.prompts[0].is_default, true);
@@ -355,11 +359,13 @@ describe('AI prompts', () => {
     assert.equal(customerType.prompts[0].name, DEFAULT_PROMPT_NAME);
     assert.equal(listed.find((item) => item.slug === 'customer_assist').title, 'Агент поддержки (сотрудник)');
     assert.equal(listed.find((item) => item.slug === 'kb').title, 'База знаний');
+    assert.equal(listed.find((item) => item.slug === 'ops').title, 'Задачи');
     assert.equal(listed.find((item) => item.slug === 'ticket_summary').title, 'Сводка обращения');
     assert.equal(getResolvedPrompt(database, 'ticket_summary'), TICKET_SUMMARY_SYSTEM_PROMPT);
     assert.equal(getResolvedPrompt(database, 'customer'), CUSTOMER_SYSTEM_PROMPT);
     assert.equal(getResolvedPrompt(database, 'customer_assist'), CUSTOMER_ASSIST_PROMPT_SUFFIX);
     assert.equal(getResolvedPrompt(database, 'kb'), KB_SYSTEM_PROMPT);
+    assert.equal(getResolvedPrompt(database, 'ops'), OPS_SYSTEM_PROMPT);
 
     const saved = savePrompt(database, 'customer', 'Новый промпт поддержки');
     assert.equal(saved.is_default, false);
@@ -630,6 +636,74 @@ describe('provider registry and runAgent', () => {
     assert.ok(visionMsg);
     assert.equal(visionMsg.content[0].type, 'text');
     assert.deepEqual(visionMsg.content[1], imagePart);
+  });
+
+  it('forwards onDelta into provider.chat', async () => {
+    const seen = [];
+    const provider = {
+      async chat({ onDelta }) {
+        assert.equal(typeof onDelta, 'function');
+        onDelta('Hel');
+        onDelta('lo');
+        return { content: 'Hello', toolCalls: [] };
+      },
+    };
+    const result = await runAgent({
+      provider,
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: 'hi' }],
+      onDelta: (text) => seen.push(text),
+    });
+    assert.equal(result.content, 'Hello');
+    assert.deepEqual(seen, ['Hel', 'lo']);
+  });
+});
+
+describe('openai chat stream reader', () => {
+  async function* chunks(items) {
+    for (const item of items) yield item;
+  }
+
+  it('emits content deltas and returns the assembled reply', async () => {
+    const seen = [];
+    const result = await consumeChatStream(
+      chunks([
+        { choices: [{ delta: { role: 'assistant', content: 'При' } }] },
+        { choices: [{ delta: { content: 'вет' }, finish_reason: 'stop' }] },
+        { usage: { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 4 } } },
+      ]),
+      { onDelta: (text) => seen.push(text) }
+    );
+    assert.equal(result.content, 'Привет');
+    assert.deepEqual(seen, ['При', 'вет']);
+    assert.equal(result.finishReason, 'stop');
+    assert.deepEqual(result.usage, { prompt_tokens: 10, completion_tokens: 2, cached_tokens: 4 });
+  });
+
+  it('does not emit onDelta when the stream contains tool calls', async () => {
+    const seen = [];
+    const result = await consumeChatStream(
+      chunks([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 'call-1', function: { name: 'search_tasks', arguments: '{"q":' } },
+                ],
+              },
+            },
+          ],
+        },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"x"}' } }] }, finish_reason: 'tool_calls' }] },
+      ]),
+      { onDelta: (text) => seen.push(text) }
+    );
+    assert.deepEqual(seen, []);
+    assert.equal(result.content, '');
+    assert.equal(result.toolCalls.length, 1);
+    assert.equal(result.toolCalls[0].name, 'search_tasks');
+    assert.equal(result.toolCalls[0].arguments, '{"q":"x"}');
   });
 });
 
@@ -2479,9 +2553,22 @@ describe('chat media helpers', () => {
     assert.equal(isVisionImage({ name: 'a.svg', mime_type: 'image/svg+xml' }), false);
     assert.equal(classifyChatFile({ name: 'clip.mp4', media_type: 'video' }), 'video');
     assert.equal(classifyChatFile({ name: 'note.ogg', mime_type: 'audio/ogg' }), 'audio');
+    assert.equal(classifyChatFile({ name: 'voice.weba' }), 'audio');
+    assert.equal(classifyChatFile({ name: 'voice.weba', extension: 'weba' }), 'audio');
     const part = toImageUrlPart({ mime: 'image/jpeg', base64: 'abc' });
     assert.equal(part.type, 'image_url');
     assert.equal(part.image_url.url, 'data:image/jpeg;base64,abc');
+  });
+
+  it('maps weba uploads without mime_type to audio/webm', () => {
+    const files = parseChatUploadFiles([
+      { name: 'voice.weba', extension: 'weba', data: Buffer.from('abc').toString('base64') },
+    ]);
+    assert.equal(files[0].kind, 'audio');
+    assert.equal(files[0].mime_type, 'audio/webm');
+    const [pub] = toPublicAttachments(files);
+    assert.equal(pub.kind, 'audio');
+    assert.match(pub.data_url, /^data:audio\/webm;base64,/);
   });
 
   it('skips unsafe or oversized downloads', async () => {
@@ -3033,6 +3120,31 @@ describe('knowledge base', () => {
     assert.equal(updated.title, 'Обновлено');
     assert.equal(deleteKnowledgeArticle(database, created.id), true);
     assert.equal(getKnowledgeArticle(database, created.id), null);
+  });
+
+  it('hides unconfirmed articles from agent search and get tools', async () => {
+    const database = createDb();
+    const draft = createKnowledgeArticle(database, {
+      title: 'Unconfirmed xyzzykbdraft article',
+      body: 'This xyzzykbdraft body must stay hidden from agents.',
+      tags: 'xyzzykbdraft',
+    });
+    const tools = createKnowledgeTools({ db: database, write: true });
+    const search = tools.find((tool) => tool.name === 'search_knowledge');
+    const get = tools.find((tool) => tool.name === 'get_article');
+
+    const hiddenSearch = await search.execute({ query: 'xyzzykbdraft' });
+    assert.ok(!hiddenSearch.articles.some((article) => article.id === draft.id));
+    const hiddenGet = await get.execute({ id: draft.id });
+    assert.equal(hiddenGet.ok, false);
+    assert.equal(hiddenGet.error, 'not_found');
+
+    setKnowledgeArticleConfirmed(database, draft.id, true);
+    const visibleSearch = await search.execute({ query: 'xyzzykbdraft' });
+    assert.ok(visibleSearch.articles.some((article) => article.id === draft.id));
+    const visibleGet = await get.execute({ id: draft.id });
+    assert.equal(visibleGet.id, draft.id);
+    assert.equal(visibleGet.is_confirmed, true);
   });
 
   it('passes the stored KB system prompt into runAgent', async () => {
@@ -4079,6 +4191,38 @@ describe('ticket AI assist agent', () => {
     });
     assert.equal(reset.messages.length, 0);
     assert.notEqual(reset.session_id, loaded.session_id);
+  });
+
+  it('previews the employee assist prompt without calling the model', async () => {
+    const database = createDb();
+    savePrompt(database, 'customer', 'ASSIST CUSTOMER PROMPT');
+    savePrompt(database, 'customer_assist', 'ASSIST STAFF SUFFIX');
+    await runTicketAssistAgent({
+      db: database,
+      userId: 8,
+      ticketId: 42,
+      message: 'Назови цену',
+      deps: {
+        ...assistDeps(),
+        runAgent: async () => ({ content: 'Понял.', steps: 1 }),
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      },
+    });
+    const preview = await previewTicketAssistPrompt({
+      db: database,
+      userId: 8,
+      ticketId: 42,
+      deps: assistDeps(),
+    });
+    assert.match(preview.system, /ASSIST CUSTOMER PROMPT/);
+    assert.match(preview.system, /ASSIST STAFF SUFFIX/);
+    assert.equal(preview.ticket_id, 42);
+    assert.equal(preview.chat_id, 'chat-42');
+    assert.match(preview.messages[0].content, /Обращение #42/);
+    assert.equal(preview.messages.at(-2).content, 'Назови цену');
+    assert.equal(preview.messages.at(-1).content, 'Понял.');
+    assert.ok(preview.tools.some((tool) => tool.name === 'reply_to_customer'));
+    assert.equal(preview.tools.every((tool) => tool.execute == null), true);
   });
 });
 

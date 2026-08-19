@@ -34,7 +34,7 @@ const AI_SETTING_KEYS = {
 };
 
 const ALLOWED_PROVIDERS = ['openai', 'gemini'];
-const AGENT_MODEL_SLUGS = ['customer', 'customer_assist', 'kb', 'ticket_summary'];
+const AGENT_MODEL_SLUGS = ['customer', 'customer_assist', 'kb', 'ops', 'ticket_summary'];
 const SUGGESTED_MODELS_BY_PROVIDER = {
   openai: [
     'gpt-5.6',

@@ -173,4 +173,33 @@ describe('task details money snapshots', () => {
 
     assert.throws(() => createTask(db, { title: 'Bad', currency: 'EUR' }), /INVALID_TASK_CURRENCY/);
   });
+
+  it('does not snapshot device prices on repair tasks and totals services only', () => {
+    setUsdUzsRate(db, 12500);
+    const device = createDevice(db, {
+      name: 'Весы',
+      cost_amount: 80,
+      cost_currency: 'USD',
+      price_usd: 120,
+    });
+    const service = createService(db, {
+      name: 'Ремонт платы',
+      cost_amount: 50000,
+      cost_currency: 'UZS',
+      price_uzs: 150000,
+    });
+    const created = createTask(db, { title: 'Ремонт весов', action: 'repair', devices: [] });
+    const withDevice = addTaskDevice(db, created.id, { device_id: device.id });
+    assert.equal(withDevice.devices[0].price_uzs, 0);
+    assert.equal(withDevice.devices[0].price_usd, 0);
+    assert.equal(withDevice.devices[0].cost_amount, 0);
+    assert.equal(withDevice.totals.price_uzs, 0);
+
+    const withService = addTaskService(db, created.id, { service_id: service.id });
+    const task = getTask(db, withService.id);
+    assert.equal(task.devices[0].price_uzs, 0);
+    assert.equal(task.services[0].price_uzs, 150000);
+    assert.equal(task.totals.price_uzs, 150000);
+    assert.equal(task.totals.cost_uzs, 50000);
+  });
 });

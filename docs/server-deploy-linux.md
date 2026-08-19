@@ -60,9 +60,18 @@ sudo cp /srv/ScrapRegosUserBot/no-thing.uz.conf /etc/nginx/sites-available/no-th
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-WebSocket proxy block for the SMS gateway (add inside the `server` block for aserver.tech):
+WebSocket proxy blocks for the print tray agent and SMS gateway (add inside the `server` block):
 
 ```nginx
+location /print-gateway/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
+}
+
 location /sms-gateway/ {
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;

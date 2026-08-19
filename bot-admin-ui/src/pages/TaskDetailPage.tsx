@@ -20,6 +20,8 @@ import {
   updateTaskDevice,
   updateTaskService,
 } from "../api/tasks";
+import { printTask, enabledPrintersFromStations, getPrintSettings, printerOptionLabel } from "../api/print";
+import type { PrintEnabledPrinter } from "../lib/types";
 import CatalogImageGallery, { CatalogThumb } from "../components/CatalogImageGallery";
 import LoadingState from "../components/LoadingState";
 import Modal from "../components/Modal";
@@ -48,6 +50,7 @@ import type {
   CatalogService,
   FieldTask,
   TaskDeviceLine,
+  TaskDeviceSerial,
   TaskPayment,
   TaskServiceLine,
 } from "../lib/types";
@@ -58,11 +61,25 @@ type CatalogKind = "device" | "service";
 type CategoryKey = "all" | `${CatalogKind}:none` | `${CatalogKind}:${number}`;
 
 const MAX_LINE_QUANTITY = 999;
+const PRINT_KIND_ORDER = ["label", "receipt", "invoice"] as const;
+const PRINT_KIND_TITLES: Record<(typeof PRINT_KIND_ORDER)[number], string> = {
+  label: "Этикетки",
+  receipt: "Чек",
+  invoice: "Счёт",
+};
 
 function lineQuantity(value: unknown): number {
   const qty = Number(value);
   if (!Number.isFinite(qty) || qty < 1) return 1;
   return Math.min(MAX_LINE_QUANTITY, Math.trunc(qty));
+}
+
+function returnedDeviceBadge(line: { quantity?: number; returned_quantity?: number }): string | undefined {
+  const returned = Number(line.returned_quantity) || 0;
+  if (returned <= 0) return undefined;
+  const qty = lineQuantity(line.quantity);
+  if (returned >= qty) return "Возвращён";
+  return `Возвращён ${returned} из ${qty}`;
 }
 
 function discountLabel(line: { discount_type?: string | null; discount_value?: number | null; discount_currency?: string | null }) {
@@ -429,11 +446,14 @@ function CartLine({
   alt,
   title,
   badge,
+  extraBadge,
+  extraBadgeClassName,
   description,
   notes,
   price,
   originalPrice,
   discountText,
+  hidePrice,
   quantity,
   selected,
   canEdit,
@@ -442,16 +462,23 @@ function CartLine({
   onToggleSelected,
   onQuantityChange,
   onRemove,
+  serials,
+  onPrintSerial,
+  printBusy,
+  labelPrinters,
 }: {
   images?: CatalogImage[];
   alt: string;
   title: string;
   badge?: string;
+  extraBadge?: string;
+  extraBadgeClassName?: string;
   description?: string;
   notes?: string;
   price: { primary: string; muted?: string };
   originalPrice?: { primary: string; muted?: string } | null;
   discountText?: string;
+  hidePrice?: boolean;
   quantity: number;
   selected: boolean;
   canEdit: boolean;
@@ -460,7 +487,13 @@ function CartLine({
   onToggleSelected: () => void;
   onQuantityChange: (quantity: number) => void;
   onRemove: () => void;
+  serials?: TaskDeviceSerial[];
+  onPrintSerial?: (serial: TaskDeviceSerial, printer: PrintEnabledPrinter) => void;
+  printBusy?: boolean;
+  labelPrinters?: PrintEnabledPrinter[];
 }) {
+  const [openSerialId, setOpenSerialId] = useState<number | null>(null);
+  const printers = labelPrinters || [];
   return (
     <li className={`task-product-card task-product-card--cart${selected ? " is-selected" : ""}`}>
       {canEdit ? (
@@ -472,18 +505,82 @@ function CartLine({
       <div className="task-product-card__body">
         <div className="task-product-card__title-row">
           <h3>{title}</h3>
-          {badge ? <span className="task-product-card__badge">{badge}</span> : null}
+          {badge || extraBadge ? (
+            <div className="task-product-card__badges">
+              {badge ? <span className="task-product-card__badge">{badge}</span> : null}
+              {extraBadge ? (
+                <span className={`task-product-card__badge${extraBadgeClassName ? ` ${extraBadgeClassName}` : ""}`}>
+                  {extraBadge}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         {description ? <p className="task-product-card__description">{description}</p> : null}
         {notes ? <p className="muted-copy">{notes}</p> : null}
-        <div className="task-product-card__price">
-          <span className="task-product-card__total-label">Итого</span>
-          {originalPrice ? (
-            <MoneyCell primary={originalPrice.primary} muted={originalPrice.muted} className="money-pair--old" />
-          ) : null}
-          <MoneyCell primary={price.primary} muted={price.muted} />
-          {discountText ? <span className="task-product-card__discount">{discountText}</span> : null}
-        </div>
+        {serials?.length ? (
+          <ul className="task-serials">
+            {serials.map((serial) => (
+              <li key={serial.id} className="task-serials__item">
+                <code>{serial.code}</code>
+                {serial.returned_at ? <span className="muted-copy">возвращён</span> : null}
+                {onPrintSerial ? (
+                  <span className="task-serials__print">
+                    <button
+                      type="button"
+                      className="btn-secondary btn-icon btn-sm"
+                      aria-label={`Печать ${serial.code}`}
+                      title={
+                        printers.length
+                          ? "Печать этикетки"
+                          : "Нет включённого принтера этикеток"
+                      }
+                      disabled={printBusy || !printers.length}
+                      onClick={() => {
+                        if (!printers.length) return;
+                        if (printers.length === 1) {
+                          onPrintSerial(serial, printers[0]);
+                          return;
+                        }
+                        setOpenSerialId((current) => (current === serial.id ? null : serial.id));
+                      }}
+                    >
+                      <Printer size={14} aria-hidden="true" />
+                    </button>
+                    {openSerialId === serial.id && printers.length > 1 ? (
+                      <div className="print-menu__list task-serials__print-list" role="menu">
+                        {printers.map((printer) => (
+                          <button
+                            key={`${printer.station_id}-${printer.name}`}
+                            type="button"
+                            role="menuitem"
+                            disabled={printBusy}
+                            onClick={() => {
+                              setOpenSerialId(null);
+                              onPrintSerial(serial, printer);
+                            }}
+                          >
+                            {printerOptionLabel(printer, printers)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {!hidePrice ? (
+          <div className="task-product-card__price">
+            <span className="task-product-card__total-label">Итого</span>
+            {originalPrice ? (
+              <MoneyCell primary={originalPrice.primary} muted={originalPrice.muted} className="money-pair--old" />
+            ) : null}
+            <MoneyCell primary={price.primary} muted={price.muted} />
+            {discountText ? <span className="task-product-card__discount">{discountText}</span> : null}
+          </div>
+        ) : null}
       </div>
       {canEdit ? (
         <QuantityStepper value={quantity} disabled={updating || removing} onChange={onQuantityChange} />
@@ -574,6 +671,8 @@ export default function TaskDetailPage() {
   const [viewingProduct, setViewingProduct] = useState<CatalogProduct | null>(null);
   const [taskMetaOpen, setTaskMetaOpen] = useState(false);
 
+  const [printMenuOpen, setPrintMenuOpen] = useState(false);
+
   const canEdit = hasPermission("tasks_edit");
   const canTakePayment = hasPermission("tasks_payment_create");
   const canDeletePayment = hasPermission("tasks_payment_delete");
@@ -610,8 +709,25 @@ export default function TaskDetailPage() {
     queryKey: ["service-categories"],
     queryFn: listServiceCategories,
   });
+  const printSettingsQuery = useQuery({
+    queryKey: ["print-settings"],
+    queryFn: getPrintSettings,
+    refetchInterval: 8000,
+    enabled: canEdit,
+  });
 
   const task = taskQuery.data?.task;
+  const taskPrinters = useMemo(
+    () =>
+      enabledPrintersFromStations(printSettingsQuery.data?.stations, {
+        locationId: task?.location_id,
+      }),
+    [printSettingsQuery.data?.stations, task?.location_id],
+  );
+  const labelPrinters = useMemo(
+    () => taskPrinters.filter((printer) => printer.kind === "label"),
+    [taskPrinters],
+  );
   const cartLocked = isTaskCartLocked(task);
   const canEditCart = canEdit && !cartLocked;
   const displayCurrency = parseDisplayCurrency(task?.currency);
@@ -767,7 +883,8 @@ export default function TaskDetailPage() {
   });
 
   const unpostMutation = useMutation({
-    mutationFn: (deleteRefunds?: boolean) => unpostTask(taskId, { deleteRefunds }),
+    mutationFn: (options?: { deleteRefunds?: boolean; deleteReturns?: boolean }) =>
+      unpostTask(taskId, options),
     onSuccess: () => {
       setLineError("");
       invalidateTask();
@@ -779,6 +896,25 @@ export default function TaskDetailPage() {
     mutationFn: () => advanceTaskStatus(taskId),
     onSuccess: () => {
       setLineError("");
+      invalidateTask();
+    },
+    onError: (error: Error) => setLineError(error.message),
+  });
+
+  const printMutation = useMutation({
+    mutationFn: (payload: {
+      kind: "label" | "receipt" | "invoice";
+      serial_ids?: number[];
+      printer_name: string;
+      station_id?: string;
+    }) => printTask(taskId, payload),
+    onSuccess: (result) => {
+      setPrintMenuOpen(false);
+      setLineError(
+        result.connected > 0
+          ? ""
+          : "Задание отправлено. Принтер сейчас офлайн — напечатает при подключении.",
+      );
       invalidateTask();
     },
     onError: (error: Error) => setLineError(error.message),
@@ -800,15 +936,19 @@ export default function TaskDetailPage() {
     if (!taskQuery.data?.task) return;
     if (taskQuery.data.task.posted) {
       const hasRefunds = (taskQuery.data.task.refunds || []).length > 0;
+      const hasDeviceReturns = (taskQuery.data.task.devices || []).some(
+        (line) => (Number(line.returned_quantity) || 0) > 0,
+      );
+      const hasReturns = hasRefunds || hasDeviceReturns;
       const ok = await confirm({
         title: "Отменить проведение",
-        message: hasRefunds
-          ? "Отменить проведение задачи? Все возвраты будут удалены вместе с позициями (услуги и устройства) и связанными оплатами. После этого документ снова можно будет менять."
+        message: hasReturns
+          ? "Отменить проведение задачи? Все возвраты (деньги и устройства) будут удалены. После этого документ снова можно будет менять."
           : "Отменить проведение задачи? После этого документ снова можно будет менять.",
-        variant: hasRefunds ? "danger" : "default",
+        variant: hasReturns ? "danger" : "default",
         confirmLabel: "Отменить проведение",
       });
-      if (ok) unpostMutation.mutate(hasRefunds);
+      if (ok) unpostMutation.mutate({ deleteRefunds: hasRefunds, deleteReturns: hasDeviceReturns });
       return;
     }
     postMutation.mutate();
@@ -970,72 +1110,128 @@ export default function TaskDetailPage() {
           </Link>
           <div className="ticket-detail-header__heading">
             <h1>{task.title}</h1>
-            {canEdit && !task.posted ? (
-              <button
-                type="button"
-                className="btn-secondary btn-sm ticket-detail-header__edit"
-                onClick={() => setEditOpen(true)}
-              >
-                <Pencil size={14} aria-hidden="true" />
-                Изменить
-              </button>
-            ) : null}
-            {canEdit && !task.posted && nextStatus ? (
-              <button
-                type="button"
-                className="btn-success btn-sm ticket-detail-header__edit"
-                aria-label={nextStatus.label}
-                title={nextStatus.label}
-                disabled={advanceStatusMutation.isPending}
-                onClick={() => advanceStatusMutation.mutate()}
-              >
-                <ArrowRight size={18} aria-hidden="true" />
-                {nextStatus.label}
-              </button>
-            ) : null}
-            {!task.posted && canPost ? (
-              <button
-                type="button"
-                className="btn-success btn-icon ticket-detail-header__edit"
-                aria-label="Провести"
-                title="Провести"
-                disabled={postingBusy}
-                onClick={() => void handleTogglePosted()}
-              >
-                <BadgeCheck size={22} aria-hidden="true" />
-              </button>
-            ) : null}
-            {task.posted && canUnpost ? (
-              <button
-                type="button"
-                className="btn-danger btn-icon ticket-detail-header__edit"
-                aria-label="Отменить проведение"
-                title="Отменить проведение"
-                disabled={postingBusy}
-                onClick={() => void handleTogglePosted()}
-              >
-                <BadgeX size={22} aria-hidden="true" />
-              </button>
-            ) : null}
-            {showRefund ? (
-              <Link
-                to={`/tasks/${taskId}/refund`}
-                className="btn-secondary btn-sm ticket-detail-header__edit"
-              >
-                <RotateCcw size={14} aria-hidden="true" />
-                Возврат
-              </Link>
-            ) : null}
-            <button
-              type="button"
-              className="btn-secondary btn-sm ticket-detail-header__edit"
-              aria-label="Печать"
-              title="Печать"
-              onClick={() => window.print()}
-            >
-              <Printer size={14} aria-hidden="true" />
-              Печать
-            </button>
+            <div className="ticket-detail-header__actions">
+              {canEdit && !task.posted ? (
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm ticket-detail-header__edit"
+                  aria-label="Изменить"
+                  title="Изменить"
+                  onClick={() => setEditOpen(true)}
+                >
+                  <Pencil size={14} aria-hidden="true" />
+                  <span className="ticket-detail-header__edit-label">Изменить</span>
+                </button>
+              ) : null}
+              {canEdit && !task.posted && nextStatus ? (
+                <button
+                  type="button"
+                  className="btn-success btn-sm ticket-detail-header__edit"
+                  aria-label={nextStatus.label}
+                  title={nextStatus.label}
+                  disabled={advanceStatusMutation.isPending}
+                  onClick={() => advanceStatusMutation.mutate()}
+                >
+                  <ArrowRight size={18} aria-hidden="true" />
+                  <span className="ticket-detail-header__edit-label">{nextStatus.label}</span>
+                </button>
+              ) : null}
+              {!task.posted && canPost ? (
+                <button
+                  type="button"
+                  className="btn-success btn-icon ticket-detail-header__edit"
+                  aria-label="Провести"
+                  title="Провести"
+                  disabled={postingBusy}
+                  onClick={() => void handleTogglePosted()}
+                >
+                  <BadgeCheck size={22} aria-hidden="true" />
+                </button>
+              ) : null}
+              {task.posted && canUnpost ? (
+                <button
+                  type="button"
+                  className="btn-danger btn-icon ticket-detail-header__edit"
+                  aria-label="Отменить проведение"
+                  title="Отменить проведение"
+                  disabled={postingBusy}
+                  onClick={() => void handleTogglePosted()}
+                >
+                  <BadgeX size={22} aria-hidden="true" />
+                </button>
+              ) : null}
+              {showRefund ? (
+                <Link
+                  to={`/tasks/${taskId}/refund`}
+                  className="btn-secondary btn-sm ticket-detail-header__edit"
+                  aria-label="Возврат"
+                  title="Возврат"
+                >
+                  <RotateCcw size={14} aria-hidden="true" />
+                  <span className="ticket-detail-header__edit-label">Возврат</span>
+                </Link>
+              ) : null}
+              <div className="print-menu">
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm ticket-detail-header__edit"
+                  aria-label="Печать"
+                  title="Печать"
+                  aria-expanded={printMenuOpen}
+                  onClick={() => setPrintMenuOpen((open) => !open)}
+                >
+                  <Printer size={14} aria-hidden="true" />
+                  <span className="ticket-detail-header__edit-label">Печать</span>
+                </button>
+                {printMenuOpen ? (
+                  <div className="print-menu__list" role="menu">
+                    {canEdit ? (
+                      <>
+                        {PRINT_KIND_ORDER.map((kind) => {
+                          const printers = taskPrinters.filter((printer) => printer.kind === kind);
+                          if (!printers.length) return null;
+                          return (
+                            <div key={kind} className="print-menu__group">
+                              <div className="print-menu__group-title">{PRINT_KIND_TITLES[kind]}</div>
+                              {printers.map((printer) => (
+                                <button
+                                  key={`${printer.station_id}-${printer.name}`}
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={printMutation.isPending}
+                                  onClick={() =>
+                                    printMutation.mutate({
+                                      kind,
+                                      printer_name: printer.name,
+                                      station_id: printer.station_id,
+                                    })
+                                  }
+                                >
+                                  {printerOptionLabel(printer, printers)}
+                                </button>
+                              ))}
+                            </div>
+                          );
+                        })}
+                        {!taskPrinters.length ? (
+                          <p className="print-menu__empty">Нет включённых принтеров. Создайте их в Print Service.</p>
+                        ) : null}
+                      </>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setPrintMenuOpen(false);
+                        window.print();
+                      }}
+                    >
+                      Счёт в браузере
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1237,6 +1433,7 @@ export default function TaskDetailPage() {
                     const lineKey = cartLineKey("device", line.id);
                     const discounted = hasCartDiscount(line);
                     const title = line.device_name || `Устройство #${line.device_id}`;
+                    const hidePrice = task.action === "repair";
                     return (
                       <CartLine
                         key={lineKey}
@@ -1244,11 +1441,18 @@ export default function TaskDetailPage() {
                         alt={title}
                         title={title}
                         badge={line.action_label || line.action}
+                        extraBadge={returnedDeviceBadge(line)}
+                        extraBadgeClassName="task-product-card__badge--ok"
                         description={line.description}
                         notes={line.notes}
                         price={cartOperationPriceLines(line, rate, "price", displayCurrency)}
-                        originalPrice={discounted ? cartOperationPriceLines(line, rate, "price_without_discount", displayCurrency) : null}
-                        discountText={discountLabel(line)}
+                        originalPrice={
+                          hidePrice || !discounted
+                            ? null
+                            : cartOperationPriceLines(line, rate, "price_without_discount", displayCurrency)
+                        }
+                        discountText={hidePrice ? "" : discountLabel(line)}
+                        hidePrice={hidePrice}
                         quantity={lineQuantity(line.quantity)}
                         selected={activeSelectedKeys.includes(lineKey)}
                         canEdit={Boolean(canEditCart && line.id)}
@@ -1257,6 +1461,20 @@ export default function TaskDetailPage() {
                         onToggleSelected={() => toggleLineSelected(lineKey)}
                         onQuantityChange={(quantity) => handleDeviceQuantity(line, quantity)}
                         onRemove={() => void handleRemoveDevice(line)}
+                        serials={line.serials}
+                        labelPrinters={labelPrinters}
+                        onPrintSerial={
+                          canEdit && line.id
+                            ? (serial, printer) =>
+                                printMutation.mutate({
+                                  kind: "label",
+                                  serial_ids: [serial.id],
+                                  printer_name: printer.name,
+                                  station_id: printer.station_id,
+                                })
+                            : undefined
+                        }
+                        printBusy={printMutation.isPending}
                       />
                     );
                   })}

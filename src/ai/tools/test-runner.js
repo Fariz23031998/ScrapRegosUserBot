@@ -3,6 +3,7 @@ const { getDefaultToolDescription } = require('./descriptions');
 const { getStoredToolDescription } = require('../../db/ai-tool-descriptions');
 const { createKnowledgeTools } = require('./knowledge');
 const { createCustomerTools } = require('./customer');
+const { createOpsTools } = require('./ops');
 const { createReplyToCustomerTool } = require('../customer-assist-agent');
 
 const TICKET_REQUIRED_TOOLS = new Set([
@@ -28,6 +29,9 @@ function buildAgentTools({ db, ticket = null, chatId = null, filesById = new Map
   }
   // Prefer writable KB tools so create/update/delete are available in the test console.
   for (const tool of createKnowledgeTools({ db, write: true, deps })) {
+    byName.set(tool.name, tool);
+  }
+  for (const tool of createOpsTools({ db, write: true, viewer: { seeAll: true, userId: null }, deps })) {
     byName.set(tool.name, tool);
   }
 

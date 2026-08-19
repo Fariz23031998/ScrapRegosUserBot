@@ -306,6 +306,7 @@ async function runCustomerTestAgent({
   clientPhone,
   allowAnyUser = false,
   deps = {},
+  onDelta,
 } = {}) {
   const text = String(message || '').trim();
   const uploads = Array.isArray(files) ? files : [];
@@ -379,6 +380,7 @@ async function runCustomerTestAgent({
       hasVision: historyHasVisionParts(history),
       hasAudio: historyHasAudioTranscript(history),
       tools,
+      onDelta,
     });
 
     const reply = truncateText(result.content) || 'Готово.';
