@@ -11,5 +11,5 @@ export function nextTaskStatus(status: string | undefined): { value: string; lab
 }
 
 export function isTaskCartLocked(task: { status?: string; posted?: boolean } | null | undefined): boolean {
-  return Boolean(task && task.status === "done" && task.posted);
+  return Boolean(task && task.posted);
 }

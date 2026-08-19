@@ -99,6 +99,8 @@ export default function TaskEditorModal({
 }) {
   const { hasPermission } = useAuth();
   const canChangeStatus = hasPermission("tasks_status");
+  const canChangeManager = hasPermission("tasks_manager");
+  const canChangeTechnician = hasPermission("tasks_technician");
   const [editor, setEditor] = useState<TaskEditor>(() => (task ? editorFromTask(task) : emptyEditor()));
   const [formError, setFormError] = useState("");
 
@@ -152,14 +154,18 @@ export default function TaskEditorModal({
       address: current.address.trim(),
       category_id: current.category_id ? Number(current.category_id) : null,
       location_id: current.location_id ? Number(current.location_id) : null,
-      manager_user_id: current.manager_user_id ? Number(current.manager_user_id) : null,
-      technician_user_id: current.action === "sale" ? null : current.technician_user_id ? Number(current.technician_user_id) : null,
       currency: parseDisplayCurrency(current.currency),
       regos_client_id: current.client?.id ?? null,
       client_name: current.client?.name || "",
       client_phone: current.client?.phone || "",
     };
     if (canChangeStatus) payload.status = current.status;
+    if (canChangeManager) {
+      payload.manager_user_id = current.manager_user_id ? Number(current.manager_user_id) : null;
+    }
+    if (canChangeTechnician) {
+      payload.technician_user_id = current.action === "sale" ? null : current.technician_user_id ? Number(current.technician_user_id) : null;
+    }
     return payload;
   }
 
@@ -174,6 +180,10 @@ export default function TaskEditorModal({
         className="stack-form"
         onSubmit={(event) => {
           event.preventDefault();
+          if (task?.posted) {
+            setFormError("Проведённую задачу нельзя изменить.");
+            return;
+          }
           if (!TASK_ACTIONS.some((item) => item.value === editor.action)) {
             setFormError("Выберите тип задачи: установка, ремонт или продажа.");
             return;
@@ -349,6 +359,7 @@ export default function TaskEditorModal({
             Менеджер
             <select
               value={editor.manager_user_id}
+              disabled={!canChangeManager}
               onChange={(event) => setEditor((prev) => ({ ...prev, manager_user_id: event.target.value }))}
             >
               <option value="">Не назначен</option>
@@ -364,6 +375,7 @@ export default function TaskEditorModal({
               Техник
               <select
                 value={editor.technician_user_id}
+                disabled={!canChangeTechnician}
                 onChange={(event) => setEditor((prev) => ({ ...prev, technician_user_id: event.target.value }))}
               >
                 <option value="">Не назначен</option>
@@ -381,7 +393,7 @@ export default function TaskEditorModal({
           <button type="button" className="btn-secondary" onClick={onClose}>
             Отмена
           </button>
-          <button type="submit" className="btn-primary" disabled={saveMutation.isPending}>
+          <button type="submit" className="btn-primary" disabled={saveMutation.isPending || Boolean(task?.posted)}>
             Сохранить
           </button>
         </div>

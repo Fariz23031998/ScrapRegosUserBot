@@ -14,6 +14,7 @@ const {
   addTaskService,
   advanceTaskStatus,
   createTask,
+  deleteTask,
   getTask,
   postTask,
   unpostTask,
@@ -57,9 +58,9 @@ describe('task posting and status', () => {
     removeDbFiles(dbPath);
   });
 
-  it('exposes tasks_post, tasks_unpost, and tasks_status permissions and user_rights columns', () => {
+  it('exposes tasks_post, tasks_unpost, tasks_status, tasks_manager, and tasks_technician permissions and user_rights columns', () => {
     const cols = db.prepare('PRAGMA table_info(user_rights)').all();
-    for (const key of ['tasks_post', 'tasks_unpost', 'tasks_status']) {
+    for (const key of ['tasks_post', 'tasks_unpost', 'tasks_status', 'tasks_manager', 'tasks_technician']) {
       assert.ok(RIGHTS[key]);
       assert.equal(DEFAULT_RIGHTS[key], 0);
       assert.ok(ADMIN_PERMISSION_KEYS.includes(key));
@@ -100,7 +101,7 @@ describe('task posting and status', () => {
     assert.equal(reopened.status, 'new');
   });
 
-  it('locks the cart when the task is done and posted', () => {
+  it('locks the task when it is posted', () => {
     const service = createService(db, {
       name: 'Блокировка корзины',
       cost_amount: 0,
@@ -110,15 +111,18 @@ describe('task posting and status', () => {
     const created = createTask(db, { title: 'Корзина закрыта', devices: [] });
     const withLine = addTaskService(db, created.id, { service_id: service.id, quantity: 1 });
     const lineId = withLine.services[0].id;
-    advanceTaskStatus(db, created.id);
-    advanceTaskStatus(db, created.id);
     postTask(db, created.id);
 
     assert.throws(() => addTaskService(db, created.id, { service_id: service.id }), /TASK_CART_LOCKED/);
     assert.throws(() => updateTaskService(db, created.id, lineId, { quantity: 2 }), /TASK_CART_LOCKED/);
+    assert.throws(() => updateTask(db, created.id, { title: 'Нельзя' }), /TASK_CART_LOCKED/);
+    assert.throws(() => advanceTaskStatus(db, created.id), /TASK_CART_LOCKED/);
+    assert.throws(() => deleteTask(db, created.id), /TASK_CART_LOCKED/);
     unpostTask(db, created.id);
     const updated = updateTaskService(db, created.id, lineId, { quantity: 2 });
     assert.equal(updated.services[0].quantity, 2);
+    const renamed = updateTask(db, created.id, { title: 'Можно' });
+    assert.equal(renamed.title, 'Можно');
   });
 
   it('deletes refunds when unposting with confirmation', () => {

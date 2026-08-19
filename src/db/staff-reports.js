@@ -25,42 +25,6 @@ function unixSecondsToSqliteUtc(unix) {
   return new Date(n * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
-function emptyStaffRow(userId, name) {
-  return {
-    user_id: userId,
-    name: name || `Сотрудник #${userId}`,
-    manager_task_count: 0,
-    commission_uzs: 0,
-    commission_usd: 0,
-    technician_task_count: 0,
-    technician_task_score: 0,
-    ticket_count: 0,
-  };
-}
-
-function emptyStaffTotals() {
-  return {
-    manager_task_count: 0,
-    commission_uzs: 0,
-    commission_usd: 0,
-    technician_task_count: 0,
-    technician_task_score: 0,
-    ticket_count: 0,
-  };
-}
-
-function isStaffRowEmpty(row) {
-  return (
-    !row ||
-    (Number(row.manager_task_count) === 0 &&
-      Number(row.technician_task_count) === 0 &&
-      Number(row.ticket_count) === 0 &&
-      Number(row.commission_uzs) === 0 &&
-      Number(row.commission_usd) === 0 &&
-      Number(row.technician_task_score) === 0)
-  );
-}
-
 function roundStaffMoney(value) {
   return roundMoney(value);
 }
@@ -82,27 +46,31 @@ function queryInChunks(db, sqlForPlaceholders, ids, extraParams = []) {
   return rows;
 }
 
-function ensureRow(byUser, userId, name) {
-  const id = Number(userId);
-  if (!Number.isFinite(id) || id <= 0) return null;
-  if (!byUser.has(id)) {
-    byUser.set(id, emptyStaffRow(id, name));
+function tableExists(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+function loadPostedTasks(db, { from = null, to = null, viewer = null } = {}) {
+  ensureTaskTables(db);
+  const where = [`t.status = 'done'`, `IFNULL(t.posted, 0) = 1`];
+  const params = [];
+  if (from) {
+    where.push(`datetime(t.created_at) >= datetime(?)`);
+    params.push(from);
   }
-  return byUser.get(id);
-}
+  if (to) {
+    where.push(`datetime(t.created_at) <= datetime(?)`);
+    params.push(to);
+  }
+  appendLocationAccessFilter(where, params, viewer);
 
-function addLineCommission(row, line, rate) {
-  const percent = Number(line.manager_sale_percent) || 0;
-  if (percent <= 0) return;
-  const money = computeLineMoney(line, rate);
-  row.commission_uzs = roundStaffMoney(row.commission_uzs + (money.price_uzs * percent) / 100);
-  row.commission_usd = roundStaffMoney(row.commission_usd + (money.price_usd * percent) / 100);
-}
-
-function addLineTechnicianScore(row, line) {
-  const score = Number(line.technician_score) || 0;
-  if (score <= 0) return;
-  row.technician_task_score = roundStaffMoney(row.technician_task_score + score * staffQuantity(line));
+  return db
+    .prepare(
+      `SELECT t.id, t.manager_user_id, t.technician_user_id, t.location_id
+       FROM tasks t
+       WHERE ${where.join(' AND ')}`
+    )
+    .all(...params);
 }
 
 function listReportDeviceLines(db, taskIds) {
@@ -122,10 +90,7 @@ function listReportDeviceLines(db, taskIds) {
 }
 
 function listReportServiceLines(db, taskIds) {
-  const hasServices = Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_services'").get()
-  );
-  if (!hasServices) return [];
+  if (!tableExists(db, 'task_services')) return [];
   return queryInChunks(
     db,
     (placeholders) => `
@@ -141,79 +106,146 @@ function listReportServiceLines(db, taskIds) {
   );
 }
 
-function summarizeStaffTasks(db, { from = null, to = null, viewer = null } = {}) {
-  ensureTaskTables(db);
-  const rate = getUsdUzsRate(db);
-  const where = [`t.status = 'done'`, `IFNULL(t.posted, 0) = 1`];
-  const params = [];
-  if (from) {
-    where.push(`datetime(t.created_at) >= datetime(?)`);
-    params.push(from);
-  }
-  if (to) {
-    where.push(`datetime(t.created_at) <= datetime(?)`);
-    params.push(to);
-  }
-  appendLocationAccessFilter(where, params, viewer);
-
-  const tasks = db
-    .prepare(
-      `SELECT t.id, t.manager_user_id, t.technician_user_id
-       FROM tasks t
-       WHERE ${where.join(' AND ')}`
-    )
-    .all(...params);
-
-  const byUser = new Map();
-  for (const task of tasks) {
-    if (task.manager_user_id != null) {
-      const row = ensureRow(byUser, task.manager_user_id);
-      if (row) row.manager_task_count += 1;
-    }
-    if (task.technician_user_id != null) {
-      const row = ensureRow(byUser, task.technician_user_id);
-      if (row) row.technician_task_count += 1;
-    }
-  }
-
-  const ids = tasks.map((task) => task.id);
-  const taskById = new Map(tasks.map((task) => [task.id, task]));
-  const lines = [...listReportDeviceLines(db, ids), ...listReportServiceLines(db, ids)];
-  for (const line of lines) {
-    const task = taskById.get(line.task_id);
-    if (!task) continue;
-    if (task.manager_user_id != null) {
-      const row = ensureRow(byUser, task.manager_user_id);
-      if (row) addLineCommission(row, line, rate);
-    }
-    if (task.technician_user_id != null) {
-      const row = ensureRow(byUser, task.technician_user_id);
-      if (row) addLineTechnicianScore(row, line);
-    }
-  }
-
-  return byUser;
+function listPostedTaskLines(db, taskIds) {
+  return [...listReportDeviceLines(db, taskIds), ...listReportServiceLines(db, taskIds)];
 }
 
-function presentStaffRow(row) {
+function loadPostedTaskReportContext(db, { fromUnix = null, toUnix = null, viewer = null } = {}) {
+  const from = unixSecondsToSqliteUtc(fromUnix);
+  const to = unixSecondsToSqliteUtc(toUnix);
+  const tasks = loadPostedTasks(db, { from, to, viewer });
+  const lines = listPostedTaskLines(
+    db,
+    tasks.map((task) => task.id)
+  );
+  return {
+    from,
+    to,
+    rate: getUsdUzsRate(db),
+    tasks,
+    lines,
+    taskById: new Map(tasks.map((task) => [task.id, task])),
+  };
+}
+
+function namedEmployeeRow(db, userId, fallbackName) {
+  const id = Number(userId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const user = getBotUserById(db, id);
+  return {
+    user_id: id,
+    name: employeeLabel(user) || fallbackName || `Сотрудник #${id}`,
+  };
+}
+
+function employeeNamer(db) {
+  const cache = new Map();
+  return (userId, fallbackName) => {
+    const id = Number(userId);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    if (!cache.has(id)) cache.set(id, namedEmployeeRow(db, id, fallbackName));
+    return cache.get(id);
+  };
+}
+
+function emptyTechnicianRow(userId, name) {
+  return {
+    user_id: userId,
+    name: name || `Сотрудник #${userId}`,
+    technician_task_count: 0,
+    technician_task_score: 0,
+    ticket_count: 0,
+  };
+}
+
+function emptyCommissionRow(userId, name) {
+  return {
+    user_id: userId,
+    name: name || `Сотрудник #${userId}`,
+    manager_task_count: 0,
+    commission_uzs: 0,
+    commission_usd: 0,
+  };
+}
+
+function ensureMapRow(byUser, userId, factory) {
+  const id = Number(userId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  if (!byUser.has(id)) byUser.set(id, factory(id));
+  return byUser.get(id);
+}
+
+function addLineCommission(row, line, rate) {
+  const percent = Number(line.manager_sale_percent) || 0;
+  if (percent <= 0) return;
+  const money = computeLineMoney(line, rate);
+  row.commission_uzs = roundStaffMoney(row.commission_uzs + (money.price_uzs * percent) / 100);
+  row.commission_usd = roundStaffMoney(row.commission_usd + (money.price_usd * percent) / 100);
+}
+
+function addLineTechnicianScore(row, line) {
+  const score = Number(line.technician_score) || 0;
+  if (score <= 0) return;
+  row.technician_task_score = roundStaffMoney(row.technician_task_score + score * staffQuantity(line));
+}
+
+function presentTechnicianRow(row) {
   return {
     user_id: row.user_id,
     name: row.name,
-    manager_task_count: Number(row.manager_task_count) || 0,
-    commission_uzs: roundStaffMoney(row.commission_uzs),
-    commission_usd: roundStaffMoney(row.commission_usd),
     technician_task_count: Number(row.technician_task_count) || 0,
     technician_task_score: roundStaffMoney(row.technician_task_score),
     ticket_count: Number(row.ticket_count) || 0,
   };
 }
 
-function sumStaffTotals(rows) {
-  const totals = emptyStaffTotals();
+function presentCommissionRow(row) {
+  return {
+    user_id: row.user_id,
+    name: row.name,
+    manager_task_count: Number(row.manager_task_count) || 0,
+    commission_uzs: roundStaffMoney(row.commission_uzs),
+    commission_usd: roundStaffMoney(row.commission_usd),
+  };
+}
+
+function isTechnicianRowEmpty(row) {
+  return (
+    !row ||
+    (Number(row.technician_task_count) === 0 &&
+      Number(row.ticket_count) === 0 &&
+      Number(row.technician_task_score) === 0)
+  );
+}
+
+function isCommissionRowEmpty(row) {
+  return (
+    !row ||
+    (Number(row.manager_task_count) === 0 &&
+      Number(row.commission_uzs) === 0 &&
+      Number(row.commission_usd) === 0)
+  );
+}
+
+function emptyTechnicianTotals() {
+  return {
+    technician_task_count: 0,
+    technician_task_score: 0,
+    ticket_count: 0,
+  };
+}
+
+function emptyCommissionTotals() {
+  return {
+    manager_task_count: 0,
+    commission_uzs: 0,
+    commission_usd: 0,
+  };
+}
+
+function sumTechnicianTotals(rows) {
+  const totals = emptyTechnicianTotals();
   for (const row of rows) {
-    totals.manager_task_count += Number(row.manager_task_count) || 0;
-    totals.commission_uzs = roundStaffMoney(totals.commission_uzs + (Number(row.commission_uzs) || 0));
-    totals.commission_usd = roundStaffMoney(totals.commission_usd + (Number(row.commission_usd) || 0));
     totals.technician_task_count += Number(row.technician_task_count) || 0;
     totals.technician_task_score = roundStaffMoney(
       totals.technician_task_score + (Number(row.technician_task_score) || 0)
@@ -223,28 +255,53 @@ function sumStaffTotals(rows) {
   return totals;
 }
 
-function buildStaffReport(db, {
-  fromUnix = null,
-  toUnix = null,
-  viewer = null,
-  ticketsByRegosUserId = new Map(),
-  unassignedTicketCount = 0,
-} = {}) {
-  const from = unixSecondsToSqliteUtc(fromUnix);
-  const to = unixSecondsToSqliteUtc(toUnix);
-  const taskByUser = summarizeStaffTasks(db, { from, to, viewer });
-  const byUser = new Map();
+function sumCommissionTotals(rows) {
+  const totals = emptyCommissionTotals();
+  for (const row of rows) {
+    totals.manager_task_count += Number(row.manager_task_count) || 0;
+    totals.commission_uzs = roundStaffMoney(totals.commission_uzs + (Number(row.commission_uzs) || 0));
+    totals.commission_usd = roundStaffMoney(totals.commission_usd + (Number(row.commission_usd) || 0));
+  }
+  return totals;
+}
 
-  for (const [userId, stats] of taskByUser) {
-    const user = getBotUserById(db, userId);
-    byUser.set(
-      userId,
-      presentStaffRow({
-        ...stats,
-        user_id: userId,
-        name: employeeLabel(user) || stats.name,
-      })
-    );
+function sortNamedRows(rows) {
+  return rows.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+}
+
+function buildTechnicianReport(
+  db,
+  {
+    fromUnix = null,
+    toUnix = null,
+    viewer = null,
+    ticketsByRegosUserId = new Map(),
+    unassignedTicketCount = 0,
+  } = {}
+) {
+  const { tasks, lines, taskById } = loadPostedTaskReportContext(db, {
+    fromUnix,
+    toUnix,
+    viewer,
+  });
+  const byUser = new Map();
+  const nameOf = employeeNamer(db);
+
+  for (const task of tasks) {
+    if (task.technician_user_id == null) continue;
+    const named = nameOf(task.technician_user_id);
+    if (!named) continue;
+    const row = ensureMapRow(byUser, named.user_id, (id) => emptyTechnicianRow(id, named.name));
+    if (row) row.technician_task_count += 1;
+  }
+
+  for (const line of lines) {
+    const task = taskById.get(line.task_id);
+    if (!task || task.technician_user_id == null) continue;
+    const named = nameOf(task.technician_user_id);
+    if (!named) continue;
+    const row = ensureMapRow(byUser, named.user_id, (id) => emptyTechnicianRow(id, named.name));
+    if (row) addLineTechnicianScore(row, line);
   }
 
   let unmatchedTickets = Number(unassignedTicketCount) || 0;
@@ -256,31 +313,74 @@ function buildStaffReport(db, {
       unmatchedTickets += n;
       continue;
     }
-    const row = ensureRow(byUser, user.id, employeeLabel(user));
+    const named = nameOf(user.id, employeeLabel(user));
+    if (!named) {
+      unmatchedTickets += n;
+      continue;
+    }
+    const row = ensureMapRow(byUser, named.user_id, (id) => emptyTechnicianRow(id, named.name));
     if (!row) {
       unmatchedTickets += n;
       continue;
     }
     row.ticket_count += n;
-    if (!row.name) row.name = employeeLabel(user);
+    if (!row.name) row.name = named.name;
   }
 
-  const rows = [...byUser.values()]
-    .map(presentStaffRow)
-    .filter((row) => !isStaffRowEmpty(row))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  const rows = sortNamedRows(
+    [...byUser.values()].map(presentTechnicianRow).filter((row) => !isTechnicianRowEmpty(row))
+  );
 
   return {
     rows,
-    totals: sumStaffTotals(rows),
+    totals: sumTechnicianTotals(rows),
     unassigned_ticket_count: unmatchedTickets,
+  };
+}
+
+function buildCommissionReport(db, { fromUnix = null, toUnix = null, viewer = null } = {}) {
+  const { rate, tasks, lines, taskById } = loadPostedTaskReportContext(db, {
+    fromUnix,
+    toUnix,
+    viewer,
+  });
+  const byUser = new Map();
+  const nameOf = employeeNamer(db);
+
+  for (const task of tasks) {
+    if (task.manager_user_id == null) continue;
+    const named = nameOf(task.manager_user_id);
+    if (!named) continue;
+    const row = ensureMapRow(byUser, named.user_id, (id) => emptyCommissionRow(id, named.name));
+    if (row) row.manager_task_count += 1;
+  }
+
+  for (const line of lines) {
+    const task = taskById.get(line.task_id);
+    if (!task || task.manager_user_id == null) continue;
+    const named = nameOf(task.manager_user_id);
+    if (!named) continue;
+    const row = ensureMapRow(byUser, named.user_id, (id) => emptyCommissionRow(id, named.name));
+    if (row) addLineCommission(row, line, rate);
+  }
+
+  const rows = sortNamedRows(
+    [...byUser.values()].map(presentCommissionRow).filter((row) => !isCommissionRowEmpty(row))
+  );
+
+  return {
+    rows,
+    totals: sumCommissionTotals(rows),
   };
 }
 
 module.exports = {
   unixSecondsToSqliteUtc,
-  emptyStaffRow,
-  emptyStaffTotals,
-  summarizeStaffTasks,
-  buildStaffReport,
+  queryInChunks,
+  tableExists,
+  loadPostedTasks,
+  listPostedTaskLines,
+  loadPostedTaskReportContext,
+  buildTechnicianReport,
+  buildCommissionReport,
 };

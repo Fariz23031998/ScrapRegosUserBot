@@ -2221,6 +2221,14 @@ body.is-column-resizing * {
   flex-shrink: 0;
 }
 
+.tickets-sticky-head .card-toolbar {
+  margin-bottom: 0.65rem;
+}
+
+.tickets-sticky-head .role-tabs {
+  flex-wrap: wrap;
+}
+
 .tickets-sticky-head .ticket-filters {
   margin-top: 0;
   padding-top: 0;
@@ -4268,6 +4276,10 @@ body.is-column-resizing * {
   flex-shrink: 0;
 }
 
+.task-invoice-print {
+  display: none;
+}
+
 .task-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
@@ -5357,4 +5369,241 @@ body.is-column-resizing * {
     grid-template-columns: 1fr;
   }
 }
+
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm;
+  }
+
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .admin-shell,
+  .admin-main,
+  .admin-content,
+  .page--task-detail {
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .admin-sidebar,
+  .admin-sidebar-backdrop,
+  .admin-topbar,
+  .tickets-fab-dock,
+  .ticket-detail-header,
+  .task-view-tabs,
+  .task-workspace,
+  .modal-overlay,
+  .confirm-overlay {
+    display: none !important;
+  }
+
+  .task-invoice-print {
+    display: block !important;
+    color: #000;
+    background: #fff;
+    font-size: 12pt;
+    line-height: 1.4;
+  }
+
+  .task-invoice-print__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid #000;
+  }
+
+  .task-invoice-print__header h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    color: #000;
+  }
+
+  .task-invoice-print__date {
+    margin: 0.25rem 0 0;
+    color: #000;
+  }
+
+  .task-invoice-print__draft {
+    border: 1px solid #000;
+    padding: 0.2rem 0.55rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .task-invoice-print__meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem 1.5rem;
+    margin: 0 0 1.25rem;
+  }
+
+  .task-invoice-print__meta-row {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: 0.5rem;
+  }
+
+  .task-invoice-print__meta dt {
+    color: #444;
+    font-weight: 600;
+  }
+
+  .task-invoice-print__meta dd {
+    margin: 0;
+    color: #000;
+  }
+
+  .task-invoice-print__table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+  }
+
+  .task-invoice-print__table th,
+  .task-invoice-print__table td {
+    border: 1px solid #999;
+    padding: 0.4rem 0.5rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .task-invoice-print__table th {
+    background: #f3f3f3;
+    color: #000;
+    font-weight: 700;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .task-invoice-print__col-num,
+  .task-invoice-print__col-qty {
+    width: 4rem;
+    text-align: center;
+  }
+
+  .task-invoice-print__col-money {
+    width: 8.5rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .task-invoice-print__empty {
+    text-align: center;
+    color: #444;
+  }
+
+  .task-invoice-print .money-pair {
+    align-items: flex-end;
+  }
+
+  .task-invoice-print .money-pair__muted {
+    color: #444;
+    font-size: 0.85em;
+  }
+
+  .task-invoice-print__totals {
+    margin: 0 0 1.25rem auto;
+    width: min(22rem, 100%);
+  }
+
+  .task-invoice-print__total-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid #ccc;
+  }
+
+  .task-invoice-print__total-row--strong {
+    font-weight: 700;
+    border-bottom: 2px solid #000;
+  }
+
+  .task-invoice-print__payments h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+    color: #000;
+  }
+
+  .task-invoice-print__payments p {
+    margin: 0 0 1rem;
+  }
+
+  .task-invoice-print__signs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 2.5rem;
+  }
+
+  .task-invoice-print__signs > div {
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+  }
+
+  .task-invoice-print__sign-line {
+    border-bottom: 1px solid #000;
+    min-height: 1.25rem;
+  }
+}
+
+.toast-stack {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 80;
+  display: grid;
+  gap: 0.5rem;
+  max-width: min(24rem, calc(100vw - 2rem));
+}
+
+.toast {
+  margin: 0;
+  padding: 0.75rem 0.95rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.toast--success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.toast--error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.toast--link:hover {
+  filter: brightness(0.97);
+}
+
+
 

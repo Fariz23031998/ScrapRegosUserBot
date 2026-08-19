@@ -226,7 +226,7 @@ export default function TasksPage() {
     const nextStatus = nextTaskStatus(task.status);
     return (
       <>
-        {hasPermission("tasks_edit") && nextStatus ? (
+        {hasPermission("tasks_edit") && !task.posted && nextStatus ? (
           <button
             type="button"
             className="btn-secondary btn-icon btn-sm"
@@ -241,7 +241,7 @@ export default function TasksPage() {
             <ArrowRight size={15} aria-hidden="true" />
           </button>
         ) : null}
-        {hasPermission("tasks_delete") ? (
+        {hasPermission("tasks_delete") && !task.posted ? (
           <button
             type="button"
             className="btn-danger btn-icon btn-sm"

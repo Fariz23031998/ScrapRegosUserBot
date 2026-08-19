@@ -10,7 +10,11 @@ const { createService } = require('../src/db/services');
 const { openDb } = require('../src/db/partners-db');
 const { setUsdUzsRate } = require('../src/db/money');
 const { addTaskService, createTask, postTask, updateTaskDevice } = require('../src/db/tasks');
-const { buildStaffReport, unixSecondsToSqliteUtc } = require('../src/db/staff-reports');
+const {
+  buildCommissionReport,
+  buildTechnicianReport,
+  unixSecondsToSqliteUtc,
+} = require('../src/db/staff-reports');
 const { countTicketsByResponsible, buildDurationSummary } = require('../src/admin/ticket-duration');
 const { ADMIN_PERMISSION_KEYS } = require('../src/db/user-rights');
 
@@ -80,7 +84,7 @@ describe('staff reports', () => {
     assert.equal(unixSecondsToSqliteUtc(1704067200), '2024-01-01 00:00:00');
   });
 
-  it('sums commission and technician score from done posted tasks', () => {
+  it('sums commission and technician score from done posted tasks independently', () => {
     const task = createTask(db, {
       title: 'Установка терминала',
       status: 'done',
@@ -91,28 +95,32 @@ describe('staff reports', () => {
     addTaskService(db, task.id, { service_id: service.id, quantity: 1 });
     postTask(db, task.id);
 
-    const report = buildStaffReport(db, currentPeriod());
-    const managerRow = report.rows.find((row) => row.user_id === manager.id);
-    const technicianRow = report.rows.find((row) => row.user_id === technician.id);
+    const commission = buildCommissionReport(db, currentPeriod());
+    const scores = buildTechnicianReport(db, currentPeriod());
+    const managerRow = commission.rows.find((row) => row.user_id === manager.id);
+    const technicianRow = scores.rows.find((row) => row.user_id === technician.id);
 
     assert.ok(managerRow);
     assert.equal(managerRow.manager_task_count, 1);
-    assert.equal(managerRow.technician_task_count, 0);
-    // (200_000 * 10% device) + (50_000 * 20% service) = 20_000 + 10_000
     assert.equal(managerRow.commission_uzs, 30000);
     assert.equal(managerRow.commission_usd, 2.4);
+    assert.equal(managerRow.technician_task_count, undefined);
+    assert.equal(managerRow.ticket_count, undefined);
 
     assert.ok(technicianRow);
     assert.equal(technicianRow.technician_task_count, 1);
-    assert.equal(technicianRow.manager_task_count, 0);
-    // 2 points * qty 2 + 3 points * qty 1
     assert.equal(technicianRow.technician_task_score, 7);
     assert.equal(technicianRow.ticket_count, 0);
+    assert.equal(technicianRow.commission_uzs, undefined);
+    assert.equal(scores.rows.find((row) => row.user_id === manager.id), undefined);
+    assert.equal(commission.rows.find((row) => row.user_id === technician.id), undefined);
   });
 
   it('ignores new and unposted tasks', () => {
-    const before = buildStaffReport(db, currentPeriod());
-    const managerBefore = before.rows.find((row) => row.user_id === manager.id);
+    const commissionBefore = buildCommissionReport(db, currentPeriod());
+    const scoresBefore = buildTechnicianReport(db, currentPeriod());
+    const managerBefore = commissionBefore.rows.find((row) => row.user_id === manager.id);
+    const technicianBefore = scoresBefore.rows.find((row) => row.user_id === technician.id);
 
     createTask(db, {
       title: 'Черновик',
@@ -130,13 +138,19 @@ describe('staff reports', () => {
     });
     assert.equal(unposted.posted, false);
 
-    const after = buildStaffReport(db, currentPeriod());
-    const managerAfter = after.rows.find((row) => row.user_id === manager.id);
+    const commissionAfter = buildCommissionReport(db, currentPeriod());
+    const scoresAfter = buildTechnicianReport(db, currentPeriod());
+    const managerAfter = commissionAfter.rows.find((row) => row.user_id === manager.id);
+    const technicianAfter = scoresAfter.rows.find((row) => row.user_id === technician.id);
     assert.equal(managerAfter.manager_task_count, managerBefore.manager_task_count);
     assert.equal(managerAfter.commission_uzs, managerBefore.commission_uzs);
+    assert.equal(technicianAfter.technician_task_count, technicianBefore.technician_task_count);
+    assert.equal(technicianAfter.technician_task_score, technicianBefore.technician_task_score);
   });
 
-  it('applies percent discount to manager commission', () => {
+  it('applies percent discount to manager commission without changing technician score formula', () => {
+    const scoresBefore = buildTechnicianReport(db, currentPeriod());
+    const technicianBefore = scoresBefore.rows.find((row) => row.user_id === technician.id);
     const task = createTask(db, {
       title: 'Со скидкой',
       status: 'done',
@@ -150,14 +164,17 @@ describe('staff reports', () => {
     });
     postTask(db, task.id);
 
-    const report = buildStaffReport(db, currentPeriod());
-    const managerRow = report.rows.find((row) => row.user_id === manager.id);
-    // previous 30_000 + 90_000 * 10% = 9_000
+    const commission = buildCommissionReport(db, currentPeriod());
+    const scores = buildTechnicianReport(db, currentPeriod());
+    const managerRow = commission.rows.find((row) => row.user_id === manager.id);
+    const technicianRow = scores.rows.find((row) => row.user_id === technician.id);
     assert.equal(managerRow.commission_uzs, 39000);
+    assert.equal(technicianRow.technician_task_score, technicianBefore.technician_task_score + 2);
   });
 
-  it('adds ticket counts by linked regos user id', () => {
-    const report = buildStaffReport(db, {
+  it('adds ticket counts only to the technician report', () => {
+    const commissionBefore = buildCommissionReport(db, currentPeriod());
+    const report = buildTechnicianReport(db, {
       ...currentPeriod(),
       ticketsByRegosUserId: new Map([
         [77, 4],
@@ -169,6 +186,13 @@ describe('staff reports', () => {
     assert.equal(technicianRow.ticket_count, 4);
     assert.equal(report.unassigned_ticket_count, 3);
     assert.equal(report.totals.ticket_count, 4);
+
+    const commissionAfter = buildCommissionReport(db, currentPeriod());
+    const managerBefore = commissionBefore.rows.find((row) => row.user_id === manager.id);
+    const managerAfter = commissionAfter.rows.find((row) => row.user_id === manager.id);
+    assert.equal(managerAfter.commission_uzs, managerBefore.commission_uzs);
+    assert.equal(managerAfter.manager_task_count, managerBefore.manager_task_count);
+    assert.equal(commissionAfter.unassigned_ticket_count, undefined);
   });
 
   it('excludes tasks outside the created_at period', () => {
@@ -181,8 +205,8 @@ describe('staff reports', () => {
     postTask(db, oldTask.id);
     db.prepare(`UPDATE tasks SET created_at = '2020-01-01 00:00:00' WHERE id = ?`).run(oldTask.id);
 
-    const report = buildStaffReport(db, currentPeriod());
-    const managerRow = report.rows.find((row) => row.user_id === manager.id);
+    const commission = buildCommissionReport(db, currentPeriod());
+    const managerRow = commission.rows.find((row) => row.user_id === manager.id);
     assert.equal(managerRow.manager_task_count, 2);
   });
 });

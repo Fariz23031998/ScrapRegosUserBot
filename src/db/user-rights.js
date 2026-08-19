@@ -205,6 +205,14 @@ const RIGHTS = {
     column: 'tasks_status',
     label: 'Админ: задачи — изменение статуса',
   },
+  tasks_manager: {
+    column: 'tasks_manager',
+    label: 'Админ: задачи — изменение менеджера',
+  },
+  tasks_technician: {
+    column: 'tasks_technician',
+    label: 'Админ: задачи — изменение техника',
+  },
   devices_read: {
     column: 'devices_read',
     label: 'Админ: устройства — просмотр',
@@ -286,6 +294,8 @@ const ADMIN_PERMISSION_KEYS = [
   'tasks_post',
   'tasks_unpost',
   'tasks_status',
+  'tasks_manager',
+  'tasks_technician',
   'devices_read',
   'devices_create',
   'devices_edit',

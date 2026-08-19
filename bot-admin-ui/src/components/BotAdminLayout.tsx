@@ -23,7 +23,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { logout, updateAccount } from "../api/auth";
+import { ReportJobViewProvider } from "../contexts/ReportJobViewContext";
+import { ToastProvider } from "../contexts/ToastContext";
 import { useAuth } from "../hooks/useAuth";
+import { useReportEvents } from "../hooks/useReportEvents";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import type { AdminShellContextValue } from "../lib/admin-shell";
@@ -59,6 +62,12 @@ function initials(profile: { displayName?: string | null; phone?: string; userna
   const parts = name.replace(/^@/, "").split(/\s+/).filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return name.slice(0, 2).toUpperCase();
+}
+
+function ReportNotifications() {
+  const { hasPermission } = useAuth();
+  useReportEvents(hasPermission("see_all_report"));
+  return null;
 }
 
 export default function BotAdminLayout() {
@@ -175,6 +184,9 @@ export default function BotAdminLayout() {
 
   return (
     <AdminShellProvider value={shellContext}>
+    <ToastProvider>
+    <ReportJobViewProvider>
+    <ReportNotifications />
     <div className="admin-shell">
       <aside className={sidebarClass}>
         <div className="admin-sidebar__head">
@@ -380,6 +392,8 @@ export default function BotAdminLayout() {
         ) : null}
       </div>
     </div>
+    </ReportJobViewProvider>
+    </ToastProvider>
     </AdminShellProvider>
   );
 }

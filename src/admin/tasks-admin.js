@@ -221,7 +221,7 @@ function taskWriteErrorMessage(code) {
     INVALID_TASK_REFUND_QUANTITY: 'Укажите количество для возврата.',
     INVALID_TASK_REFUND_AMOUNT: 'Сумма возврата не может превышать стоимость позиции.',
     INVALID_TASK_STATUS_TRANSITION: 'Статус задачи можно менять только вперёд: Новая → В работе → Выполнена.',
-    TASK_CART_LOCKED: 'После проведения выполненной задачи корзину нельзя изменить.',
+    TASK_CART_LOCKED: 'Проведённую задачу нельзя изменить.',
     TASK_NOT_DONE: 'Возврат доступен только для выполненной задачи.',
     TASK_NOT_POSTED: 'Возврат доступен только после проведения задачи.',
     TASK_HAS_REFUNDS: 'Нельзя отменить проведение: по задаче есть возвраты.',
@@ -306,6 +306,31 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     if (actor?.type === 'telegram') return getBotUserByTelegramId(db, actor.telegramId)?.id ?? null;
     if (actor?.type === 'user') return getBotUserById(db, actor.userId)?.id ?? null;
     return null;
+  }
+
+  function staffIdChanged(nextValue, currentValue) {
+    if (nextValue === undefined) return false;
+    const nextId = nextValue == null || nextValue === '' ? null : Number(nextValue);
+    const currentId = currentValue == null ? null : Number(currentValue);
+    if (nextId == null && currentId == null) return false;
+    return nextId !== currentId;
+  }
+
+  function applyTaskStaffPermissions(req, body, current = null) {
+    const actor = getSessionActor(req);
+    const canChangeManager = actorHasPermission(db, actor, 'tasks_manager');
+    const canChangeTechnician = actorHasPermission(db, actor, 'tasks_technician');
+    if (current) {
+      if (staffIdChanged(body.manager_user_id, current.manager_user_id) && !canChangeManager) {
+        return { error: 'Недостаточно прав для изменения менеджера задачи.' };
+      }
+      if (staffIdChanged(body.technician_user_id, current.technician_user_id) && !canChangeTechnician) {
+        return { error: 'Недостаточно прав для изменения техника задачи.' };
+      }
+    }
+    if (!canChangeManager) delete body.manager_user_id;
+    if (!canChangeTechnician) delete body.technician_user_id;
+    return { canChangeManager, canChangeTechnician };
   }
 
   function visibleTask(req, id = req.params.id) {
@@ -1216,7 +1241,9 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     try {
       const before = requireVisibleTask(req, res);
       if (!before) return;
-      const task = advanceTaskStatus(db, before.id, taskViewer(req));
+      const task = advanceTaskStatus(db, before.id, taskViewer(req), {
+        actorUserId: sessionUserId(req),
+      });
       auditAdminChange(db, req, {
         entityType: 'task',
         entityId: task.id,
@@ -1535,9 +1562,12 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       if (!actorHasPermission(db, getSessionActor(req), 'tasks_status')) {
         delete body.status;
       }
+      const staff = applyTaskStaffPermissions(req, body);
+      if (staff.error) return res.status(403).json({ message: staff.error });
       const task = createTask(db, body, {
         requireLocation: true,
         viewer: taskViewer(req),
+        actorUserId: sessionUserId(req),
       });
       auditAdminChange(db, req, {
         entityType: 'task',
@@ -1566,6 +1596,8 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       if (!canChangeStatus) {
         delete body.status;
       }
+      const staff = applyTaskStaffPermissions(req, body, before);
+      if (staff.error) return res.status(403).json({ message: staff.error });
       const task = updateTask(db, req.params.id, body, {
         requireLocation: true,
         viewer: taskViewer(req),

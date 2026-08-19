@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, BadgeCheck, BadgeX, Eye, Minus, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, BadgeCheck, BadgeX, Eye, Minus, Pencil, Plus, Printer, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { listDeviceCategories, listDevices } from "../api/devices";
@@ -26,6 +26,7 @@ import Modal from "../components/Modal";
 import { MoneyCell } from "../components/MoneyFields";
 import SearchField from "../components/SearchField";
 import TaskEditorModal from "../components/TaskEditorModal";
+import TaskInvoicePrint from "../components/TaskInvoicePrint";
 import TaskPaymentModal from "../components/TaskPaymentModal";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
@@ -969,7 +970,7 @@ export default function TaskDetailPage() {
           </Link>
           <div className="ticket-detail-header__heading">
             <h1>{task.title}</h1>
-            {canEdit ? (
+            {canEdit && !task.posted ? (
               <button
                 type="button"
                 className="btn-secondary btn-sm ticket-detail-header__edit"
@@ -979,7 +980,7 @@ export default function TaskDetailPage() {
                 Изменить
               </button>
             ) : null}
-            {canEdit && nextStatus ? (
+            {canEdit && !task.posted && nextStatus ? (
               <button
                 type="button"
                 className="btn-success btn-sm ticket-detail-header__edit"
@@ -1025,6 +1026,16 @@ export default function TaskDetailPage() {
                 Возврат
               </Link>
             ) : null}
+            <button
+              type="button"
+              className="btn-secondary btn-sm ticket-detail-header__edit"
+              aria-label="Печать"
+              title="Печать"
+              onClick={() => window.print()}
+            >
+              <Printer size={14} aria-hidden="true" />
+              Печать
+            </button>
           </div>
         </div>
       </div>
@@ -1074,7 +1085,7 @@ export default function TaskDetailPage() {
               </p>
             ) : canEdit && cartLocked ? (
               <p className="muted-copy task-catalog__hint">
-                Корзина заблокирована: задача выполнена и проведена.
+                Задача проведена: изменения недоступны. Сначала отмените проведение.
               </p>
             ) : null}
           </div>
@@ -1415,6 +1426,8 @@ export default function TaskDetailPage() {
           invalidateTask();
         }}
       />
+
+      <TaskInvoicePrint task={task} rate={rate} displayCurrency={displayCurrency} />
     </div>
   );
 }

@@ -391,6 +391,37 @@ function normalizeEmployeeId(db, value, errorCode) {
   return user.id;
 }
 
+function resolveEmployeeId(db, value) {
+  try {
+    return normalizeEmployeeId(db, value, 'INVALID_TASK_EMPLOYEE') ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isManagerAssignableAction(action) {
+  return action === 'install' || action === 'repair' || action === 'sale';
+}
+
+function isTechnicianAssignableAction(action) {
+  return action === 'install' || action === 'repair';
+}
+
+function shouldAssignTechnicianOnStatus(action, status) {
+  return isTechnicianAssignableAction(action) && (status === 'in_progress' || status === 'done');
+}
+
+function applyCreateStaffAssignment(db, input, actorUserId) {
+  const next = { ...input };
+  const action = next.action != null && next.action !== '' ? String(next.action).trim() : 'install';
+  if (!isManagerAssignableAction(action)) return next;
+  const hasManager = next.manager_user_id != null && next.manager_user_id !== '';
+  if (hasManager) return next;
+  const employeeId = resolveEmployeeId(db, actorUserId);
+  if (employeeId) next.manager_user_id = employeeId;
+  return next;
+}
+
 function normalizeStatus(value, fallback = 'new') {
   if (value == null || value === '') return fallback;
   const status = String(value).trim();
@@ -418,7 +449,7 @@ function assertForwardStatus(currentStatus, nextStatus) {
 }
 
 function isTaskCartLocked(task) {
-  return Boolean(task && task.status === 'done' && task.posted);
+  return Boolean(task && task.posted);
 }
 
 function assertTaskCartEditable(task) {
@@ -687,8 +718,9 @@ function replaceTaskDevices(db, taskId, devices) {
 
 function createTask(db, input, options = {}) {
   ensureTaskTables(db);
-  const task = normalizeTaskInput(db, input, options);
-  const devices = normalizeTaskDevices(db, input.devices || [], task.action);
+  const assignedInput = applyCreateStaffAssignment(db, input, options.actorUserId);
+  const task = normalizeTaskInput(db, assignedInput, options);
+  const devices = normalizeTaskDevices(db, assignedInput.devices || [], task.action);
   db.exec('BEGIN');
   try {
     const result = db
@@ -728,12 +760,12 @@ function updateTask(db, id, input = {}, options = {}) {
   ensureTaskTables(db);
   const current = getTask(db, id, options.viewer);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const task = normalizeTaskInput(db, input, { partial: true, current, ...options });
   if (!options.allowAnyStatus) {
     assertForwardStatus(current.status, task.status);
   }
   const devices = input.devices != null ? normalizeTaskDevices(db, input.devices, task.action) : null;
-  if (devices) assertTaskCartEditable(current);
   db.exec('BEGIN');
   try {
     db.prepare(
@@ -1053,6 +1085,7 @@ function applyTaskDiscount(db, taskId, input = {}) {
 function deleteTask(db, id) {
   const current = getTask(db, id);
   if (!current) return false;
+  assertTaskCartEditable(current);
   db.exec('BEGIN');
   try {
     db.prepare('DELETE FROM task_services WHERE task_id = ?').run(current.id);
@@ -1167,13 +1200,23 @@ function unpostTask(db, id, viewer, options = {}) {
   return getTask(db, current.id, viewer);
 }
 
-function advanceTaskStatus(db, id, viewer) {
+function advanceTaskStatus(db, id, viewer, options = {}) {
   ensureTaskTables(db);
   const current = getTask(db, id, viewer);
   if (!current) throw new Error('NOT_FOUND');
+  assertTaskCartEditable(current);
   const next = nextTaskStatus(current.status);
   if (!next) throw new Error('INVALID_TASK_STATUS_TRANSITION');
-  db.prepare(`UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(next, current.id);
+  const technicianUserId = shouldAssignTechnicianOnStatus(current.action, next)
+    ? resolveEmployeeId(db, options.actorUserId)
+    : null;
+  if (technicianUserId) {
+    db.prepare(
+      `UPDATE tasks SET status = ?, technician_user_id = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(next, technicianUserId, current.id);
+  } else {
+    db.prepare(`UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(next, current.id);
+  }
   return getTask(db, current.id, viewer);
 }
 
