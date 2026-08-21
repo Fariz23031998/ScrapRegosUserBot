@@ -14,6 +14,7 @@ const {
   updateLocation,
 } = require('../src/db/locations');
 const { createAccount } = require('../src/db/accounts');
+const { createAccountPayment, getAccountPayment } = require('../src/db/account-payments');
 const { openDb } = require('../src/db/partners-db');
 const {
   createPaymentType,
@@ -164,12 +165,20 @@ describe('locations, payment types, and task visibility', () => {
     assert.equal(picker.includes(warehouse.id), false);
   });
 
-  it('nulls task location when the location is deleted', () => {
+  it('nulls task and payment location when the location is deleted', () => {
     const office = createLocation(db, { name: 'Временная', allowed_user_ids: [alice.id] });
     const task = createTask(db, { title: 'После удаления', action: 'install', location_id: office.id });
+    const account = createAccount(db, { name: 'Касса удаления филиала', currency: 'UZS' });
+    const payment = createAccountPayment(db, {
+      account_id: account.id,
+      direction: 'out',
+      amount: 50,
+      location_id: office.id,
+    });
     assert.equal(deleteLocation(db, office.id), true);
     assert.equal(getLocation(db, office.id), null);
     assert.equal(getTask(db, task.id).location_id, null);
+    assert.equal(getAccountPayment(db, payment.id).location_id, null);
   });
 
   it('does not let a restricted viewer move a task onto a hidden location', () => {

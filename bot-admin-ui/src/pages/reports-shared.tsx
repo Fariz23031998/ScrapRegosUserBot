@@ -368,6 +368,7 @@ export function ReportResultTables({
   const technicianRows = technicianDisplayRows(technicianReport, scorePerTicket);
 
   const technicianColumns: ColumnDef<TechnicianDisplayRow>[] = [
+    { id: "id", header: "ID", accessorKey: "user_id" },
     { id: "name", header: "Сотрудник", accessorKey: "name" },
     { id: "technician_task_count", header: "Задач", accessorKey: "technician_task_count" },
     {
@@ -389,6 +390,7 @@ export function ReportResultTables({
   ];
 
   const commissionColumns: ColumnDef<CommissionReportRow>[] = [
+    { id: "id", header: "ID", accessorKey: "user_id" },
     { id: "name", header: "Сотрудник", accessorKey: "name" },
     { id: "manager_task_count", header: "Задач", accessorKey: "manager_task_count" },
     {
@@ -399,6 +401,7 @@ export function ReportResultTables({
   ];
 
   const financeColumns: ColumnDef<FinanceReportRow>[] = [
+    { id: "id", header: "ID", accessorFn: (row) => row.location_id ?? "—" },
     { id: "name", header: "Филиал", accessorKey: "name" },
     { id: "task_count", header: "Задач", accessorKey: "task_count" },
     {

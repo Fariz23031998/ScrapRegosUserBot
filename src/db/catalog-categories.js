@@ -11,6 +11,11 @@ const KIND_CONFIG = {
     entityTable: 'services',
     invalidCode: 'INVALID_SERVICE_CATEGORY',
   },
+  finance: {
+    categoryTable: 'finance_categories',
+    entityTable: 'account_payments',
+    invalidCode: 'INVALID_FINANCE_CATEGORY',
+  },
 };
 
 function tableExists(db, name) {

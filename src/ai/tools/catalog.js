@@ -4,23 +4,34 @@ const BROWSE_TOOL_NAMES = new Set(['web_search', 'browse_url']);
 
 const AGENT_TOOL_CATALOG = [
   {
+    name: 'search_tools',
+    title: 'Поиск инструментов',
+    description:
+      'Найти другие доступные инструменты проекта по коротким ключевым словам и подключить их к текущему запросу.',
+    agents: ['customer', 'customer_assist', 'kb', 'ops'],
+    defaultAgents: ['customer', 'customer_assist', 'kb', 'ops'],
+  },
+  {
     name: 'search_knowledge',
     title: 'Поиск в базе знаний',
     description:
       'Поиск статей внутренней базы знаний по коротким ключевым словам. Можно ограничить категорией.',
     agents: ['customer', 'customer_assist', 'kb'],
+    defaultAgents: ['customer', 'customer_assist', 'kb'],
   },
   {
     name: 'get_article',
     title: 'Читать статью',
     description: 'Загрузить полную статью базы знаний по id.',
     agents: ['customer', 'customer_assist', 'kb'],
+    defaultAgents: ['customer', 'customer_assist', 'kb'],
   },
   {
     name: 'list_knowledge_categories',
     title: 'Список категорий',
     description: 'Показать категории базы знаний (id, название, теги).',
     agents: ['customer', 'customer_assist', 'kb'],
+    defaultAgents: ['kb'],
   },
   {
     name: 'web_search',
@@ -75,6 +86,7 @@ const AGENT_TOOL_CATALOG = [
     title: 'История чата',
     description: 'Читать сообщения текущего обращения и сводки прошлых тикетов.',
     agents: ['customer', 'customer_assist'],
+    defaultAgents: ['customer', 'customer_assist'],
   },
   {
     name: 'search_orders',
@@ -159,12 +171,14 @@ const AGENT_TOOL_CATALOG = [
     title: 'Ответ клиенту',
     description: 'Отправить сообщение клиенту в чат тикета (агент поддержки для сотрудников).',
     agents: ['customer_assist'],
+    defaultAgents: ['customer_assist'],
   },
   {
     name: 'search_devices',
     title: 'Поиск устройств',
     description: 'Найти устройства полевого каталога по названию или описанию.',
     agents: ['ops'],
+    defaultAgents: ['ops'],
   },
   {
     name: 'get_device',
@@ -207,6 +221,7 @@ const AGENT_TOOL_CATALOG = [
     title: 'Поиск услуг',
     description: 'Найти полевые услуги каталога (не публичный прайс).',
     agents: ['ops'],
+    defaultAgents: ['ops'],
   },
   {
     name: 'get_service',
@@ -249,6 +264,7 @@ const AGENT_TOOL_CATALOG = [
     title: 'Поиск задач',
     description: 'Найти полевые задачи по тексту, статусу, категории или филиалу.',
     agents: ['ops'],
+    defaultAgents: ['ops'],
   },
   {
     name: 'get_task',
@@ -398,6 +414,12 @@ const AGENT_TOOL_CATALOG = [
 
 const KNOWN_TOOL_NAMES = new Set(AGENT_TOOL_CATALOG.map((tool) => tool.name));
 const TOOL_AGENTS_BY_NAME = new Map(AGENT_TOOL_CATALOG.map((tool) => [tool.name, tool.agents]));
+const TOOL_DEFAULT_AGENTS_BY_NAME = new Map(
+  AGENT_TOOL_CATALOG.map((tool) => [
+    tool.name,
+    Array.isArray(tool.defaultAgents) ? tool.defaultAgents.filter(Boolean) : [],
+  ]),
+);
 const TOOL_AGENT_SLUGS = ['customer', 'customer_assist', 'kb', 'ops'];
 
 function isKnownAgentTool(name) {
@@ -412,12 +434,31 @@ function agentsForTool(name) {
   return [...(TOOL_AGENTS_BY_NAME.get(String(name || '')) || [])];
 }
 
+function defaultAgentsForTool(name) {
+  const listed = TOOL_DEFAULT_AGENTS_BY_NAME.get(String(name || '')) || [];
+  return listed.filter(isToolAgentSlug);
+}
+
 function toolBelongsToAgent(name, slug) {
   return agentsForTool(name).includes(String(slug || ''));
 }
 
 function emptyDisabledAgentTools() {
   return Object.fromEntries(TOOL_AGENT_SLUGS.map((slug) => [slug, []]));
+}
+
+function emptyDefaultAgentTools() {
+  return emptyDisabledAgentTools();
+}
+
+function catalogDefaultAgentTools() {
+  const next = emptyDefaultAgentTools();
+  for (const tool of AGENT_TOOL_CATALOG) {
+    for (const slug of defaultAgentsForTool(tool.name)) {
+      if (!next[slug].includes(tool.name)) next[slug].push(tool.name);
+    }
+  }
+  return next;
 }
 
 function cloneDisabledAgentTools(map) {
@@ -429,9 +470,41 @@ function cloneDisabledAgentTools(map) {
   return next;
 }
 
+function cloneDefaultAgentTools(map) {
+  return cloneDisabledAgentTools(map);
+}
+
 function isDisabledAgentToolsEmpty(map) {
   if (!map || typeof map !== 'object' || Array.isArray(map)) return true;
   return TOOL_AGENT_SLUGS.every((slug) => !Array.isArray(map[slug]) || map[slug].length === 0);
+}
+
+function isDefaultAgentToolsEmpty(map) {
+  return isDisabledAgentToolsEmpty(map);
+}
+
+function resolveDefaultAgentTools(stored) {
+  if (isDefaultAgentToolsEmpty(stored)) return catalogDefaultAgentTools();
+  return cloneDefaultAgentTools(stored);
+}
+
+function isDefaultToolForAgent(name, slug, defaultAgentTools = null) {
+  const key = String(name || '');
+  const agent = String(slug || '');
+  if (defaultAgentTools && !isDefaultAgentToolsEmpty(defaultAgentTools)) {
+    return (defaultAgentTools[agent] || []).includes(key);
+  }
+  return defaultAgentsForTool(key).includes(agent);
+}
+
+function defaultToolNamesForAgent(slug, defaultAgentTools = null) {
+  const agent = String(slug || '');
+  if (defaultAgentTools && !isDefaultAgentToolsEmpty(defaultAgentTools)) {
+    return [...(defaultAgentTools[agent] || [])];
+  }
+  return AGENT_TOOL_CATALOG.filter((tool) => isDefaultToolForAgent(tool.name, agent)).map(
+    (tool) => tool.name,
+  );
 }
 
 function expandDisabledToolsToAgentMap(disabledTools = []) {
@@ -468,8 +541,17 @@ function listAgentToolCatalog() {
       title: tool.title,
       description: tool.description,
       agents: [...tool.agents],
+      default_agents: defaultAgentsForTool(tool.name),
     }),
   );
+}
+
+function selectDefaultTools(tools, agentSlug, defaultAgentTools = null) {
+  const slug = String(agentSlug || '').trim();
+  const list = Array.isArray(tools) ? tools : [];
+  if (!slug || !isToolAgentSlug(slug)) return list;
+  const defaultNames = new Set(defaultToolNamesForAgent(slug, defaultAgentTools));
+  return list.filter((tool) => defaultNames.has(String(tool?.name || '')));
 }
 
 function namesDisabledForAgent(disabledAgentTools, agentSlug) {
@@ -501,13 +583,22 @@ module.exports = {
   isKnownAgentTool,
   isToolAgentSlug,
   agentsForTool,
+  defaultAgentsForTool,
+  isDefaultToolForAgent,
+  defaultToolNamesForAgent,
   toolBelongsToAgent,
   emptyDisabledAgentTools,
+  emptyDefaultAgentTools,
+  catalogDefaultAgentTools,
   cloneDisabledAgentTools,
+  cloneDefaultAgentTools,
   isDisabledAgentToolsEmpty,
+  isDefaultAgentToolsEmpty,
+  resolveDefaultAgentTools,
   expandDisabledToolsToAgentMap,
   deriveFullyDisabledTools,
   listAgentToolCatalog,
+  selectDefaultTools,
   filterEnabledTools,
   prepareAgentTools,
 };

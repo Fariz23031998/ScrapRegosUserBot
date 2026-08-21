@@ -262,6 +262,7 @@ export default function TasksPage() {
 
   const columns = useMemo<ColumnDef<FieldTask>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       {
         id: "title",
         header: "Задача",

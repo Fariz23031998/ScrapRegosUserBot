@@ -176,7 +176,7 @@ describe('AI tool descriptions', { concurrency: false }, () => {
     assert.match(categoryLine, new RegExp(String(category.id)));
 
     saveToolDescription(database, 'search_knowledge', 'Custom search {{missing}}');
-    const tools = prepareAgentTools(
+    const prepared = prepareAgentTools(
       [
         { name: 'search_knowledge', description: 'factory' },
         { name: 'notify_employee', description: 'factory notify' },
@@ -189,10 +189,15 @@ describe('AI tool descriptions', { concurrency: false }, () => {
       },
     );
     assert.deepEqual(
-      tools.map((tool) => tool.name),
-      ['search_knowledge'],
+      prepared.toolPool.map((tool) => tool.name).sort(),
+      ['search_knowledge', 'search_tools'].sort(),
     );
-    assert.equal(tools[0].description, `Custom search {{missing}} ${categoryLine}`);
+    assert.ok(prepared.activeTools.some((tool) => tool.name === 'search_knowledge'));
+    assert.ok(prepared.activeTools.some((tool) => tool.name === 'search_tools'));
+    assert.equal(
+      prepared.toolPool.find((tool) => tool.name === 'search_knowledge').description,
+      `Custom search {{missing}} ${categoryLine}`,
+    );
   });
 });
 

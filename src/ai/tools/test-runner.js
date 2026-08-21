@@ -27,7 +27,7 @@ function buildAgentTools({ db, ticket = null, chatId = null, filesById = new Map
   for (const tool of createCustomerTools({ db, ticket, chatId, filesById, deps })) {
     byName.set(tool.name, tool);
   }
-  // Prefer writable KB tools so create/update/delete are available in the test console.
+    // Prefer writable KB tools so create/update/delete are available in the test console.
   for (const tool of createKnowledgeTools({ db, write: true, deps })) {
     byName.set(tool.name, tool);
   }
@@ -37,6 +37,15 @@ function buildAgentTools({ db, ticket = null, chatId = null, filesById = new Map
 
   const reply = createReplyToCustomerTool({ ticket, chatId, deps });
   byName.set(reply.name, reply);
+
+  const { createSearchToolsTool } = require('./search-tools');
+  if (!byName.has('search_tools')) {
+    const search = createSearchToolsTool({
+      agentSlug: 'customer',
+      getToolPool: () => [...byName.values()],
+    });
+    byName.set(search.name, search);
+  }
 
   return [...byName.values()];
 }

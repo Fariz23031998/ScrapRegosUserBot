@@ -58,6 +58,7 @@ async function respondAgentChat(req, res, run, { mapError } = {}) {
     });
     await writeSseEvent(res, { type: 'done', ...result });
   } catch (error) {
+    console.error('Agent chat error:', error);
     const message =
       typeof mapError === 'function'
         ? mapError(error)

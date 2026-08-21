@@ -1,4 +1,4 @@
-const { loadAiSettings, resolveAgentModel } = require('./settings');
+const { loadAiSettings, resolveAgentModel, resolveAgentMaxSteps } = require('./settings');
 const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createKnowledgeTools } = require('./tools/knowledge');
@@ -46,6 +46,11 @@ async function runKbAgent({
 
   const run = deps.runAgent || runAgent;
   const provider = deps.provider || getProvider(settings.provider);
+  const tools = prepareAgentTools(createKnowledgeTools({ db, userId, write: canWrite, deps }), {
+      db,
+      settings,
+      agentSlug: 'kb',
+    });
   const result = await run({
     provider,
     providerName: settings.provider,
@@ -53,14 +58,12 @@ async function runKbAgent({
     system: getResolvedPrompt(db, 'kb'),
     messages: history,
     promptCacheKey: buildPromptCacheKey('kb', session.id),
-    tools: prepareAgentTools(createKnowledgeTools({ db, userId, write: canWrite, deps }), {
-      db,
-      settings,
-      agentSlug: 'kb',
-    }),
+    tools: tools.activeTools,
+    toolPool: tools.toolPool,
     reasoningEffort: settings.reasoningEffort,
     hasVision: historyHasVisionParts(history),
     hasAudio: historyHasAudioTranscript(history),
+    maxSteps: resolveAgentMaxSteps(settings, 'kb'),
     onDelta,
   });
 

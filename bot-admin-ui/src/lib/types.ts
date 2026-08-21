@@ -67,6 +67,7 @@ export type AiAgentTool = {
   title: string;
   description: string;
   agents: AiToolAgentSlug[];
+  default_agents?: AiToolAgentSlug[];
   enabled: boolean;
   enabled_agents?: Partial<Record<AiToolAgentSlug, boolean>>;
 };
@@ -95,6 +96,7 @@ export type AiSettings = {
   provider: string;
   model: string;
   agent_models?: Partial<Record<AiPromptSlug, string>>;
+  agent_max_steps?: Partial<Record<AiPromptSlug, number | "">>;
   transcribe_model?: string;
   reasoning_effort?: string;
   history_limit: number;
@@ -104,6 +106,7 @@ export type AiSettings = {
   group_topics?: AiGroupTopic[];
   disabled_tools?: string[];
   disabled_agent_tools?: Partial<Record<AiToolAgentSlug, string[]>>;
+  default_agent_tools?: Partial<Record<AiToolAgentSlug, string[]>>;
   ignored_customer_messages?: string[];
   agent_tools?: AiAgentTool[];
   providers?: string[];
@@ -114,6 +117,9 @@ export type AiSettings = {
   agent_model_slugs?: AiPromptSlug[];
   history_limit_min?: number;
   history_limit_max?: number;
+  agent_max_steps_min?: number;
+  agent_max_steps_max?: number;
+  agent_max_steps_default?: number;
   customer_replies_per_hour_min?: number;
   customer_replies_per_hour_max?: number;
   customer_replies_per_ticket_min?: number;
@@ -823,6 +829,10 @@ export type AccountPayment = {
   amount_usd: number;
   usd_uzs_rate?: number;
   note?: string;
+  category_id?: number | null;
+  category?: { id: number; name: string } | null;
+  location_id?: number | null;
+  location?: { id: number; name: string } | null;
   created_by_user_id?: number | null;
   created_by?: { id: number; name: string } | null;
   created_at?: string;

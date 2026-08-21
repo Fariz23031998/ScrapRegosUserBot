@@ -3,6 +3,8 @@
 const TOOLS_WITH_CATEGORY_SUFFIX = new Set(['search_knowledge', 'create_article', 'update_article']);
 
 const DEFAULT_TOOL_DESCRIPTIONS = {
+  search_tools:
+    'Search the project’s other available tools by short keywords. Returns matching tool names and descriptions and unlocks them for later steps in this run. Call this before using a capability that is not already in your tool list.',
   search_knowledge:
     'Search the internal knowledge base by keywords (2–6 short terms). Prefer Russian KB wording and synonyms (e.g. «офис адрес контакты»). Do not paste the full customer sentence. Optional category_id limits results.',
   get_article: 'Load a full knowledge-base article by id.',

@@ -9,8 +9,12 @@ const {
   listAgentToolCatalog,
   toolBelongsToAgent,
   emptyDisabledAgentTools,
+  emptyDefaultAgentTools,
   cloneDisabledAgentTools,
+  cloneDefaultAgentTools,
   isDisabledAgentToolsEmpty,
+  isDefaultAgentToolsEmpty,
+  resolveDefaultAgentTools,
   expandDisabledToolsToAgentMap,
   deriveFullyDisabledTools,
 } = require('./tools/catalog');
@@ -21,6 +25,7 @@ const AI_SETTING_KEYS = {
   provider: 'ai_provider',
   model: 'ai_model',
   agentModels: 'ai_agent_models',
+  agentMaxSteps: 'ai_agent_max_steps',
   transcribeModel: 'ai_transcribe_model',
   reasoningEffort: 'ai_reasoning_effort',
   historyLimit: 'ai_history_limit',
@@ -30,6 +35,7 @@ const AI_SETTING_KEYS = {
   groupTopics: 'ai_group_topics',
   disabledTools: 'ai_disabled_tools',
   disabledAgentTools: 'ai_disabled_agent_tools',
+  defaultAgentTools: 'ai_default_agent_tools',
   ignoredCustomerMessages: 'ai_ignored_customer_messages',
 };
 
@@ -67,6 +73,9 @@ const DEFAULT_CUSTOMER_REPLIES_PER_HOUR = 8;
 const DEFAULT_CUSTOMER_REPLIES_PER_TICKET = 20;
 const MIN_CUSTOMER_REPLY_LIMIT = 0;
 const MAX_CUSTOMER_REPLY_LIMIT = 500;
+const DEFAULT_AGENT_MAX_STEPS = 8;
+const MIN_AGENT_MAX_STEPS = 1;
+const MAX_AGENT_MAX_STEPS = 50;
 const MAX_MODEL_LENGTH = 80;
 const MAX_GROUP_TOPICS = 30;
 const MAX_IGNORED_CUSTOMER_MESSAGES = 50;
@@ -161,6 +170,58 @@ function resolveAgentModel(settings, slug) {
   const override = isAgentModelSlug(slug) ? String(settings?.agentModels?.[slug] || '').trim() : '';
   if (override) return override;
   return String(settings?.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+}
+
+function emptyAgentMaxSteps() {
+  return Object.fromEntries(AGENT_MODEL_SLUGS.map((slug) => [slug, '']));
+}
+
+function normalizeAgentMaxStepValue(raw) {
+  if (raw == null || raw === '') return '';
+  const limit = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isInteger(limit) || limit < MIN_AGENT_MAX_STEPS || limit > MAX_AGENT_MAX_STEPS) {
+    throw new Error('INVALID_AI_AGENT_MAX_STEPS');
+  }
+  return limit;
+}
+
+function normalizeAgentMaxSteps(value) {
+  if (value == null || value === '') return emptyAgentMaxSteps();
+  let rows = value;
+  if (typeof value === 'string') {
+    try {
+      rows = JSON.parse(value);
+    } catch {
+      throw new Error('INVALID_AI_AGENT_MAX_STEPS');
+    }
+  }
+  if (typeof rows !== 'object' || Array.isArray(rows)) {
+    throw new Error('INVALID_AI_AGENT_MAX_STEPS');
+  }
+  const next = emptyAgentMaxSteps();
+  for (const slug of AGENT_MODEL_SLUGS) {
+    next[slug] = normalizeAgentMaxStepValue(rows[slug]);
+  }
+  return next;
+}
+
+function parseStoredAgentMaxSteps(value) {
+  try {
+    return normalizeAgentMaxSteps(value);
+  } catch {
+    return emptyAgentMaxSteps();
+  }
+}
+
+function resolveAgentMaxSteps(settings, slug) {
+  if (!isAgentModelSlug(slug)) return DEFAULT_AGENT_MAX_STEPS;
+  const raw = settings?.agentMaxSteps?.[slug];
+  if (raw == null || raw === '') return DEFAULT_AGENT_MAX_STEPS;
+  const limit = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isInteger(limit) || limit < MIN_AGENT_MAX_STEPS || limit > MAX_AGENT_MAX_STEPS) {
+    return DEFAULT_AGENT_MAX_STEPS;
+  }
+  return limit;
 }
 
 function isReasoningModel(model) {
@@ -374,12 +435,55 @@ function normalizeDisabledAgentTools(value) {
   return next;
 }
 
+function normalizeDefaultAgentTools(value) {
+  if (value == null || value === '') return emptyDefaultAgentTools();
+  let rows = value;
+  if (typeof value === 'string') {
+    try {
+      rows = JSON.parse(value);
+    } catch {
+      throw new Error('INVALID_AI_DEFAULT_TOOLS');
+    }
+  }
+  if (typeof rows !== 'object' || Array.isArray(rows)) {
+    throw new Error('INVALID_AI_DEFAULT_TOOLS');
+  }
+  const next = emptyDefaultAgentTools();
+  for (const slug of Object.keys(next)) {
+    const list = rows[slug];
+    if (list == null || list === '') continue;
+    if (!Array.isArray(list)) {
+      throw new Error('INVALID_AI_DEFAULT_TOOLS');
+    }
+    const seen = new Set();
+    for (const item of list) {
+      const name = String(item || '').trim();
+      if (!name || seen.has(name)) continue;
+      if (!isKnownAgentTool(name) || !toolBelongsToAgent(name, slug)) {
+        throw new Error('INVALID_AI_DEFAULT_TOOLS');
+      }
+      seen.add(name);
+      next[slug].push(name);
+    }
+  }
+  return next;
+}
+
 function parseStoredDisabledAgentTools(value) {
   if (value == null || value === '') return emptyDisabledAgentTools();
   try {
     return normalizeDisabledAgentTools(value);
   } catch {
     return emptyDisabledAgentTools();
+  }
+}
+
+function parseStoredDefaultAgentTools(value) {
+  if (value == null || value === '') return emptyDefaultAgentTools();
+  try {
+    return normalizeDefaultAgentTools(value);
+  } catch {
+    return emptyDefaultAgentTools();
   }
 }
 
@@ -470,12 +574,16 @@ function loadAiSettings(db) {
     parseStoredDisabledAgentTools(stored[AI_SETTING_KEYS.disabledAgentTools]),
     parseStoredDisabledTools(stored[AI_SETTING_KEYS.disabledTools]),
   );
+  const defaultAgentTools = resolveDefaultAgentTools(
+    parseStoredDefaultAgentTools(stored[AI_SETTING_KEYS.defaultAgentTools]),
+  );
   return {
     enabled: parseBooleanSetting(stored[AI_SETTING_KEYS.enabled], false),
     testMode: parseBooleanSetting(stored[AI_SETTING_KEYS.testMode], false),
     provider,
     model,
     agentModels: parseStoredAgentModels(stored[AI_SETTING_KEYS.agentModels]),
+    agentMaxSteps: parseStoredAgentMaxSteps(stored[AI_SETTING_KEYS.agentMaxSteps]),
     transcribeModel: parseStoredTranscribeModel(stored[AI_SETTING_KEYS.transcribeModel]),
     reasoningEffort: parseStoredReasoningEffort(stored[AI_SETTING_KEYS.reasoningEffort]),
     historyLimit,
@@ -485,6 +593,7 @@ function loadAiSettings(db) {
     groupTopics: parseStoredGroupTopics(stored[AI_SETTING_KEYS.groupTopics]),
     disabledAgentTools,
     disabledTools: deriveFullyDisabledTools(disabledAgentTools),
+    defaultAgentTools,
     ignoredCustomerMessages: parseStoredIgnoredCustomerMessages(
       stored[AI_SETTING_KEYS.ignoredCustomerMessages]
     ),
@@ -504,6 +613,10 @@ function saveAiSettings(db, patch = {}) {
     model: patch.model != null ? normalizeModel(patch.model) : current.model,
     agentModels:
       patch.agentModels != null ? normalizeAgentModels(patch.agentModels) : current.agentModels,
+    agentMaxSteps:
+      patch.agentMaxSteps != null
+        ? normalizeAgentMaxSteps(patch.agentMaxSteps)
+        : current.agentMaxSteps,
     transcribeModel:
       patch.transcribeModel != null
         ? normalizeTranscribeModel(patch.transcribeModel)
@@ -532,6 +645,10 @@ function saveAiSettings(db, patch = {}) {
         : patch.disabledTools != null
           ? expandDisabledToolsToAgentMap(normalizeDisabledTools(patch.disabledTools))
           : current.disabledAgentTools,
+    defaultAgentTools:
+      patch.defaultAgentTools != null
+        ? normalizeDefaultAgentTools(patch.defaultAgentTools)
+        : current.defaultAgentTools,
     ignoredCustomerMessages:
       patch.ignoredCustomerMessages != null
         ? normalizeIgnoredCustomerMessages(patch.ignoredCustomerMessages)
@@ -544,6 +661,7 @@ function saveAiSettings(db, patch = {}) {
     [AI_SETTING_KEYS.provider]: next.provider,
     [AI_SETTING_KEYS.model]: next.model,
     [AI_SETTING_KEYS.agentModels]: JSON.stringify(next.agentModels),
+    [AI_SETTING_KEYS.agentMaxSteps]: JSON.stringify(next.agentMaxSteps),
     [AI_SETTING_KEYS.transcribeModel]: next.transcribeModel,
     [AI_SETTING_KEYS.reasoningEffort]: next.reasoningEffort,
     [AI_SETTING_KEYS.historyLimit]: String(next.historyLimit),
@@ -553,6 +671,7 @@ function saveAiSettings(db, patch = {}) {
     [AI_SETTING_KEYS.groupTopics]: JSON.stringify(next.groupTopics),
     [AI_SETTING_KEYS.disabledTools]: JSON.stringify(next.disabledTools),
     [AI_SETTING_KEYS.disabledAgentTools]: JSON.stringify(next.disabledAgentTools),
+    [AI_SETTING_KEYS.defaultAgentTools]: JSON.stringify(next.defaultAgentTools),
     [AI_SETTING_KEYS.ignoredCustomerMessages]: JSON.stringify(next.ignoredCustomerMessages),
   });
 
@@ -578,6 +697,7 @@ function saveAiSettings(db, patch = {}) {
 function serializeAiSettings(settings) {
   const disabledAgentTools = cloneDisabledAgentTools(settings.disabledAgentTools);
   const disabledTools = disabledToolsFromMap(disabledAgentTools);
+  const defaultAgentTools = resolveDefaultAgentTools(settings.defaultAgentTools);
   const provider = settings.provider || DEFAULT_PROVIDER;
   const modelsByProvider = Object.fromEntries(
     ALLOWED_PROVIDERS.map((name) => [name, suggestedModelsForProvider(name)])
@@ -588,6 +708,7 @@ function serializeAiSettings(settings) {
     provider,
     model: settings.model,
     agent_models: { ...emptyAgentModels(), ...(settings.agentModels || {}) },
+    agent_max_steps: { ...emptyAgentMaxSteps(), ...(settings.agentMaxSteps || {}) },
     transcribe_model: settings.transcribeModel || DEFAULT_TRANSCRIBE_MODEL,
     reasoning_effort: settings.reasoningEffort || '',
     history_limit: Number(settings.historyLimit) || DEFAULT_HISTORY_LIMIT,
@@ -606,6 +727,7 @@ function serializeAiSettings(settings) {
     })),
     disabled_tools: [...disabledTools],
     disabled_agent_tools: disabledAgentTools,
+    default_agent_tools: defaultAgentTools,
     ignored_customer_messages: Array.isArray(settings.ignoredCustomerMessages)
       ? [...settings.ignoredCustomerMessages]
       : [],
@@ -616,11 +738,18 @@ function serializeAiSettings(settings) {
           !(disabledAgentTools[slug] || []).includes(tool.name),
         ]),
       );
+      const default_agents = (tool.agents || []).filter((slug) =>
+        (defaultAgentTools[slug] || []).includes(tool.name),
+      );
       const enabled =
         (tool.agents || []).length > 0 &&
         (tool.agents || []).every((slug) => enabled_agents[slug]);
       return {
-        ...tool,
+        name: tool.name,
+        title: tool.title,
+        description: tool.description,
+        agents: [...(tool.agents || [])],
+        default_agents,
         enabled,
         enabled_agents,
       };
@@ -633,6 +762,9 @@ function serializeAiSettings(settings) {
     agent_model_slugs: [...AGENT_MODEL_SLUGS],
     history_limit_min: MIN_HISTORY_LIMIT,
     history_limit_max: MAX_HISTORY_LIMIT,
+    agent_max_steps_min: MIN_AGENT_MAX_STEPS,
+    agent_max_steps_max: MAX_AGENT_MAX_STEPS,
+    agent_max_steps_default: DEFAULT_AGENT_MAX_STEPS,
     customer_replies_per_hour_min: MIN_CUSTOMER_REPLY_LIMIT,
     customer_replies_per_hour_max: MAX_CUSTOMER_REPLY_LIMIT,
     customer_replies_per_ticket_min: MIN_CUSTOMER_REPLY_LIMIT,
@@ -663,6 +795,9 @@ module.exports = {
   DEFAULT_CUSTOMER_REPLIES_PER_TICKET,
   MIN_CUSTOMER_REPLY_LIMIT,
   MAX_CUSTOMER_REPLY_LIMIT,
+  DEFAULT_AGENT_MAX_STEPS,
+  MIN_AGENT_MAX_STEPS,
+  MAX_AGENT_MAX_STEPS,
   MAX_GROUP_TOPICS,
   MAX_IGNORED_CUSTOMER_MESSAGES,
   MAX_IGNORED_CUSTOMER_MESSAGE_LENGTH,
@@ -675,6 +810,8 @@ module.exports = {
   normalizeReasoningEffort,
   normalizeAgentModels,
   resolveAgentModel,
+  normalizeAgentMaxSteps,
+  resolveAgentMaxSteps,
   isReasoningModel,
   isAgentModelSlug,
   suggestedModelsForProvider,
@@ -684,7 +821,9 @@ module.exports = {
   normalizeGroupTopics,
   normalizeDisabledTools,
   normalizeDisabledAgentTools,
+  normalizeDefaultAgentTools,
   resolveDisabledAgentTools,
+  resolveDefaultAgentTools,
   normalizeIgnoredCustomerMessages,
   loadAiSettings,
   saveAiSettings,

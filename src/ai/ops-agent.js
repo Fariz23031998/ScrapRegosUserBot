@@ -1,4 +1,4 @@
-const { loadAiSettings, resolveAgentModel } = require('./settings');
+const { loadAiSettings, resolveAgentModel, resolveAgentMaxSteps } = require('./settings');
 const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createOpsTools } = require('./tools/ops');
@@ -41,7 +41,8 @@ function assembleOpsPrompt({
   return {
     system: getResolvedPrompt(db, 'ops'),
     messages: modelHistory,
-    tools,
+    tools: tools.activeTools,
+    toolPool: tools.toolPool,
     history: modelHistory,
   };
 }
@@ -136,9 +137,11 @@ async function runOpsAgent({
     messages: assembled.messages,
     promptCacheKey: buildPromptCacheKey('ops', session.id),
     tools: assembled.tools,
+    toolPool: assembled.toolPool,
     reasoningEffort: settings.reasoningEffort,
     hasVision: historyHasVisionParts(assembled.history),
     hasAudio: historyHasAudioTranscript(assembled.history),
+    maxSteps: resolveAgentMaxSteps(settings, 'ops'),
     onDelta,
   });
 

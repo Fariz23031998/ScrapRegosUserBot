@@ -245,9 +245,17 @@ export default function SettingsPage() {
         customTranscribe,
       );
       const agentModels: Partial<Record<AiPromptSlug, string>> = {};
+      const agentMaxSteps: Partial<Record<AiPromptSlug, number | "">> = {};
       for (const slug of settings.agent_model_slugs || (Object.keys(AGENT_TITLES) as AiPromptSlug[])) {
         const value = String(settings.agent_models?.[slug] || "").trim();
         agentModels[slug] = value ? resolveListedModel(value, known, customAgentModels[slug] || "") : "";
+        const rawSteps = settings.agent_max_steps?.[slug];
+        if (rawSteps == null || rawSteps === "") {
+          agentMaxSteps[slug] = "";
+        } else {
+          const next = Number(rawSteps);
+          agentMaxSteps[slug] = Number.isFinite(next) ? next : "";
+        }
       }
       return saveAiSettings({
         enabled: settings.enabled,
@@ -255,6 +263,7 @@ export default function SettingsPage() {
         provider: settings.provider,
         model,
         agent_models: agentModels,
+        agent_max_steps: agentMaxSteps,
         transcribe_model: transcribeModel,
         reasoning_effort: settings.reasoning_effort || "",
         history_limit: settings.history_limit,
@@ -883,7 +892,11 @@ export default function SettingsPage() {
               ) : null}
               <div className="settings-agent-models">
                 <strong>Модели агентов</strong>
-                <p className="muted-copy">Пустое значение — использовать модель по умолчанию.</p>
+                <p className="muted-copy">
+                  Пустая модель — значение по умолчанию. Пустая цепочка действий —{" "}
+                  {ai.agent_max_steps_default || 8} шагов (от {ai.agent_max_steps_min || 1} до{" "}
+                  {ai.agent_max_steps_max || 50}).
+                </p>
                 {agentSlugs.map((slug) => {
                   const current = String(ai.agent_models?.[slug] || "").trim();
                   const selectValue = !current
@@ -891,6 +904,10 @@ export default function SettingsPage() {
                     : suggestedModels.includes(current)
                       ? current
                       : CUSTOM_MODEL;
+                  const maxStepsMin = ai.agent_max_steps_min || 1;
+                  const maxStepsMax = ai.agent_max_steps_max || 50;
+                  const maxStepsDefault = ai.agent_max_steps_default || 8;
+                  const maxStepsValue = ai.agent_max_steps?.[slug];
                   return (
                     <div key={slug} className="settings-agent-model">
                       <label>
@@ -937,6 +954,29 @@ export default function SettingsPage() {
                           />
                         </label>
                       ) : null}
+                      <label>
+                        Макс. цепочка действий
+                        <input
+                          type="number"
+                          min={maxStepsMin}
+                          max={maxStepsMax}
+                          step={1}
+                          placeholder={String(maxStepsDefault)}
+                          value={maxStepsValue == null || maxStepsValue === "" ? "" : maxStepsValue}
+                          disabled={!canEdit}
+                          onChange={(event) => {
+                            const raw = event.target.value;
+                            const agent_max_steps = { ...(ai.agent_max_steps || {}) };
+                            if (raw.trim() === "") {
+                              agent_max_steps[slug] = "";
+                            } else {
+                              const next = Number(raw);
+                              agent_max_steps[slug] = Number.isFinite(next) ? next : "";
+                            }
+                            setAiDraft({ ...ai, agent_max_steps });
+                          }}
+                        />
+                      </label>
                     </div>
                   );
                 })}
@@ -992,7 +1032,8 @@ export default function SettingsPage() {
                 </select>
               </label>
               <p className="muted-copy">
-                Параметр отправляется только моделям GPT-5 / o1 / o3. Для GPT-4 не используется.
+                Параметр отправляется только моделям GPT-5 / o1 / o3. Для GPT-4 не используется. Для
+                GPT-5.6 с инструментами Chat Completions требует none.
               </p>
               {hasPermission("ai_customer_test") ? (
                 <p className="muted-copy">
@@ -1035,6 +1076,7 @@ export default function SettingsPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    <th>ID</th>
                     <th>Канал</th>
                     <th>Статус</th>
                     <th>Тип взаимодействия</th>
@@ -1043,10 +1085,9 @@ export default function SettingsPage() {
                 <tbody>
                   {channels.map((channel) => (
                     <tr key={channel.id}>
+                      <td>{channel.id}</td>
                       <td>
                         <strong>{channel.name}</strong>
-                        <br />
-                        <small>ID: {channel.id}</small>
                       </td>
                       <td>
                         <span className={`badge ${channel.available ? "badge--ok" : "badge--muted"}`}>

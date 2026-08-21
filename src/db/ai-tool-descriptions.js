@@ -2,13 +2,16 @@ const { interpolatePrompt, promptContextFromTicket } = require('./ai-prompt-vari
 const { formatKnowledgeCategoriesForTools } = require('./knowledge-articles');
 const {
   isKnownAgentTool,
+  isToolAgentSlug,
   listAgentToolCatalog,
   filterEnabledTools,
+  selectDefaultTools,
 } = require('../ai/tools/catalog');
 const {
   getDefaultToolDescription,
   appendCategoryLine,
 } = require('../ai/tools/descriptions');
+const { createSearchToolsTool } = require('../ai/tools/search-tools');
 
 const MAX_BODY = 8000;
 const TOOL_DESCRIPTION_COLUMNS = 'tool_name, body, updated_by, updated_at';
@@ -59,6 +62,7 @@ function serializeToolDescription(tool, row = null) {
     name: tool.name,
     title: tool.title,
     agents: [...(tool.agents || [])],
+    default_agents: [...(tool.default_agents || [])],
     body: stored || defaultBody,
     default_body: defaultBody,
     is_custom: Boolean(stored),
@@ -132,9 +136,36 @@ function applyToolDescriptions(tools, db, ticket) {
 }
 
 function prepareAgentTools(tools, { db, settings, agentSlug, ticket } = {}) {
-  const enabled = filterEnabledTools(tools, settings?.disabledAgentTools, agentSlug);
-  if (!db) return enabled;
-  return applyToolDescriptions(enabled, db, ticket);
+  const slug = String(agentSlug || '').trim();
+  const enabled = filterEnabledTools(tools, settings?.disabledAgentTools, slug);
+  let pool = db ? applyToolDescriptions(enabled, db, ticket) : [...enabled];
+  const defaultAgentTools = settings?.defaultAgentTools || null;
+
+  if (slug && isToolAgentSlug(slug)) {
+    const searchEnabled = filterEnabledTools(
+      [{ name: 'search_tools' }],
+      settings?.disabledAgentTools,
+      slug,
+    ).length > 0;
+    if (searchEnabled && !pool.some((tool) => tool.name === 'search_tools')) {
+      let searchTool = createSearchToolsTool({
+        agentSlug: slug,
+        getToolPool: () => pool,
+        defaultAgentTools,
+      });
+      if (db) {
+        searchTool = applyToolDescriptions([searchTool], db, ticket)[0];
+      }
+      pool = [...pool, searchTool];
+    }
+  }
+
+  const activeTools =
+    slug && isToolAgentSlug(slug)
+      ? selectDefaultTools(pool, slug, defaultAgentTools)
+      : pool;
+
+  return { activeTools, toolPool: pool };
 }
 
 module.exports = {

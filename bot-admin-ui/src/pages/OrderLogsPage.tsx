@@ -25,6 +25,7 @@ export default function OrderLogsPage() {
 
   const columns = useMemo<ColumnDef<OrderLog>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       { id: "created_at", header: "Дата", accessorFn: (row) => formatDateTime(row.created_at) },
       { id: "action", header: "Действие", accessorKey: "action_label" },
       { id: "order_id", header: "Заказ", accessorKey: "order_id" },

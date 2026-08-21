@@ -268,6 +268,7 @@ export default function TechnicalSupportPage() {
 
   const columns = useMemo<ColumnDef<TechnicalSupportSubscription>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       { id: "phone", header: "Телефон", accessorFn: (row) => formatUzbekPhone(row.phone) },
       { id: "months", header: "Срок", accessorFn: (row) => durationLabel(Number(row.months || 0)) },
       { id: "amount", header: "Сумма", accessorFn: (row) => formatAmount(row.amount) },

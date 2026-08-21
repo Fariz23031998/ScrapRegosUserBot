@@ -1,4 +1,4 @@
-const { DEFAULT_HISTORY_LIMIT, SUMMARY_TOKEN_BUDGET, loadAiSettings, resolveAgentModel } = require('./settings');
+const { DEFAULT_HISTORY_LIMIT, SUMMARY_TOKEN_BUDGET, loadAiSettings, resolveAgentModel, resolveAgentMaxSteps } = require('./settings');
 const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createCustomerTools } = require('./tools/customer');
@@ -538,7 +538,7 @@ async function previewCustomerAgentPrompt({ db, ticketId, messageId, deps = {} }
       settings,
       agentSlug: 'customer',
       ticket,
-    }),
+    }).activeTools,
   );
   if (!trigger) {
     return buildPreviewResult({
@@ -811,14 +811,7 @@ async function handleCustomerChatMessage({
         const setTicketStatus =
           deps.setTicketStatus || require('../integrations/regos-crm').setTicketStatus;
 
-        const result = await run({
-          provider,
-          providerName: settings.provider,
-          model,
-          system: buildCustomerSystemPrompt(db, ticket),
-          messages: prependUserContext(history, buildCustomerContextContent(db, ticket)),
-          promptCacheKey: buildPromptCacheKey('customer', ticket.id),
-          tools: prepareAgentTools(
+        const preparedTools = prepareAgentTools(
             createCustomerTools({
               db,
               ticket,
@@ -833,10 +826,20 @@ async function handleCustomerChatMessage({
               },
             }),
             { db, settings, agentSlug: 'customer', ticket },
-          ),
+          );
+        const result = await run({
+          provider,
+          providerName: settings.provider,
+          model,
+          system: buildCustomerSystemPrompt(db, ticket),
+          messages: prependUserContext(history, buildCustomerContextContent(db, ticket)),
+          promptCacheKey: buildPromptCacheKey('customer', ticket.id),
+          tools: preparedTools.activeTools,
+          toolPool: preparedTools.toolPool,
           reasoningEffort: settings.reasoningEffort,
           hasVision: historyHasVisionParts(history),
           hasAudio: historyHasAudioTranscript(history),
+          maxSteps: resolveAgentMaxSteps(settings, 'customer'),
         });
 
         const reply = truncateText(result.content);

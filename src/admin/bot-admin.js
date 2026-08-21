@@ -142,6 +142,7 @@ const { formatClickUrlSafe } = require('../payments/click');
 const { enqueueOrderPaymentSms } = require('../sms/sms-queue');
 const { ticketEventHub } = require('./ticket-events');
 const { loadAiSettings, saveAiSettings, serializeAiSettings } = require('../ai/settings');
+const { isAbortError } = require('../ai/run-agent');
 const {
   loadTelegramTicketSettings,
   saveTelegramTicketSettings,
@@ -165,11 +166,26 @@ function aiCredentialErrorMessage(error) {
   return 'AI не настроен. Укажите API-ключ OpenAI в настройках или OPENAI_API_KEY.';
 }
 
+function providerErrorDetail(error) {
+  const message = String(error?.error?.message || error?.message || '').trim();
+  if (!message || message.length > 280) return '';
+  if (/api[_-]?key|authorization|bearer/i.test(message)) return '';
+  if (message === 'AI_TIMEOUT' || isAbortError(error)) return '';
+  return message;
+}
+
 function mapAgentChatError(error, fallback) {
   if (error?.message === 'EMPTY_MESSAGE') {
     return 'Введите текст сообщения или прикрепите файл.';
   }
   if (isAiCredentialError(error)) return aiCredentialErrorMessage(error);
+  if (isAbortError(error)) {
+    return 'Агент не успел ответить вовремя. Попробуйте ещё раз.';
+  }
+  const detail = providerErrorDetail(error);
+  if (detail && detail !== fallback) {
+    return `${fallback.replace(/\.$/, '')}: ${detail}`;
+  }
   return fallback;
 }
 
@@ -1946,6 +1962,7 @@ function createBotAdminRouter(db) {
         provider: req.body?.provider,
         model: req.body?.model,
         agentModels: req.body?.agent_models ?? req.body?.agentModels,
+        agentMaxSteps: req.body?.agent_max_steps ?? req.body?.agentMaxSteps,
         transcribeModel: req.body?.transcribe_model ?? req.body?.transcribeModel,
         reasoningEffort: req.body?.reasoning_effort ?? req.body?.reasoningEffort,
         historyLimit: req.body?.history_limit ?? req.body?.historyLimit,
@@ -1957,6 +1974,7 @@ function createBotAdminRouter(db) {
         groupTopics: req.body?.group_topics ?? req.body?.groupTopics,
         disabledTools: req.body?.disabled_tools ?? req.body?.disabledTools,
         disabledAgentTools: req.body?.disabled_agent_tools ?? req.body?.disabledAgentTools,
+        defaultAgentTools: req.body?.default_agent_tools ?? req.body?.defaultAgentTools,
         ignoredCustomerMessages:
           req.body?.ignored_customer_messages ?? req.body?.ignoredCustomerMessages,
       };
@@ -1995,6 +2013,7 @@ function createBotAdminRouter(db) {
         error.message === 'INVALID_AI_PROVIDER' ||
         error.message === 'INVALID_AI_MODEL' ||
         error.message === 'INVALID_AI_AGENT_MODELS' ||
+        error.message === 'INVALID_AI_AGENT_MAX_STEPS' ||
         error.message === 'INVALID_AI_TRANSCRIBE_MODEL' ||
         error.message === 'INVALID_AI_REASONING_EFFORT' ||
         error.message === 'INVALID_AI_HISTORY_LIMIT' ||

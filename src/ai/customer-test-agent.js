@@ -1,4 +1,4 @@
-const { loadAiSettings, resolveAgentModel } = require('./settings');
+const { loadAiSettings, resolveAgentModel, resolveAgentMaxSteps } = require('./settings');
 const { runAgent, truncateText, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createCustomerTools } = require('./tools/customer');
@@ -18,7 +18,8 @@ const {
 const inflightSessions = new Set();
 
 function serializeAgentTools(tools) {
-  return (tools || []).map((tool) => ({
+  const list = Array.isArray(tools) ? tools : tools?.activeTools || [];
+  return list.map((tool) => ({
     name: tool.name,
     description: tool.description || '',
     parameters: tool.parameters || { type: 'object', properties: {} },
@@ -379,7 +380,9 @@ async function runCustomerTestAgent({
       reasoningEffort: settings.reasoningEffort,
       hasVision: historyHasVisionParts(history),
       hasAudio: historyHasAudioTranscript(history),
-      tools,
+      maxSteps: resolveAgentMaxSteps(settings, 'customer'),
+      tools: tools.activeTools,
+      toolPool: tools.toolPool,
       onDelta,
     });
 

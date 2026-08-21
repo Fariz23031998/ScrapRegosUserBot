@@ -279,6 +279,11 @@ export default function RepairReturnsPage() {
   const columns = useMemo<ColumnDef<RepairReturnItem>[]>(
     () => [
       {
+        id: "id",
+        header: "ID",
+        accessorFn: (row) => (row.kind === "returned" ? row.return_id ?? row.id : row.device_line_id),
+      },
+      {
         id: "device",
         header: "Устройство",
         accessorFn: (row) => row.device_name || `Устройство #${row.device_id}`,

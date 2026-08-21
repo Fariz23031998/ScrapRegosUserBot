@@ -1,4 +1,4 @@
-const { loadAiSettings, resolveAgentModel } = require('./settings');
+const { loadAiSettings, resolveAgentModel, resolveAgentMaxSteps } = require('./settings');
 const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { EMPLOYEE_TEST_PROMPT_SUFFIX } = require('./default-prompts');
@@ -240,7 +240,9 @@ async function runEmployeeTestAgent({
       reasoningEffort: settings.reasoningEffort,
       hasVision: historyHasVisionParts(history),
       hasAudio: historyHasAudioTranscript(history),
-      tools,
+      maxSteps: resolveAgentMaxSteps(settings, 'customer_assist'),
+      tools: tools.activeTools,
+      toolPool: tools.toolPool,
       onDelta,
     });
 

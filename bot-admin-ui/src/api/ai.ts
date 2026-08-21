@@ -29,6 +29,7 @@ export function saveAiSettings(payload: {
   provider?: string;
   model: string;
   agent_models?: Partial<Record<AiPromptSlug, string>>;
+  agent_max_steps?: Partial<Record<AiPromptSlug, number | "">>;
   transcribe_model?: string;
   reasoning_effort?: string;
   history_limit: number;
@@ -38,6 +39,7 @@ export function saveAiSettings(payload: {
   group_topics?: AiGroupTopic[];
   disabled_tools?: string[];
   disabled_agent_tools?: Partial<Record<AiToolAgentSlug, string[]>>;
+  default_agent_tools?: Partial<Record<AiToolAgentSlug, string[]>>;
   ignored_customer_messages?: string[];
   openai_api_key?: string;
   openai_base_url?: string;
@@ -52,6 +54,7 @@ export function saveAiSettings(payload: {
 export function saveAiDisabledTools(payload: {
   disabled_tools: string[];
   disabled_agent_tools: Partial<Record<AiToolAgentSlug, string[]>>;
+  default_agent_tools?: Partial<Record<AiToolAgentSlug, string[]>>;
 }) {
   return apiFetch<AiSettings>("/bot-admin/api/settings/ai", {
     method: "PUT",

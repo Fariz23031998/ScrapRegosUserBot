@@ -106,6 +106,7 @@ export default function UsersPage() {
 
   const employeeColumns = useMemo<ColumnDef<BotUser>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       { id: "phone", header: "Телефон", accessorKey: "phone", cell: ({ getValue }) => getValue() || "—" },
       {
         id: "name",
@@ -191,6 +192,7 @@ export default function UsersPage() {
 
   const customerColumns = useMemo<ColumnDef<BotUser>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       { id: "phone", header: "Телефон", accessorKey: "phone", cell: ({ getValue }) => getValue() || "—" },
       {
         id: "name",

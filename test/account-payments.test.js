@@ -11,6 +11,9 @@ const {
   getAccountPayment,
   listAccountPayments,
 } = require('../src/db/account-payments');
+const { createCatalogCategory } = require('../src/db/catalog-categories');
+const { createEmployeeUser } = require('../src/db/bot-users-db');
+const { createLocation } = require('../src/db/locations');
 const { openDb } = require('../src/db/partners-db');
 const { setUsdUzsRate } = require('../src/db/money');
 
@@ -128,5 +131,62 @@ describe('account payments', () => {
     assert.equal(deleteAccountPayment(db, payment.id), true);
     assert.equal(getAccountPayment(db, payment.id), null);
     assert.equal(deleteAccountPayment(db, payment.id), false);
+  });
+
+  it('assigns a category and filters payments by it', () => {
+    const account = createAccount(db, { name: 'Категории платежей', currency: 'UZS' });
+    const category = createCatalogCategory(db, 'finance', { name: 'Закупка' });
+    const categorized = createAccountPayment(db, {
+      account_id: account.id,
+      direction: 'out',
+      amount: 40,
+      category_id: category.id,
+    });
+    createAccountPayment(db, { account_id: account.id, direction: 'in', amount: 10 });
+
+    assert.equal(categorized.category_id, category.id);
+    assert.equal(categorized.category.name, 'Закупка');
+    assert.equal(listAccountPayments(db, { account_id: account.id, category_id: category.id }).length, 1);
+    assert.equal(listAccountPayments(db, { account_id: account.id, category_id: 'none' }).length, 1);
+
+    assert.throws(
+      () =>
+        createAccountPayment(db, {
+          account_id: account.id,
+          direction: 'in',
+          amount: 1,
+          category_id: 999999,
+        }),
+      /INVALID_FINANCE_CATEGORY/
+    );
+  });
+
+  it('assigns a location and filters payments by it', () => {
+    const employee = createEmployeeUser(db, { phone: '+998901000091', displayName: 'Кассир' });
+    const office = createLocation(db, { name: 'Офис Чиланзар', allowed_user_ids: [employee.id] });
+    const account = createAccount(db, { name: 'Касса филиала', currency: 'UZS' });
+    const tagged = createAccountPayment(db, {
+      account_id: account.id,
+      direction: 'out',
+      amount: 30,
+      location_id: office.id,
+    });
+    createAccountPayment(db, { account_id: account.id, direction: 'in', amount: 8 });
+
+    assert.equal(tagged.location_id, office.id);
+    assert.equal(tagged.location.name, 'Офис Чиланзар');
+    assert.equal(listAccountPayments(db, { account_id: account.id, location_id: office.id }).length, 1);
+    assert.equal(listAccountPayments(db, { account_id: account.id, location_id: 'none' }).length, 1);
+
+    assert.throws(
+      () =>
+        createAccountPayment(db, {
+          account_id: account.id,
+          direction: 'in',
+          amount: 1,
+          location_id: 999999,
+        }),
+      /INVALID_ACCOUNT_PAYMENT_LOCATION/
+    );
   });
 });

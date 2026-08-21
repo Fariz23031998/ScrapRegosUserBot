@@ -134,4 +134,28 @@ describe('agent chat SSE helper', () => {
       server.close();
     }
   });
+
+  it('logs the underlying error when the agent run fails', async () => {
+    const errors = [];
+    const original = console.error;
+    console.error = (...args) => errors.push(args);
+    const app = express();
+    app.use(express.json());
+    app.post('/ops-chat', (req, res) =>
+      respondAgentChat(req, res, async () => {
+        throw new Error('boom-from-ops');
+      })
+    );
+    const server = await listen(app);
+    try {
+      const res = await request(server, { accept: 'text/event-stream', body: { message: 'hi' } });
+      assert.equal(res.statusCode, 200);
+      const events = parseSseFrames(res.body);
+      assert.equal(events[0].type, 'error');
+      assert.match(String(errors[0]?.[1]?.message || errors[0]?.[0]), /boom-from-ops/);
+    } finally {
+      console.error = original;
+      server.close();
+    }
+  });
 });

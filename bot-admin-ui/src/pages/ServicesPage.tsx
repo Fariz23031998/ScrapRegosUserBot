@@ -293,6 +293,7 @@ export default function ServicesPage() {
         enableSorting: false,
         cell: ({ row }) => <CatalogThumb images={row.original.images} alt={row.original.name} />,
       },
+      { id: "id", header: "ID", accessorKey: "id" },
       { id: "name", header: "Название", accessorKey: "name" },
       {
         id: "category",

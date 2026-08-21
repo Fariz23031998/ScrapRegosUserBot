@@ -1,4 +1,4 @@
-const { loadAiSettings, resolveAgentModel } = require('./settings');
+const { loadAiSettings, resolveAgentModel, resolveAgentMaxSteps } = require('./settings');
 const { runAgent, truncateText, prependUserContext, buildPromptCacheKey } = require('./run-agent');
 const { getProvider } = require('./providers/registry');
 const { createCustomerTools } = require('./tools/customer');
@@ -142,7 +142,8 @@ async function assembleTicketAssistPrompt({
       modelHistory,
       buildCustomerAssistContextContent(db, { ticket, chatSnapshot }),
     ),
-    tools,
+    tools: tools.activeTools,
+    toolPool: tools.toolPool,
     chatId,
     history: modelHistory,
   };
@@ -318,9 +319,11 @@ async function runTicketAssistAgent({
       messages: assembled.messages,
       promptCacheKey: buildPromptCacheKey('customer_assist', ticket.id),
       tools: assembled.tools,
+      toolPool: assembled.toolPool,
       reasoningEffort: settings.reasoningEffort,
       hasVision: historyHasVisionParts(assembled.history),
       hasAudio: historyHasAudioTranscript(assembled.history),
+      maxSteps: resolveAgentMaxSteps(settings, 'customer_assist'),
       onDelta,
     });
 

@@ -86,6 +86,7 @@ export default function LogsPage() {
 
   const columns = useMemo<ColumnDef<AdminLog>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       { id: "created_at", header: "Дата", accessorFn: (row) => formatDateTime(row.created_at) },
       { id: "action", header: "Действие", accessorKey: "action_label" },
       {

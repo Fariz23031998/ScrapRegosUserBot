@@ -1,4 +1,16 @@
 const { getAccount, ensureAccountTables, recalculateAccountValue } = require('./accounts');
+const {
+  appendCategoryFilter,
+  ensureCatalogCategoryTables,
+  mapCategoryFields,
+  parseCategoryFilter,
+  resolveCatalogCategoryId,
+} = require('./catalog-categories');
+const {
+  canViewerAccessLocation,
+  ensureLocationTables,
+  getLocation,
+} = require('./locations');
 const { CURRENCIES, getUsdUzsRate, roundMoney } = require('./money');
 
 const MAX_PAYMENT_NOTE = 500;
@@ -7,8 +19,10 @@ const PAYMENT_DIRECTIONS = ['in', 'out'];
 const PAYMENT_SELECT = `
   p.id, p.account_id, p.direction, p.amount, p.currency,
   p.amount_uzs, p.amount_usd, p.usd_uzs_rate, p.note,
-  p.created_by_user_id, p.created_at,
+  p.category_id, p.location_id, p.created_by_user_id, p.created_at,
   a.name AS account_name, a.currency AS account_currency,
+  c.name AS category_name,
+  loc.name AS location_name,
   u.display_name AS created_by_display_name,
   u.first_name AS created_by_first_name,
   u.last_name AS created_by_last_name,
@@ -19,6 +33,8 @@ const PAYMENT_SELECT = `
 const PAYMENT_FROM = `
   account_payments p
   LEFT JOIN accounts a ON a.id = p.account_id
+  LEFT JOIN finance_categories c ON c.id = p.category_id
+  LEFT JOIN locations loc ON loc.id = p.location_id
   LEFT JOIN bot_users u ON u.id = p.created_by_user_id
 `;
 
@@ -46,6 +62,13 @@ function ensureAccountPaymentTables(db) {
     CREATE INDEX IF NOT EXISTS idx_account_payments_account_id ON account_payments(account_id);
     CREATE INDEX IF NOT EXISTS idx_account_payments_created_at ON account_payments(created_at);
   `);
+  ensureCatalogCategoryTables(db, 'finance');
+  ensureLocationTables(db);
+  const cols = db.prepare('PRAGMA table_info(account_payments)').all();
+  if (!cols.some((col) => col.name === 'location_id')) {
+    db.exec('ALTER TABLE account_payments ADD COLUMN location_id INTEGER');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_account_payments_location_id ON account_payments(location_id)');
 }
 
 function authorLabel(row) {
@@ -80,6 +103,11 @@ function mapAccountPayment(row) {
     amount_usd: Number(row.amount_usd) || 0,
     usd_uzs_rate: Number(row.usd_uzs_rate) || 0,
     note: row.note || '',
+    ...mapCategoryFields(row),
+    location_id: row.location_id ?? null,
+    location: row.location_id
+      ? { id: row.location_id, name: row.location_name || `Филиал #${row.location_id}` }
+      : null,
     created_by_user_id: row.created_by_user_id ?? null,
     created_by:
       row.created_by_user_id == null
@@ -118,6 +146,27 @@ function normalizePaymentDirection(value) {
   return direction;
 }
 
+function resolveFinanceLocationId(db, value, viewer) {
+  if (value == null || value === '' || value === 0 || value === '0') return null;
+  const locationId = Number(value);
+  if (!Number.isFinite(locationId) || locationId <= 0) throw new Error('INVALID_ACCOUNT_PAYMENT_LOCATION');
+  const location = getLocation(db, locationId);
+  if (!location) throw new Error('INVALID_ACCOUNT_PAYMENT_LOCATION');
+  if (!canViewerAccessLocation(db, location.id, viewer)) throw new Error('INVALID_ACCOUNT_PAYMENT_LOCATION');
+  return location.id;
+}
+
+function appendLocationFilter(where, params, alias, locationId) {
+  if (locationId === 'none') {
+    where.push(`${alias}.location_id IS NULL`);
+    return;
+  }
+  if (locationId) {
+    where.push(`${alias}.location_id = ?`);
+    params.push(Number(locationId));
+  }
+}
+
 function convertPaymentAmount(amount, currency, rate) {
   if (currency === 'USD') {
     return { amount_uzs: roundMoney(amount * rate), amount_usd: roundMoney(amount) };
@@ -147,13 +196,15 @@ function listAccountPayments(db, filters = {}) {
     where.push('p.direction = ?');
     params.push(normalizePaymentDirection(filters.direction));
   }
+  appendCategoryFilter(where, params, 'p', parseCategoryFilter(filters.category_id));
+  appendLocationFilter(where, params, 'p', parseCategoryFilter(filters.location_id));
   const sql = `SELECT ${PAYMENT_SELECT} FROM ${PAYMENT_FROM}
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY datetime(p.created_at) DESC, p.id DESC`;
   return db.prepare(sql).all(...params).map(mapAccountPayment);
 }
 
-function createAccountPayment(db, input = {}) {
+function createAccountPayment(db, input = {}, { viewer } = {}) {
   ensureAccountPaymentTables(db);
   const account = getAccount(db, input.account_id);
   if (!account) throw new Error('INVALID_ACCOUNT_PAYMENT_ACCOUNT');
@@ -161,6 +212,8 @@ function createAccountPayment(db, input = {}) {
   const amount = normalizePaymentAmount(input.amount);
   const currency = normalizePaymentCurrency(input.currency, account.currency);
   const note = normalizePaymentNote(input.note);
+  const categoryId = resolveCatalogCategoryId(db, 'finance', input.category_id);
+  const locationId = resolveFinanceLocationId(db, input.location_id, viewer);
   const rate = getUsdUzsRate(db);
   const converted = convertPaymentAmount(amount, currency, rate);
   const createdBy = Number(input.created_by_user_id);
@@ -169,8 +222,8 @@ function createAccountPayment(db, input = {}) {
       `INSERT INTO account_payments (
          account_id, direction, amount, currency,
          amount_uzs, amount_usd, usd_uzs_rate,
-         note, created_by_user_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+         note, category_id, location_id, created_by_user_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
     )
     .run(
       account.id,
@@ -181,6 +234,8 @@ function createAccountPayment(db, input = {}) {
       converted.amount_usd,
       rate,
       note,
+      categoryId,
+      locationId,
       Number.isFinite(createdBy) && createdBy > 0 ? createdBy : null
     );
   recalculateAccountValue(db, account.id);

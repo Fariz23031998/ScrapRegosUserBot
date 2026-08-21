@@ -18,6 +18,36 @@ function resolveAgentTimeoutMs(model, { timeoutMs, hasVision = false, hasAudio =
   return DEFAULT_TIMEOUT_MS;
 }
 
+function isAbortError(error) {
+  if (!error) return false;
+  const name = String(error.name || '');
+  const message = String(error.message || '');
+  return (
+    message === 'AI_TIMEOUT' ||
+    name === 'AbortError' ||
+    name === 'APIUserAbortError' ||
+    error.code === 'ABORT_ERR'
+  );
+}
+
+async function chatWithStepTimeout(impl, args, limitMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.max(1, Number(limitMs) || DEFAULT_TIMEOUT_MS)
+  );
+  try {
+    return await impl.chat({ ...args, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted || isAbortError(error)) {
+      throw new Error('AI_TIMEOUT');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function truncateText(text, max = DEFAULT_MAX_REPLY) {
   const value = String(text || '').trim();
   if (value.length <= max) return value;
@@ -58,6 +88,38 @@ function summarizeToolResult(content) {
 
 function findTool(tools, name) {
   return (tools || []).find((tool) => tool.name === name) || null;
+}
+
+function toolNames(tools) {
+  return new Set((tools || []).map((tool) => String(tool?.name || '')).filter(Boolean));
+}
+
+function mergeToolsByName(activeTools, extras) {
+  const byName = new Map();
+  for (const tool of activeTools || []) {
+    const name = String(tool?.name || '');
+    if (name) byName.set(name, tool);
+  }
+  for (const tool of extras || []) {
+    const name = String(tool?.name || '');
+    if (name && !byName.has(name)) byName.set(name, tool);
+  }
+  return [...byName.values()];
+}
+
+function activateToolsFromSearchResult(activeTools, toolPool, content) {
+  const parsed = parseToolResultContent(content);
+  const names = Array.isArray(parsed?.activated)
+    ? parsed.activated
+    : Array.isArray(parsed?.tools)
+      ? parsed.tools.map((tool) => tool?.name)
+      : [];
+  const wanted = new Set(names.map((name) => String(name || '').trim()).filter(Boolean));
+  if (!wanted.size || !Array.isArray(toolPool) || !toolPool.length) {
+    return activeTools;
+  }
+  const extras = toolPool.filter((tool) => wanted.has(String(tool?.name || '')));
+  return mergeToolsByName(activeTools, extras);
 }
 
 function prependUserContext(messages, content) {
@@ -104,6 +166,7 @@ async function runAgent({
   system,
   messages,
   tools = [],
+  toolPool = null,
   maxSteps = DEFAULT_MAX_STEPS,
   timeoutMs,
   reasoningEffort,
@@ -118,8 +181,6 @@ async function runAgent({
   }
 
   const limitMs = resolveAgentTimeoutMs(model, { timeoutMs, hasVision, hasAudio });
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(limitMs) || DEFAULT_TIMEOUT_MS));
   const history = [];
   const trace = [];
   if (system) {
@@ -129,111 +190,128 @@ async function runAgent({
     history.push(message);
   }
   let lastUsage = null;
+  let activeTools = Array.isArray(tools) ? [...tools] : [];
+  const pool = Array.isArray(toolPool) && toolPool.length ? toolPool : activeTools;
+  const poolNames = toolNames(pool);
 
-  try {
-    for (let step = 0; step < Math.max(1, Number(maxSteps) || DEFAULT_MAX_STEPS); step += 1) {
-      if (controller.signal.aborted) {
-        throw new Error('AI_TIMEOUT');
-      }
-      const response = await impl.chat({
+  for (let step = 0; step < Math.max(1, Number(maxSteps) || DEFAULT_MAX_STEPS); step += 1) {
+    const response = await chatWithStepTimeout(
+      impl,
+      {
         model,
         messages: history,
-        tools,
-        signal: controller.signal,
+        tools: activeTools,
         reasoningEffort,
         promptCacheKey,
         onDelta,
+      },
+      limitMs
+    );
+    lastUsage = response.usage || lastUsage;
+    logPromptCache({
+      model,
+      promptCacheKey,
+      step: step + 1,
+      usage: response.usage,
+    });
+    const toolCalls = response.toolCalls || [];
+    if (toolCalls.length > 0) {
+      history.push(response.raw || {
+        role: 'assistant',
+        content: response.content || null,
+        tool_calls: toolCalls.map((call) => ({
+          id: call.id,
+          type: 'function',
+          function: { name: call.name, arguments: call.arguments },
+        })),
       });
-      lastUsage = response.usage || lastUsage;
-      logPromptCache({
-        model,
-        promptCacheKey,
-        step: step + 1,
-        usage: response.usage,
-      });
-      const toolCalls = response.toolCalls || [];
-      if (toolCalls.length > 0) {
-        history.push(response.raw || {
-          role: 'assistant',
-          content: response.content || null,
-          tool_calls: toolCalls.map((call) => ({
-            id: call.id,
-            type: 'function',
-            function: { name: call.name, arguments: call.arguments },
-          })),
-        });
-        const tracedCalls = [];
-        for (const call of toolCalls) {
-          const tool = findTool(tools, call.name);
-          const args = parseToolArguments(call.arguments);
-          const executed = tool
-            ? await executeTool(tool, args)
-            : { content: JSON.stringify({ ok: false, error: `unknown_tool:${call.name}` }), visionParts: null };
-          const truncated = truncateText(executed.content, 8000);
-          history.push({
-            role: 'tool',
-            tool_call_id: call.id,
-            content: truncated,
-          });
-          const summary = summarizeToolResult(truncated);
-          tracedCalls.push({
-            id: call.id,
-            name: call.name,
-            arguments: args,
-            result: summary.result,
-            ok: summary.ok,
-            error: summary.error,
-          });
-          if (executed.visionParts?.length) {
-            history.push({
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Изображение из read_chat_image.' },
-                ...executed.visionParts,
-              ],
-            });
+      const tracedCalls = [];
+      for (const call of toolCalls) {
+        const tool = findTool(activeTools, call.name);
+        const args = parseToolArguments(call.arguments);
+        let executed;
+        if (tool) {
+          executed = await executeTool(tool, args);
+          if (call.name === 'search_tools') {
+            activeTools = activateToolsFromSearchResult(activeTools, pool, executed.content);
           }
+        } else if (poolNames.has(String(call.name || ''))) {
+          executed = {
+            content: JSON.stringify({
+              ok: false,
+              error: `tool_not_active:${call.name}`,
+              message: `Call search_tools first to unlock "${call.name}".`,
+            }),
+            visionParts: null,
+          };
+        } else {
+          executed = {
+            content: JSON.stringify({ ok: false, error: `unknown_tool:${call.name}` }),
+            visionParts: null,
+          };
         }
-        trace.push({
-          step: step + 1,
-          type: 'tool_round',
-          assistant_content: response.content || null,
-          tool_calls: tracedCalls,
+        const truncated = truncateText(executed.content, 8000);
+        history.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: truncated,
         });
-        continue;
+        const summary = summarizeToolResult(truncated);
+        tracedCalls.push({
+          id: call.id,
+          name: call.name,
+          arguments: args,
+          result: summary.result,
+          ok: summary.ok,
+          error: summary.error,
+        });
+        if (executed.visionParts?.length) {
+          history.push({
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Изображение из read_chat_image.' },
+              ...executed.visionParts,
+            ],
+          });
+        }
       }
-
-      const content = truncateText(response.content);
       trace.push({
         step: step + 1,
-        type: 'final',
-        content,
+        type: 'tool_round',
+        assistant_content: response.content || null,
+        tool_calls: tracedCalls,
       });
-      return {
-        content,
-        steps: step + 1,
-        messages: history,
-        usage: lastUsage,
-        trace,
-      };
+      continue;
     }
+
+    const content = truncateText(response.content);
     trace.push({
-      step: maxSteps,
+      step: step + 1,
       type: 'final',
-      content: '',
-      stopped: 'max_steps',
+      content,
     });
     return {
-      content: '',
-      steps: maxSteps,
+      content,
+      steps: step + 1,
       messages: history,
-      stopped: 'max_steps',
       usage: lastUsage,
       trace,
     };
-  } finally {
-    clearTimeout(timer);
   }
+  trace.push({
+    step: maxSteps,
+    type: 'final',
+    content: '',
+    stopped: 'max_steps',
+  });
+  return {
+    content: '',
+    steps: maxSteps,
+    messages: history,
+    stopped: 'max_steps',
+    usage: lastUsage,
+    trace,
+  };
 }
 
 module.exports = {
@@ -243,7 +321,10 @@ module.exports = {
   truncateText,
   parseToolArguments,
   resolveAgentTimeoutMs,
+  isAbortError,
   prependUserContext,
   buildPromptCacheKey,
+  activateToolsFromSearchResult,
+  mergeToolsByName,
   runAgent,
 };

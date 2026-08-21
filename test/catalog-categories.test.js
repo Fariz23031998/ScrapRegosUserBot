@@ -9,6 +9,8 @@ const {
   deleteCatalogCategory,
   listCatalogCategories,
 } = require('../src/db/catalog-categories');
+const { createAccount } = require('../src/db/accounts');
+const { createAccountPayment, listAccountPayments, getAccountPayment } = require('../src/db/account-payments');
 const { createDevice, listDevices, updateDevice } = require('../src/db/devices');
 const { createService, listServices } = require('../src/db/services');
 const { openDb } = require('../src/db/partners-db');
@@ -105,5 +107,40 @@ describe('device and service categories', () => {
       () => updateDevice(db, device.id, { category_id: setup.id }),
       /INVALID_DEVICE_CATEGORY/
     );
+  });
+
+  it('assigns, filters, and clears finance categories', () => {
+    const rent = createCatalogCategory(db, 'finance', { name: 'Аренда' });
+    const salary = createCatalogCategory(db, 'finance', { name: 'Зарплата' });
+    const account = createAccount(db, { name: 'Касса категорий', currency: 'UZS' });
+    const rentPayment = createAccountPayment(db, {
+      account_id: account.id,
+      direction: 'out',
+      amount: 1000,
+      category_id: rent.id,
+    });
+    createAccountPayment(db, {
+      account_id: account.id,
+      direction: 'out',
+      amount: 2000,
+      category_id: salary.id,
+    });
+    createAccountPayment(db, {
+      account_id: account.id,
+      direction: 'in',
+      amount: 500,
+    });
+
+    assert.equal(rentPayment.category_id, rent.id);
+    assert.equal(rentPayment.category.name, 'Аренда');
+    assert.equal(listAccountPayments(db, { category_id: rent.id }).length, 1);
+    assert.equal(listAccountPayments(db, { category_id: rent.id })[0].id, rentPayment.id);
+    assert.equal(listAccountPayments(db, { category_id: 'none' }).length, 1);
+
+    deleteCatalogCategory(db, 'finance', rent.id);
+    const remaining = getAccountPayment(db, rentPayment.id);
+    assert.equal(remaining.category_id, null);
+    assert.equal(remaining.category, null);
+    assert.equal(listCatalogCategories(db, 'finance').some((category) => category.id === rent.id), false);
   });
 });

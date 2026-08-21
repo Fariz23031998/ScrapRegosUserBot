@@ -4,11 +4,17 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Trash2 } from "lucide-react";
 import {
+  createFinanceCategory,
   createFinancePayment,
+  deleteFinanceCategory,
   deleteFinancePayment,
   listFinanceAccounts,
+  listFinanceCategories,
+  listFinanceLocations,
   listFinancePayments,
+  updateFinanceCategory,
 } from "../api/finances";
+import CatalogCategoryManager from "../components/CatalogCategoryManager";
 import EntityCards from "../components/EntityCards";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
@@ -18,7 +24,13 @@ import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import { formatMoneyLine, parseDisplayCurrency, type MoneyCurrency } from "../lib/money";
-import type { AccountPayment, AccountPaymentDirection, PaymentAccount } from "../lib/types";
+import type {
+  AccountPayment,
+  AccountPaymentDirection,
+  CatalogCategory,
+  PaymentAccount,
+  TaskLocation,
+} from "../lib/types";
 import { formatDateTime, matchesSearch } from "../lib/utils";
 
 type PaymentEditor = {
@@ -26,6 +38,8 @@ type PaymentEditor = {
   amount: string;
   currency: MoneyCurrency;
   note: string;
+  category_id: string;
+  location_id: string;
 };
 
 function directionLabel(direction: AccountPaymentDirection): string {
@@ -39,17 +53,29 @@ function accountCurrency(account?: PaymentAccount | null): MoneyCurrency {
 function FilterFields({
   accountId,
   direction,
+  categoryId,
+  locationId,
   accounts,
+  categories,
+  locations,
   onAccountChange,
   onDirectionChange,
+  onCategoryChange,
+  onLocationChange,
   showActions,
   onApply,
 }: {
   accountId: string;
   direction: string;
+  categoryId: string;
+  locationId: string;
   accounts: PaymentAccount[];
+  categories: CatalogCategory[];
+  locations: TaskLocation[];
   onAccountChange: (value: string) => void;
   onDirectionChange: (value: string) => void;
+  onCategoryChange: (value: string) => void;
+  onLocationChange: (value: string) => void;
   showActions?: boolean;
   onApply?: () => void;
 }) {
@@ -74,6 +100,30 @@ function FilterFields({
           <option value="out">Расход</option>
         </select>
       </label>
+      <label className="ticket-filters__field">
+        <span>Категория</span>
+        <select value={categoryId} onChange={(event) => onCategoryChange(event.target.value)}>
+          <option value="">Все</option>
+          <option value="none">Без категории</option>
+          {categories.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="ticket-filters__field">
+        <span>Филиал</span>
+        <select value={locationId} onChange={(event) => onLocationChange(event.target.value)}>
+          <option value="">Все</option>
+          <option value="none">Без филиала</option>
+          {locations.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
+            </option>
+          ))}
+        </select>
+      </label>
       {showActions ? (
         <div className="ticket-filters__actions">
           <button type="button" className="btn-primary" onClick={onApply}>
@@ -96,15 +146,22 @@ export default function FinancesPage() {
   const [search, setSearch] = useState("");
   const [accountId, setAccountId] = useState("");
   const [direction, setDirection] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [locationId, setLocationId] = useState("");
   const [appliedAccountId, setAppliedAccountId] = useState("");
   const [appliedDirection, setAppliedDirection] = useState("");
+  const [appliedCategoryId, setAppliedCategoryId] = useState("");
+  const [appliedLocationId, setAppliedLocationId] = useState("");
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [createDirection, setCreateDirection] = useState<AccountPaymentDirection | null>(null);
   const [editor, setEditor] = useState<PaymentEditor>({
     account_id: "",
     amount: "",
     currency: "UZS",
     note: "",
+    category_id: "",
+    location_id: "",
   });
   const [formError, setFormError] = useState("");
   const [listError, setListError] = useState("");
@@ -113,16 +170,28 @@ export default function FinancesPage() {
     queryKey: ["finance-accounts"],
     queryFn: listFinanceAccounts,
   });
+  const categoriesQuery = useQuery({
+    queryKey: ["finance-categories"],
+    queryFn: listFinanceCategories,
+  });
+  const locationsQuery = useQuery({
+    queryKey: ["finance-locations"],
+    queryFn: listFinanceLocations,
+  });
   const paymentsQuery = useQuery({
-    queryKey: ["finance-payments", appliedAccountId, appliedDirection],
+    queryKey: ["finance-payments", appliedAccountId, appliedDirection, appliedCategoryId, appliedLocationId],
     queryFn: () =>
       listFinancePayments({
         account_id: appliedAccountId || undefined,
         direction: (appliedDirection as AccountPaymentDirection) || undefined,
+        category_id: appliedCategoryId || undefined,
+        location_id: appliedLocationId || undefined,
       }),
   });
 
   const accounts = accountsQuery.data?.accounts || [];
+  const categories = categoriesQuery.data?.categories || [];
+  const locations = locationsQuery.data?.locations || [];
   const payments = paymentsQuery.data?.payments || [];
   const selectedAccount = accounts.find((item) => String(item.id) === editor.account_id);
 
@@ -134,6 +203,8 @@ export default function FinancesPage() {
       amount: "",
       currency: accountCurrency(account),
       note: "",
+      category_id: appliedCategoryId && appliedCategoryId !== "none" ? appliedCategoryId : "",
+      location_id: appliedLocationId && appliedLocationId !== "none" ? appliedLocationId : "",
     });
     setFormError("");
     setCreateDirection(nextDirection);
@@ -141,6 +212,8 @@ export default function FinancesPage() {
 
   function invalidateFinances() {
     void queryClient.invalidateQueries({ queryKey: ["finance-accounts"] });
+    void queryClient.invalidateQueries({ queryKey: ["finance-categories"] });
+    void queryClient.invalidateQueries({ queryKey: ["finance-locations"] });
     void queryClient.invalidateQueries({ queryKey: ["finance-payments"] });
   }
 
@@ -152,6 +225,8 @@ export default function FinancesPage() {
         amount: Number(editor.amount),
         currency: editor.currency,
         note: editor.note.trim() || undefined,
+        category_id: editor.category_id ? Number(editor.category_id) : null,
+        location_id: editor.location_id ? Number(editor.location_id) : null,
       }),
     onSuccess: () => {
       setCreateDirection(null);
@@ -177,6 +252,17 @@ export default function FinancesPage() {
     } catch (error) {
       setListError(error instanceof Error ? error.message : "Не удалось удалить платёж.");
     }
+  }
+
+  async function handleDeleteCategory(category: CatalogCategory) {
+    const ok = await confirm({
+      message: `Удалить категорию «${category.name}»? Платежи останутся без категории.`,
+      variant: "danger",
+      confirmLabel: "Удалить",
+    });
+    if (!ok) return;
+    await deleteFinanceCategory(category.id);
+    invalidateFinances();
   }
 
   function paymentActions(payment: AccountPayment): ReactNode {
@@ -205,6 +291,8 @@ export default function FinancesPage() {
           payment.note,
           payment.created_by?.name,
           payment.amount,
+          payment.category?.name,
+          payment.location?.name,
           directionLabel(payment.direction),
         ),
       ),
@@ -213,6 +301,7 @@ export default function FinancesPage() {
 
   const columns = useMemo<ColumnDef<AccountPayment>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       {
         id: "created_at",
         header: "Дата",
@@ -227,6 +316,16 @@ export default function FinancesPage() {
         id: "account",
         header: "Счёт",
         accessorFn: (row) => row.account?.name || `Счёт #${row.account_id}`,
+      },
+      {
+        id: "category",
+        header: "Категория",
+        accessorFn: (row) => row.category?.name || "—",
+      },
+      {
+        id: "location",
+        header: "Филиал",
+        accessorFn: (row) => row.location?.name || "—",
       },
       {
         id: "amount",
@@ -259,6 +358,8 @@ export default function FinancesPage() {
   function applyFilters() {
     setAppliedAccountId(accountId);
     setAppliedDirection(direction);
+    setAppliedCategoryId(categoryId);
+    setAppliedLocationId(locationId);
   }
 
   return (
@@ -267,6 +368,9 @@ export default function FinancesPage() {
         <div className="card-toolbar-right">
           {canCreate ? (
             <>
+              <button type="button" className="btn-secondary" onClick={() => setCategoryManagerOpen(true)}>
+                Категории
+              </button>
               <button type="button" className="btn-primary" onClick={() => openCreate("in")}>
                 Приход
               </button>
@@ -323,21 +427,29 @@ export default function FinancesPage() {
         search={search}
         onSearchChange={setSearch}
         searchPlaceholder="Поиск по счёту, комментарию, автору…"
-        filtersActive={Boolean(appliedAccountId || appliedDirection)}
+        filtersActive={Boolean(appliedAccountId || appliedDirection || appliedCategoryId || appliedLocationId)}
         filtersModalOpen={filtersModalOpen}
         onFiltersModalOpenChange={setFiltersModalOpen}
         onApplyFilters={applyFilters}
         onResetFilters={() => {
           setAccountId("");
           setDirection("");
+          setCategoryId("");
+          setLocationId("");
         }}
         desktopFilters={
           <FilterFields
             accountId={accountId}
             direction={direction}
+            categoryId={categoryId}
+            locationId={locationId}
             accounts={accounts}
+            categories={categories}
+            locations={locations}
             onAccountChange={setAccountId}
             onDirectionChange={setDirection}
+            onCategoryChange={setCategoryId}
+            onLocationChange={setLocationId}
             showActions
             onApply={applyFilters}
           />
@@ -346,9 +458,15 @@ export default function FinancesPage() {
           <FilterFields
             accountId={accountId}
             direction={direction}
+            categoryId={categoryId}
+            locationId={locationId}
             accounts={accounts}
+            categories={categories}
+            locations={locations}
             onAccountChange={setAccountId}
             onDirectionChange={setDirection}
+            onCategoryChange={setCategoryId}
+            onLocationChange={setLocationId}
           />
         }
       />
@@ -360,13 +478,24 @@ export default function FinancesPage() {
           <EntityCards
             items={visiblePayments}
             isLoading={paymentsQuery.isPending}
-            emptyMessage={search || appliedAccountId || appliedDirection ? "Ничего не найдено." : "Платежей пока нет."}
+            emptyMessage={
+              search || appliedAccountId || appliedDirection || appliedCategoryId || appliedLocationId
+                ? "Ничего не найдено."
+                : "Платежей пока нет."
+            }
             getKey={(payment) => String(payment.id)}
             getTitle={(payment) =>
               `${payment.direction === "out" ? "−" : "+"}${formatMoneyLine(payment.amount, payment.currency)}`
             }
             getSubtitle={(payment) =>
-              [directionLabel(payment.direction), payment.account?.name].filter(Boolean).join(" · ")
+              [
+                directionLabel(payment.direction),
+                payment.account?.name,
+                payment.category?.name,
+                payment.location?.name,
+              ]
+                .filter(Boolean)
+                .join(" · ")
             }
             getFields={(payment) => [
               { label: "Дата", value: formatDateTime(payment.created_at) },
@@ -382,7 +511,11 @@ export default function FinancesPage() {
             columns={columns}
             isLoading={paymentsQuery.isPending}
             serverSideSearch
-            emptyMessage={search || appliedAccountId || appliedDirection ? "Ничего не найдено." : "Платежей пока нет."}
+            emptyMessage={
+              search || appliedAccountId || appliedDirection || appliedCategoryId || appliedLocationId
+                ? "Ничего не найдено."
+                : "Платежей пока нет."
+            }
             getRowId={(row) => String(row.id)}
           />
         )}
@@ -438,6 +571,34 @@ export default function FinancesPage() {
               </select>
             </label>
             <label>
+              Категория
+              <select
+                value={editor.category_id}
+                onChange={(event) => setEditor((prev) => ({ ...prev, category_id: event.target.value }))}
+              >
+                <option value="">Без категории</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Филиал
+              <select
+                value={editor.location_id}
+                onChange={(event) => setEditor((prev) => ({ ...prev, location_id: event.target.value }))}
+              >
+                <option value="">Без филиала</option>
+                {locations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
               Сумма{selectedAccount ? ` (${editor.currency})` : ""}
               <input
                 required
@@ -485,6 +646,20 @@ export default function FinancesPage() {
           </form>
         )}
       </Modal>
+
+      <CatalogCategoryManager
+        open={categoryManagerOpen}
+        categories={categories}
+        isLoading={categoriesQuery.isPending}
+        canEdit={canCreate}
+        onClose={() => setCategoryManagerOpen(false)}
+        onSave={async (payload) => {
+          if (payload.id) await updateFinanceCategory(payload.id, { name: payload.name });
+          else await createFinanceCategory({ name: payload.name });
+          invalidateFinances();
+        }}
+        onDelete={(category) => void handleDeleteCategory(category)}
+      />
     </section>
   );
 }

@@ -1979,8 +1979,31 @@ body.is-column-resizing * {
 .settings-tool-row__agents {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem 0.9rem;
+  gap: 0.55rem 0.75rem;
   padding-left: 1.7rem;
+}
+
+.settings-tool-row__agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 11.5rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2, var(--bg));
+}
+
+.settings-tool-row__agent-title {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  line-height: 1.25;
+}
+
+.settings-tool-row__agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
 .settings-tool-row__agent {

@@ -8,6 +8,17 @@ const {
   createAccountPayment,
   deleteAccountPayment,
 } = require('../db/account-payments');
+const {
+  createCatalogCategory,
+  deleteCatalogCategory,
+  getCatalogCategory,
+  listCatalogCategories,
+  updateCatalogCategory,
+} = require('../db/catalog-categories');
+const {
+  listLocationsForViewer,
+  getLocationViewer,
+} = require('../db/locations');
 
 function paymentWriteErrorMessage(code) {
   const messages = {
@@ -16,6 +27,9 @@ function paymentWriteErrorMessage(code) {
     INVALID_ACCOUNT_PAYMENT_AMOUNT: 'Укажите сумму больше 0.',
     INVALID_ACCOUNT_PAYMENT_CURRENCY: 'Валюта платежа: UZS или USD.',
     INVALID_ACCOUNT_PAYMENT_NOTE: 'Слишком длинный комментарий к платежу.',
+    INVALID_FINANCE_CATEGORY: 'Некорректная категория.',
+    INVALID_CATEGORY_NAME: 'Укажите название категории.',
+    INVALID_ACCOUNT_PAYMENT_LOCATION: 'Выберите филиал, к которому у вас есть доступ.',
   };
   return messages[code] || null;
 }
@@ -39,6 +53,10 @@ function sessionUserId(db, req) {
   return null;
 }
 
+function financeViewer(db, req) {
+  return getLocationViewer(db, getSessionActor(req));
+}
+
 function registerFinancesRoutes(router, db, { auditAdminChange, buildAuditDetails }) {
   router.get('/api/finances/accounts', requireRight(db, 'finances_read'), (_req, res) => {
     try {
@@ -49,11 +67,86 @@ function registerFinancesRoutes(router, db, { auditAdminChange, buildAuditDetail
     }
   });
 
+  router.get('/api/finances/locations', requireRight(db, 'finances_read'), (req, res) => {
+    try {
+      return res.json({ locations: listLocationsForViewer(db, financeViewer(db, req)) });
+    } catch (error) {
+      console.error('List finance locations error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить филиалы.' });
+    }
+  });
+
+  router.get('/api/finances/categories', requireRight(db, 'finances_read'), (_req, res) => {
+    try {
+      return res.json({ categories: listCatalogCategories(db, 'finance') });
+    } catch (error) {
+      console.error('List finance categories error:', error);
+      return res.status(500).json({ message: 'Не удалось загрузить категории.' });
+    }
+  });
+
+  router.post('/api/finances/categories', requireRight(db, 'finances_create'), express.json(), (req, res) => {
+    try {
+      const category = createCatalogCategory(db, 'finance', { name: req.body?.name });
+      auditAdminChange(db, req, {
+        entityType: 'finance_category',
+        entityId: category.id,
+        action: 'create',
+        summary: `Создана категория финансов «${category.name}»`,
+        details: buildAuditDetails({ before: null, after: category }),
+      });
+      return res.status(201).json({ category });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось создать категорию.');
+    }
+  });
+
+  router.put('/api/finances/categories/:id', requireRight(db, 'finances_create'), express.json(), (req, res) => {
+    try {
+      const before = getCatalogCategory(db, 'finance', req.params.id);
+      const category = updateCatalogCategory(db, 'finance', req.params.id, { name: req.body?.name });
+      auditAdminChange(db, req, {
+        entityType: 'finance_category',
+        entityId: category.id,
+        action: 'update',
+        summary: `Изменена категория финансов #${category.id}`,
+        details: buildAuditDetails({ before, after: category }),
+      });
+      return res.json({ category });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Категория не найдена.' : 'Не удалось обновить категорию.'
+      );
+    }
+  });
+
+  router.delete('/api/finances/categories/:id', requireRight(db, 'finances_create'), (req, res) => {
+    try {
+      const before = getCatalogCategory(db, 'finance', req.params.id);
+      const deleted = deleteCatalogCategory(db, 'finance', req.params.id);
+      if (!deleted) return res.status(404).json({ message: 'Категория не найдена.' });
+      auditAdminChange(db, req, {
+        entityType: 'finance_category',
+        entityId: before.id,
+        action: 'delete',
+        summary: `Удалена категория финансов «${before.name}»`,
+        details: buildAuditDetails({ before, after: null }),
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondWriteError(res, error, 'Не удалось удалить категорию.');
+    }
+  });
+
   router.get('/api/finances/payments', requireRight(db, 'finances_read'), (req, res) => {
     try {
       const payments = listAccountPayments(db, {
         account_id: req.query.account_id,
         direction: req.query.direction,
+        category_id: req.query.category_id,
+        location_id: req.query.location_id,
       });
       return res.json({ payments });
     } catch (error) {
@@ -63,14 +156,20 @@ function registerFinancesRoutes(router, db, { auditAdminChange, buildAuditDetail
 
   router.post('/api/finances/payments', requireRight(db, 'finances_create'), express.json(), (req, res) => {
     try {
-      const payment = createAccountPayment(db, {
-        account_id: req.body?.account_id,
-        direction: req.body?.direction,
-        amount: req.body?.amount,
-        currency: req.body?.currency,
-        note: req.body?.note,
-        created_by_user_id: sessionUserId(db, req),
-      });
+      const payment = createAccountPayment(
+        db,
+        {
+          account_id: req.body?.account_id,
+          direction: req.body?.direction,
+          amount: req.body?.amount,
+          currency: req.body?.currency,
+          note: req.body?.note,
+          category_id: req.body?.category_id,
+          location_id: req.body?.location_id,
+          created_by_user_id: sessionUserId(db, req),
+        },
+        { viewer: financeViewer(db, req) }
+      );
       const account = getAccount(db, payment.account_id);
       const label = payment.direction === 'out' ? 'Расход' : 'Приход';
       auditAdminChange(db, req, {

@@ -31,7 +31,7 @@ const TICKET_REQUIRED_TOOLS = new Set([
   "reply_to_customer",
 ]);
 
-function emptyDisabledAgentTools(): Record<AiToolAgentSlug, string[]> {
+function emptyAgentToolMap(): Record<AiToolAgentSlug, string[]> {
   return { customer: [], customer_assist: [], kb: [], ops: [] };
 }
 
@@ -46,6 +46,10 @@ function toolAgentEnabled(tool: AiAgentTool, slug: AiToolAgentSlug) {
   return tool.enabled !== false;
 }
 
+function toolAgentDefault(tool: AiAgentTool, slug: AiToolAgentSlug) {
+  return (tool.default_agents || []).includes(slug);
+}
+
 function withToolAgentStates(
   tool: AiAgentTool,
   nextStates: Partial<Record<AiToolAgentSlug, boolean>>,
@@ -57,17 +61,46 @@ function withToolAgentStates(
     if (!isToolAgentSlug(slug)) continue;
     enabled_agents[slug] = slug in nextStates ? Boolean(nextStates[slug]) : toolAgentEnabled(tool, slug);
   }
+  const default_agents = (tool.default_agents || []).filter(
+    (slug) => isToolAgentSlug(slug) && enabled_agents[slug] !== false,
+  );
   const enabled =
     (tool.agents || []).length > 0 &&
     (tool.agents || []).every((slug) => !isToolAgentSlug(slug) || enabled_agents[slug] !== false);
-  return { ...tool, enabled, enabled_agents };
+  return { ...tool, enabled, enabled_agents, default_agents };
+}
+
+function withToolAgentDefault(
+  tool: AiAgentTool,
+  slug: AiToolAgentSlug,
+  isDefault: boolean,
+): AiAgentTool {
+  const agents = new Set((tool.default_agents || []).filter(isToolAgentSlug));
+  if (isDefault) agents.add(slug);
+  else agents.delete(slug);
+  const next = withToolAgentStates(tool, isDefault ? { [slug]: true } : {});
+  return {
+    ...next,
+    default_agents: [...agents].filter((agent) => toolAgentEnabled(next, agent)),
+  };
 }
 
 function disabledAgentToolsFromRows(tools: AiAgentTool[]): Record<AiToolAgentSlug, string[]> {
-  const next = emptyDisabledAgentTools();
+  const next = emptyAgentToolMap();
   for (const tool of tools) {
     for (const slug of tool.agents || []) {
       if (!isToolAgentSlug(slug) || toolAgentEnabled(tool, slug)) continue;
+      next[slug].push(tool.name);
+    }
+  }
+  return next;
+}
+
+function defaultAgentToolsFromRows(tools: AiAgentTool[]): Record<AiToolAgentSlug, string[]> {
+  const next = emptyAgentToolMap();
+  for (const tool of tools) {
+    for (const slug of tool.default_agents || []) {
+      if (!isToolAgentSlug(slug) || !toolAgentEnabled(tool, slug)) continue;
       next[slug].push(tool.name);
     }
   }
@@ -153,6 +186,7 @@ export default function AgentToolsPanel({
       saveAiDisabledTools({
         disabled_tools: fullyDisabledToolNames(rows),
         disabled_agent_tools: disabledAgentToolsFromRows(rows),
+        default_agent_tools: defaultAgentToolsFromRows(rows),
       }),
     onSuccess: (data) => {
       setAgentTools(data.agent_tools || []);
@@ -184,6 +218,14 @@ export default function AgentToolsPanel({
     applyToolRows(
       rows.map((tool) =>
         tool.name === toolName ? withToolAgentStates(tool, { [slug]: enabled }) : tool,
+      ),
+    );
+  }
+
+  function setToolAgentDefault(toolName: string, slug: AiToolAgentSlug, isDefault: boolean) {
+    applyToolRows(
+      rows.map((tool) =>
+        tool.name === toolName ? withToolAgentDefault(tool, slug, isDefault) : tool,
       ),
     );
   }
@@ -226,10 +268,11 @@ export default function AgentToolsPanel({
           <div className="settings-tools__header">
             <div className="settings-tools__intro">
               <p className="muted-copy">
-                Инструменты можно включать отдельно для каждого агента. Отключённые для агента
-                инструменты ему не передаются. Описание ниже уходит в модель как описание функции;
-                в него можно вставлять те же переменные <code>{"{{key}}"}</code>, что и в системных
-                промптах. Проверка вызывает инструмент напрямую (в том числе отключённые).
+                Для каждого агента отдельно: <strong>Вкл/Выкл</strong> — доступен ли инструмент,{" "}
+                <strong>В промпт</strong> — сразу в модели, иначе через <code>search_tools</code>.
+                Выключение убирает инструмент полностью (и из промпта, и из поиска). Описание ниже
+                уходит в модель; в него можно вставлять <code>{"{{key}}"}</code>. Проверка вызывает
+                инструмент напрямую (в том числе отключённые).
               </p>
               <p className="settings-tools__sandboxes muted-copy">
                 Песочницы агентов:{" "}
@@ -269,6 +312,9 @@ export default function AgentToolsPanel({
             {rows.map((tool) => {
               const agents = (tool.agents || []).filter(isToolAgentSlug);
               const enabledCount = agents.filter((slug) => toolAgentEnabled(tool, slug)).length;
+              const defaultCount = agents.filter(
+                (slug) => toolAgentEnabled(tool, slug) && toolAgentDefault(tool, slug),
+              ).length;
               const allEnabled = agents.length > 0 && enabledCount === agents.length;
               const mixed = enabledCount > 0 && enabledCount < agents.length;
               const description = descriptionsByName.get(tool.name);
@@ -291,6 +337,25 @@ export default function AgentToolsPanel({
                       <span className="settings-tool-row__body">
                         <span className="settings-tool-row__title">
                           <strong>{tool.title}</strong>
+                          {defaultCount > 0 ? (
+                            <span
+                              className="badge badge--warn"
+                              title="Для части агентов сразу в промпте"
+                            >
+                              в промпте
+                            </span>
+                          ) : enabledCount > 0 ? (
+                            <span
+                              className="badge badge--muted"
+                              title="Подключается через search_tools"
+                            >
+                              через search_tools
+                            </span>
+                          ) : (
+                            <span className="badge badge--muted" title="Отключён для всех агентов">
+                              отключён
+                            </span>
+                          )}
                           {description?.is_custom ? (
                             <span className="badge badge--ok">Изменено</span>
                           ) : null}
@@ -303,19 +368,49 @@ export default function AgentToolsPanel({
                     </label>
                     {agents.length ? (
                       <div className="settings-tool-row__agents">
-                        {agents.map((slug) => (
-                          <label key={slug} className="settings-tool-row__agent field-checkbox">
-                            <input
-                              type="checkbox"
-                              checked={toolAgentEnabled(tool, slug)}
-                              disabled={!canEdit}
-                              onChange={(event) =>
-                                setToolAgentEnabled(tool.name, slug, event.target.checked)
-                              }
-                            />
-                            <span>{TOOL_AGENT_TITLES[slug] || slug}</span>
-                          </label>
-                        ))}
+                        {agents.map((slug) => {
+                          const enabled = toolAgentEnabled(tool, slug);
+                          const isDefault = enabled && toolAgentDefault(tool, slug);
+                          return (
+                            <div key={slug} className="settings-tool-row__agent-card">
+                              <span className="settings-tool-row__agent-title">
+                                {TOOL_AGENT_TITLES[slug] || slug}
+                              </span>
+                              <div className="settings-tool-row__agent-actions">
+                                <button
+                                  type="button"
+                                  className={`btn-sm ${enabled ? "btn-primary" : "btn-secondary"}`}
+                                  disabled={!canEdit}
+                                  aria-pressed={enabled}
+                                  title={
+                                    enabled
+                                      ? "Отключить инструмент для этого агента"
+                                      : "Включить инструмент для этого агента"
+                                  }
+                                  onClick={() => setToolAgentEnabled(tool.name, slug, !enabled)}
+                                >
+                                  {enabled ? "Вкл" : "Выкл"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`btn-sm ${isDefault ? "btn-primary" : "btn-secondary"}`}
+                                  disabled={!canEdit || !enabled}
+                                  aria-pressed={isDefault}
+                                  title={
+                                    !enabled
+                                      ? "Сначала включите инструмент для агента"
+                                      : isDefault
+                                        ? "Убрать из промпта — искать через search_tools"
+                                        : "Сделать базовым — сразу в промпте"
+                                  }
+                                  onClick={() => setToolAgentDefault(tool.name, slug, !isDefault)}
+                                >
+                                  {isDefault ? "В промпте" : "Через search"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : null}
                     {canEdit && description ? (

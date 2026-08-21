@@ -124,6 +124,7 @@ export default function ReportsPage() {
 
   const columns = useMemo<ColumnDef<ReportJob>[]>(
     () => [
+      { id: "id", header: "ID", accessorKey: "id" },
       {
         id: "period",
         header: "Период",

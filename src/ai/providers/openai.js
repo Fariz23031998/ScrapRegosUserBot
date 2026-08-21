@@ -59,6 +59,21 @@ function normalizeUsage(raw) {
   return usage;
 }
 
+function chatCompletionsBlocksReasoningWithTools(model) {
+  const name = String(model || '')
+    .trim()
+    .toLowerCase();
+  return name === 'gpt-5.6' || name.startsWith('gpt-5.6-') || name.startsWith('gpt-5.6.');
+}
+
+function resolveChatReasoningEffort(model, reasoningEffort, tools) {
+  const hasTools = Array.isArray(tools) && tools.length > 0;
+  if (hasTools && chatCompletionsBlocksReasoningWithTools(model)) return 'none';
+  return String(reasoningEffort || '')
+    .trim()
+    .toLowerCase();
+}
+
 function buildChatRequest({ model, messages, tools, reasoningEffort, promptCacheKey } = {}) {
   const request = {
     model,
@@ -70,9 +85,7 @@ function buildChatRequest({ model, messages, tools, reasoningEffort, promptCache
   }
   if (isReasoningModel(model)) {
     request.max_completion_tokens = DEFAULT_MAX_COMPLETION_TOKENS;
-    const effort = String(reasoningEffort || '')
-      .trim()
-      .toLowerCase();
+    const effort = resolveChatReasoningEffort(model, reasoningEffort, tools);
     if (ALLOWED_REASONING_EFFORTS.includes(effort)) {
       request.reasoning_effort = effort;
     }
@@ -204,6 +217,7 @@ module.exports = {
   normalizePromptCacheKey,
   normalizeUsage,
   isReasoningModel,
+  chatCompletionsBlocksReasoningWithTools,
   DEFAULT_MAX_COMPLETION_TOKENS,
   MAX_PROMPT_CACHE_KEY_LENGTH,
 };

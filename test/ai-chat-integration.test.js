@@ -6,7 +6,7 @@ const path = require('path');
 
 const { openDb } = require('../src/db/partners-db');
 const { createEmployeeUser, setBotUserRegosLink } = require('../src/db/bot-users-db');
-const { loadAiSettings, saveAiSettings, serializeAiSettings, resolveAgentModel } = require('../src/ai/settings');
+const { loadAiSettings, saveAiSettings, serializeAiSettings, resolveAgentModel, resolveAgentMaxSteps } = require('../src/ai/settings');
 const { CUSTOMER_SYSTEM_PROMPT, CUSTOMER_TEST_PROMPT_SUFFIX, CUSTOMER_ASSIST_PROMPT_SUFFIX, KB_SYSTEM_PROMPT, OPS_SYSTEM_PROMPT, TICKET_SUMMARY_SYSTEM_PROMPT } = require('../src/ai/default-prompts');
 const { getProvider, registerProvider, listProviders } = require('../src/ai/providers/registry');
 const { buildChatRequest, consumeChatStream, normalizeChatContent, normalizeUsage } = require('../src/ai/providers/openai');
@@ -174,6 +174,18 @@ describe('AI settings', () => {
       ops: '',
       ticket_summary: '',
     });
+    assert.deepEqual(initial.agentMaxSteps, {
+      customer: '',
+      customer_assist: '',
+      kb: '',
+      ops: '',
+      ticket_summary: '',
+    });
+    assert.equal(resolveAgentMaxSteps(initial, 'customer'), 8);
+    assert.equal(resolveAgentMaxSteps(initial, 'ops'), 8);
+    assert.equal(serializeAiSettings(saved).agent_max_steps_default, 8);
+    assert.equal(serializeAiSettings(saved).agent_max_steps_min, 1);
+    assert.equal(serializeAiSettings(saved).agent_max_steps_max, 50);
     assert.equal(initial.groupChatId, '');
     assert.deepEqual(initial.groupTopics, []);
     assert.deepEqual(initial.ignoredCustomerMessages, []);
@@ -302,6 +314,40 @@ describe('AI settings', () => {
     assert.equal(serialized.agent_models.customer, 'gpt-5.6-terra');
     assert.equal(serialized.transcribe_model, 'whisper-1');
     assert.equal(serialized.reasoning_effort, 'low');
+  });
+
+  it('persists per-agent max steps and resolves the default', () => {
+    const database = createDb();
+    const saved = saveAiSettings(database, {
+      agentMaxSteps: { customer: 12, kb: 3 },
+    });
+    assert.equal(saved.agentMaxSteps.customer, 12);
+    assert.equal(saved.agentMaxSteps.kb, 3);
+    assert.equal(saved.agentMaxSteps.ops, '');
+    assert.equal(resolveAgentMaxSteps(saved, 'customer'), 12);
+    assert.equal(resolveAgentMaxSteps(saved, 'kb'), 3);
+    assert.equal(resolveAgentMaxSteps(saved, 'ops'), 8);
+    assert.equal(resolveAgentMaxSteps(saved, 'ticket_summary'), 8);
+    const serialized = serializeAiSettings(saved);
+    assert.equal(serialized.agent_max_steps.customer, 12);
+    assert.equal(serialized.agent_max_steps.kb, 3);
+    assert.equal(serialized.agent_max_steps.ops, '');
+    assert.equal(serialized.agent_max_steps_default, 8);
+
+    saveAiSettings(database, { enabled: true });
+    const reloaded = loadAiSettings(database);
+    assert.equal(reloaded.agentMaxSteps.customer, 12);
+    assert.equal(reloaded.agentMaxSteps.kb, 3);
+    assert.equal(reloaded.agentMaxSteps.ops, '');
+  });
+
+  it('rejects invalid per-agent max steps', () => {
+    const database = createDb();
+    assert.throws(() => saveAiSettings(database, { agentMaxSteps: { customer: 0 } }), /INVALID_AI_AGENT_MAX_STEPS/);
+    assert.throws(() => saveAiSettings(database, { agentMaxSteps: { kb: 51 } }), /INVALID_AI_AGENT_MAX_STEPS/);
+    assert.throws(() => saveAiSettings(database, { agentMaxSteps: { ops: 1.5 } }), /INVALID_AI_AGENT_MAX_STEPS/);
+    assert.throws(() => saveAiSettings(database, { agentMaxSteps: { customer: 'many' } }), /INVALID_AI_AGENT_MAX_STEPS/);
+    assert.throws(() => saveAiSettings(database, { agentMaxSteps: [] }), /INVALID_AI_AGENT_MAX_STEPS/);
   });
 
   it('rejects invalid transcribe model and reasoning effort', () => {
@@ -657,6 +703,108 @@ describe('provider registry and runAgent', () => {
     assert.equal(result.content, 'Hello');
     assert.deepEqual(seen, ['Hel', 'lo']);
   });
+
+  it('stops the tool loop at maxSteps', async () => {
+    let chats = 0;
+    const provider = {
+      async chat() {
+        chats += 1;
+        return {
+          content: '',
+          toolCalls: [{ id: `call-${chats}`, name: 'ping', arguments: '{}' }],
+        };
+      },
+    };
+    const result = await runAgent({
+      provider,
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: 'loop' }],
+      maxSteps: 2,
+      tools: [{ name: 'ping', execute: async () => ({ ok: true }) }],
+    });
+    assert.equal(chats, 2);
+    assert.equal(result.content, '');
+    assert.equal(result.steps, 2);
+    assert.equal(result.stopped, 'max_steps');
+  });
+
+  it('applies the abort timeout per LLM step', async () => {
+    const sleep = (ms, signal) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, ms);
+        if (!signal) return;
+        const onAbort = () => {
+          clearTimeout(timer);
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+
+    let step = 0;
+    const provider = {
+      async chat({ signal }) {
+        step += 1;
+        await sleep(80, signal);
+        if (step === 1) {
+          return {
+            content: '',
+            toolCalls: [{ id: 'call-1', name: 'ping', arguments: '{}' }],
+          };
+        }
+        return { content: 'done', toolCalls: [] };
+      },
+    };
+
+    const result = await runAgent({
+      provider,
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: 'loop' }],
+      timeoutMs: 120,
+      tools: [{ name: 'ping', execute: async () => ({ ok: true }) }],
+    });
+    assert.equal(result.content, 'done');
+    assert.equal(result.steps, 2);
+  });
+
+  it('maps a provider abort to AI_TIMEOUT', async () => {
+    const provider = {
+      async chat({ signal }) {
+        await new Promise((_, reject) => {
+          const timer = setTimeout(() => {
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            reject(error);
+          }, 30);
+          signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              const error = new Error('aborted');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true }
+          );
+        });
+      },
+    };
+    await assert.rejects(
+      () =>
+        runAgent({
+          provider,
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: 'hi' }],
+          timeoutMs: 1000,
+        }),
+      /AI_TIMEOUT/
+    );
+  });
 });
 
 describe('openai chat stream reader', () => {
@@ -989,6 +1137,43 @@ describe('customer agent handler', () => {
     assert.equal(sent[0].authorEntityId, aiAuthorId);
     assert.equal(sent[0].text, 'Сейчас уточню по прайсу.');
     assert.deepEqual(participants, [{ ticketId: 42, userId: aiAuthorId }]);
+  });
+
+  it('passes the configured max chain of action into runAgent', async () => {
+    const database = createDb();
+    saveAiSettings(database, {
+      enabled: true,
+      testMode: false,
+      model: 'gpt-4o-mini',
+      agentMaxSteps: { customer: 4 },
+    });
+    let captured = null;
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-42',
+      messageId: '9',
+      deps: withWriteDeps({
+        findTicketByChatId: async () => ({
+          id: 42,
+          status: 'Open',
+          client: { phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            { id: '9', author_entity_type: 'Client', message_type: 'Regular', text: 'Сколько стоит?' },
+          ],
+        }),
+        addTicketMessage: async () => ({ ok: true, id: '10' }),
+        runAgent: async (args) => {
+          captured = args;
+          return { content: 'Сейчас уточню по прайсу.', steps: 1 };
+        },
+        provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+      }),
+    });
+    assert.equal(result.handled, true);
+    assert.equal(captured.maxSteps, 4);
   });
 
   it('forceHandle still respects test mode for non-employee clients', async () => {
@@ -2947,6 +3132,45 @@ describe('openai gpt-5 request shape', () => {
       { prompt_tokens: 2000, completion_tokens: 50, cached_tokens: 1920, cache_write_tokens: 80 }
     );
     assert.equal(normalizeUsage(null), null);
+  });
+
+  it('forces reasoning_effort none for gpt-5.6 function tools on chat completions', () => {
+    const tool = {
+      name: 'search_tasks',
+      description: 'Search tasks',
+      parameters: { type: 'object', properties: {} },
+    };
+    const blocked = buildChatRequest({
+      model: 'gpt-5.6',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [tool],
+      reasoningEffort: 'high',
+    });
+    assert.equal(blocked.reasoning_effort, 'none');
+    assert.equal(blocked.tools.length, 1);
+
+    const terra = buildChatRequest({
+      model: 'gpt-5.6-terra',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [tool],
+      reasoningEffort: 'low',
+    });
+    assert.equal(terra.reasoning_effort, 'none');
+
+    const withoutTools = buildChatRequest({
+      model: 'gpt-5.6',
+      messages: [{ role: 'user', content: 'hi' }],
+      reasoningEffort: 'low',
+    });
+    assert.equal(withoutTools.reasoning_effort, 'low');
+
+    const olderGpt5 = buildChatRequest({
+      model: 'gpt-5-mini',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [tool],
+      reasoningEffort: 'medium',
+    });
+    assert.equal(olderGpt5.reasoning_effort, 'medium');
   });
 
   it('normalizes array content parts', () => {

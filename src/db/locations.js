@@ -207,6 +207,12 @@ function deleteLocation(db, id) {
     if (tableExists(db, 'tasks')) {
       db.prepare('UPDATE tasks SET location_id = NULL WHERE location_id = ?').run(current.id);
     }
+    if (tableExists(db, 'account_payments')) {
+      const cols = db.prepare('PRAGMA table_info(account_payments)').all();
+      if (cols.some((col) => col.name === 'location_id')) {
+        db.prepare('UPDATE account_payments SET location_id = NULL WHERE location_id = ?').run(current.id);
+      }
+    }
     db.prepare('DELETE FROM location_allowed_users WHERE location_id = ?').run(current.id);
     db.prepare('DELETE FROM locations WHERE id = ?').run(current.id);
     db.exec('COMMIT');

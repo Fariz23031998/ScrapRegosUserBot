@@ -181,7 +181,7 @@ export default function SettingsLocationsTab({ canEdit }: { canEdit: boolean }) 
 
   async function handleDeleteLocation(location: SettingsLocation) {
     const ok = await confirm({
-      message: `Удалить филиал «${location.name}»? Задачи останутся без филиала.`,
+      message: `Удалить филиал «${location.name}»? Задачи и платежи останутся без филиала.`,
       variant: "danger",
       confirmLabel: "Удалить",
     });

@@ -192,4 +192,25 @@ describe('ai settings disabled agent tools', () => {
     assert.deepEqual(saved.disabledAgentTools.customer, []);
     assert.deepEqual(saved.disabledTools, ['reply_to_customer']);
   });
+
+  it('saves and serializes per-agent default tools', () => {
+    const database = createDb();
+    const saved = saveAiSettings(database, {
+      defaultAgentTools: {
+        customer: ['search_tools', 'notify_employee'],
+        customer_assist: ['search_tools', 'reply_to_customer'],
+        kb: ['search_tools'],
+        ops: ['search_tasks'],
+      },
+    });
+    assert.deepEqual(saved.defaultAgentTools.customer, ['search_tools', 'notify_employee']);
+    assert.deepEqual(saved.defaultAgentTools.ops, ['search_tasks']);
+
+    const serialized = serializeAiSettings(saved);
+    assert.deepEqual(serialized.default_agent_tools.customer, ['search_tools', 'notify_employee']);
+    const notify = serialized.agent_tools.find((tool) => tool.name === 'notify_employee');
+    assert.deepEqual(notify.default_agents, ['customer']);
+    const knowledge = serialized.agent_tools.find((tool) => tool.name === 'search_knowledge');
+    assert.ok(!knowledge.default_agents.includes('customer'));
+  });
 });

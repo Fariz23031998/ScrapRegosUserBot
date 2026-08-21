@@ -8,8 +8,9 @@ const express = require('express');
 
 const { createBotAdminRouter } = require('../src/admin/bot-admin');
 const { createAccount } = require('../src/db/accounts');
-const { listAdminAuditLogs } = require('../src/db/admin-audit-logs');
 const { createEmployeeUser } = require('../src/db/bot-users-db');
+const { createLocation } = require('../src/db/locations');
+const { listAdminAuditLogs } = require('../src/db/admin-audit-logs');
 const { openDb } = require('../src/db/partners-db');
 const { setUsdUzsRate } = require('../src/db/money');
 
@@ -245,5 +246,146 @@ describe('finances admin API', () => {
       headers: { Cookie: cookie },
     });
     assert.equal(missing.statusCode, 404);
+  });
+
+  it('creates, lists, updates, and deletes finance categories', async () => {
+    const cookie = await login('admin', 'test-password');
+    const created = await request(server, 'POST', '/bot-admin/api/finances/categories', {
+      headers: { Cookie: cookie },
+      body: { name: 'Аренда' },
+    });
+    assert.equal(created.statusCode, 201);
+    const category = JSON.parse(created.body).category;
+    assert.equal(category.name, 'Аренда');
+
+    const listed = await request(server, 'GET', '/bot-admin/api/finances/categories', {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(listed.statusCode, 200);
+    assert.ok(JSON.parse(listed.body).categories.some((item) => item.id === category.id));
+
+    const updated = await request(server, 'PUT', `/bot-admin/api/finances/categories/${category.id}`, {
+      headers: { Cookie: cookie },
+      body: { name: 'Коммунальные' },
+    });
+    assert.equal(updated.statusCode, 200);
+    assert.equal(JSON.parse(updated.body).category.name, 'Коммунальные');
+
+    const account = createAccount(db, { name: 'Касса категорий API', currency: 'UZS' });
+    const createdPayment = await request(server, 'POST', '/bot-admin/api/finances/payments', {
+      headers: { Cookie: cookie },
+      body: {
+        account_id: account.id,
+        direction: 'out',
+        amount: 7000,
+        category_id: category.id,
+      },
+    });
+    assert.equal(createdPayment.statusCode, 201);
+    const payment = JSON.parse(createdPayment.body).payment;
+    assert.equal(payment.category_id, category.id);
+    assert.equal(payment.category.name, 'Коммунальные');
+
+    const filtered = await request(
+      server,
+      'GET',
+      `/bot-admin/api/finances/payments?account_id=${account.id}&category_id=${category.id}`,
+      { headers: { Cookie: cookie } }
+    );
+    assert.equal(filtered.statusCode, 200);
+    assert.equal(JSON.parse(filtered.body).payments.length, 1);
+
+    const deleted = await request(server, 'DELETE', `/bot-admin/api/finances/categories/${category.id}`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(deleted.statusCode, 200);
+    assert.equal(JSON.parse(deleted.body).ok, true);
+
+    const afterDelete = await request(
+      server,
+      'GET',
+      `/bot-admin/api/finances/payments?account_id=${account.id}`,
+      { headers: { Cookie: cookie } }
+    );
+    assert.equal(afterDelete.statusCode, 200);
+    const remaining = JSON.parse(afterDelete.body).payments.find((item) => item.id === payment.id);
+    assert.equal(remaining.category_id, null);
+
+    const logs = listAdminAuditLogs(db, { limit: 30 });
+    const actions = logs.logs.map((row) => `${row.entity_type}:${row.action}`);
+    assert.ok(actions.includes('finance_category:create'));
+    assert.ok(actions.includes('finance_category:update'));
+    assert.ok(actions.includes('finance_category:delete'));
+  });
+
+  it('requires finances_create to write categories', async () => {
+    createEmployeeUser(db, {
+      phone: '+998901000083',
+      displayName: 'Читатель категорий',
+      adminLogin: 'cat-reader',
+      password: 'reader-secret',
+      rights: { open_admin_dashboard: 1, finances_read: 1 },
+    });
+    const readerCookie = await login('cat-reader', 'reader-secret');
+    const listed = await request(server, 'GET', '/bot-admin/api/finances/categories', {
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(listed.statusCode, 200);
+
+    const createDenied = await request(server, 'POST', '/bot-admin/api/finances/categories', {
+      headers: { Cookie: readerCookie },
+      body: { name: 'Запрещено' },
+    });
+    assert.equal(createDenied.statusCode, 403);
+  });
+
+  it('assigns a location to a payment and lists locations', async () => {
+    const cookie = await login('admin', 'test-password');
+    const employee = createEmployeeUser(db, { phone: '+998901000084', displayName: 'Кассир API' });
+    const office = createLocation(db, { name: 'Офис API', allowed_user_ids: [employee.id] });
+    const listed = await request(server, 'GET', '/bot-admin/api/finances/locations', {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(listed.statusCode, 200);
+    assert.ok(JSON.parse(listed.body).locations.some((item) => item.id === office.id));
+
+    const account = createAccount(db, { name: 'Касса филиала API', currency: 'UZS' });
+    const created = await request(server, 'POST', '/bot-admin/api/finances/payments', {
+      headers: { Cookie: cookie },
+      body: {
+        account_id: account.id,
+        direction: 'out',
+        amount: 3500,
+        location_id: office.id,
+      },
+    });
+    assert.equal(created.statusCode, 201);
+    const payment = JSON.parse(created.body).payment;
+    assert.equal(payment.location_id, office.id);
+    assert.equal(payment.location.name, 'Офис API');
+
+    const filtered = await request(
+      server,
+      'GET',
+      `/bot-admin/api/finances/payments?account_id=${account.id}&location_id=${office.id}`,
+      { headers: { Cookie: cookie } }
+    );
+    assert.equal(filtered.statusCode, 200);
+    assert.equal(JSON.parse(filtered.body).payments.length, 1);
+
+    const uncategorized = await request(
+      server,
+      'GET',
+      `/bot-admin/api/finances/payments?account_id=${account.id}&location_id=none`,
+      { headers: { Cookie: cookie } }
+    );
+    assert.equal(uncategorized.statusCode, 200);
+    assert.equal(JSON.parse(uncategorized.body).payments.length, 0);
+
+    const badLocation = await request(server, 'POST', '/bot-admin/api/finances/payments', {
+      headers: { Cookie: cookie },
+      body: { account_id: account.id, direction: 'in', amount: 1, location_id: 999999 },
+    });
+    assert.equal(badLocation.statusCode, 400);
   });
 });
