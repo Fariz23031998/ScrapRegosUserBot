@@ -3,6 +3,7 @@ import { ArrowLeft, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError } from "../api/client";
+import { listFinanceLocations } from "../api/finances";
 import { createReportJob, deleteReportJob, getReportJob, reportJobPath, reportsListPath } from "../api/reports";
 import filterFunnelIcon from "../assets/filter-funnel.png";
 import LoadingState from "../components/LoadingState";
@@ -14,6 +15,7 @@ import { useActiveReportJob } from "../contexts/ReportJobViewContext";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import { useStickyOffsetVar } from "../hooks/useStickyOffsetVar";
 import { useUiPreferences } from "../hooks/useUiPreferences";
+import { parseDisplayCurrency } from "../lib/money";
 import {
   ReportFilterFields,
   ReportResultTables,
@@ -112,6 +114,14 @@ export default function ReportDetailPage() {
   const isRefreshing = jobQuery.isFetching || createMutation.isPending;
   const filtersActive = filtersHaveAdvancedValues(filters, tab, ticketPeriodDays);
   const showTicketFilters = tab === "technician";
+  const showFinanceFilters = tab === "finance";
+  const displayCurrency = parseDisplayCurrency(filters.currency);
+  const locationsQuery = useQuery({
+    queryKey: ["finance-locations"],
+    queryFn: listFinanceLocations,
+    enabled: showFinanceFilters,
+  });
+  const locations = locationsQuery.data?.locations || [];
   const notFound = !validJobId || (jobQuery.error instanceof ApiError && jobQuery.error.status === 404);
   const errorMessage =
     job?.status === "failed"
@@ -126,11 +136,11 @@ export default function ReportDetailPage() {
             ? jobQuery.error.message
             : null;
   const loadingLabel = loadingLabelForType(tab);
-  const summaryItems = job && !isBuilding ? reportSummaryItems(job, scorePerTicket) : undefined;
+  const summaryItems = job && !isBuilding ? reportSummaryItems(job, scorePerTicket, displayCurrency) : undefined;
 
   if (notFound && !jobQuery.isPending) {
     return (
-      <section className="card tickets-page">
+      <section className="card tickets-page page--reports page--report-detail">
         <div className="ticket-detail-header">
           <div className="ticket-detail-header__title-row">
             <Link to={reportsListPath()} className="ticket-detail-header__back" aria-label="К списку отчётов" title="К списку отчётов">
@@ -147,7 +157,7 @@ export default function ReportDetailPage() {
   }
 
   return (
-    <section className="card tickets-page">
+    <section className="card tickets-page page--reports page--report-detail">
       {errorMessage ? <p className="message error">{errorMessage}</p> : null}
 
       <div className="tickets-sticky-head" ref={stickyHeadRef}>
@@ -163,7 +173,7 @@ export default function ReportDetailPage() {
             </Link>
             <div className="ticket-detail-header__heading">
               <h1>{job ? reportTypeLabel(job.type) : "Отчёт"}</h1>
-              {job ? <p className="muted-copy">{formatReportPeriod(job.params)}</p> : null}
+              {job ? <p className="muted-copy ticket-detail-header__period">{formatReportPeriod(job.params)}</p> : null}
             </div>
             {job ? (
               <button
@@ -195,6 +205,8 @@ export default function ReportDetailPage() {
               setFilters={setFilters}
               onOpenPeriod={() => setPeriodOpen(true)}
               showTicketFilters={showTicketFilters}
+              showFinanceFilters={showFinanceFilters}
+              locations={locations}
               showActions
               onRefresh={() => createMutation.mutate()}
               refreshing={isRefreshing}
@@ -239,6 +251,8 @@ export default function ReportDetailPage() {
               setFilters={setFilters}
               onOpenPeriod={() => setPeriodOpen(true)}
               showTicketFilters={showTicketFilters}
+              showFinanceFilters={showFinanceFilters}
+              locations={locations}
             />
           </div>
           <div className="ticket-filters-modal__actions">
@@ -278,7 +292,12 @@ export default function ReportDetailPage() {
         {isBuilding || !job ? (
           <LoadingState message={loadingLabel} />
         ) : (
-          <ReportResultTables job={job} scorePerTicket={scorePerTicket} compact={compact} />
+          <ReportResultTables
+            job={job}
+            scorePerTicket={scorePerTicket}
+            compact={compact}
+            displayCurrency={displayCurrency}
+          />
         )}
       </div>
     </section>

@@ -14,7 +14,12 @@ export type TechnicianReportParams = ReportPeriodParams & {
   minimum_call_duration_seconds?: string;
 };
 
-export type ReportJobParams = TechnicianReportParams;
+export type FinanceReportParams = ReportPeriodParams & {
+  location_id?: string;
+  currency?: string;
+};
+
+export type ReportJobParams = TechnicianReportParams & FinanceReportParams;
 
 export type TechnicianReportRow = {
   user_id: number;
@@ -75,13 +80,28 @@ export type FinanceReportRow = {
   refunded_cash_usd: number;
   due_uzs: number;
   due_usd: number;
+  income_uzs: number;
+  income_usd: number;
+  expense_uzs: number;
+  expense_usd: number;
 };
 
 export type FinanceReportTotals = Omit<FinanceReportRow, "location_id" | "name">;
 
+export type FinanceReportOrders = {
+  count: number;
+  pending: number;
+  paid: number;
+  deleted: number;
+  amount: number;
+  amount_uzs?: number;
+  amount_usd?: number;
+};
+
 export type FinanceReport = {
   rows: FinanceReportRow[];
   totals: FinanceReportTotals;
+  orders: FinanceReportOrders;
 };
 
 export type ReportResult = TechnicianReport | CommissionReport | FinanceReport;
@@ -94,6 +114,8 @@ export type StoredReportParams = {
   without_duplicates?: boolean;
   duplicate_interval_minutes?: number;
   minimum_call_duration_seconds?: number | null;
+  location_id?: number | "none" | null;
+  currency?: "UZS" | "USD" | null;
 };
 
 export type ReportJob<T extends ReportResult = ReportResult> = {

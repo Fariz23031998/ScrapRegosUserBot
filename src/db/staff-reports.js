@@ -1,5 +1,5 @@
 const { getBotUserById, findBotUserByRegosUserId } = require('./bot-users-db');
-const { appendLocationAccessFilter } = require('./locations');
+const { appendLocationAccessFilter, appendLocationChoiceFilter } = require('./locations');
 const { computeLineMoney, getUsdUzsRate, roundMoney } = require('./money');
 const { ensureTaskTables } = require('./tasks');
 
@@ -50,7 +50,7 @@ function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 }
 
-function loadPostedTasks(db, { from = null, to = null, viewer = null } = {}) {
+function loadPostedTasks(db, { from = null, to = null, viewer = null, locationId = null } = {}) {
   ensureTaskTables(db);
   const where = [`t.status = 'done'`, `IFNULL(t.posted, 0) = 1`];
   const params = [];
@@ -63,6 +63,7 @@ function loadPostedTasks(db, { from = null, to = null, viewer = null } = {}) {
     params.push(to);
   }
   appendLocationAccessFilter(where, params, viewer);
+  appendLocationChoiceFilter(where, params, locationId, 't');
 
   return db
     .prepare(
@@ -112,10 +113,10 @@ function listPostedTaskLines(db, taskIds) {
   return [...listReportDeviceLines(db, taskIds), ...listReportServiceLines(db, taskIds)];
 }
 
-function loadPostedTaskReportContext(db, { fromUnix = null, toUnix = null, viewer = null } = {}) {
+function loadPostedTaskReportContext(db, { fromUnix = null, toUnix = null, viewer = null, locationId = null } = {}) {
   const from = unixSecondsToSqliteUtc(fromUnix);
   const to = unixSecondsToSqliteUtc(toUnix);
-  const tasks = loadPostedTasks(db, { from, to, viewer });
+  const tasks = loadPostedTasks(db, { from, to, viewer, locationId });
   const lines = listPostedTaskLines(
     db,
     tasks.map((task) => task.id)

@@ -148,6 +148,8 @@ function taskFullMetaRows(
     rows.push({ label: "Техник", value: task.technician?.name || "—" });
   }
   rows.push(
+    { label: "Начало", value: formatDateTime(task.planned_start_at) },
+    { label: "Окончание", value: formatDateTime(task.planned_finish_at) },
     { label: "Заметки", value: textOrDash(task.notes) },
     { label: "Обновлено", value: formatDateTime(task.updated_at) },
   );

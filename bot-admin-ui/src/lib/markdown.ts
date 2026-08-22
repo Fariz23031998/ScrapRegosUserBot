@@ -1,18 +1,41 @@
 import { escapeHtml } from "./utils";
 
 const SLOT = (index: number) => `\u0000MD${index}\u0000`;
+const KNOWLEDGE_IMAGE_PATH = /^\/bot-admin\/api\/knowledge\/articles\/\d+\/images\/\d+$/i;
+const IMAGE_EXT = /\.(?:png|jpe?g|gif|webp)(?:\?|#|$)/i;
 
 function restoreSlots(html: string, slots: string[]): string {
   return html.replace(/\u0000MD(\d+)\u0000/g, (_match, raw) => slots[Number(raw)] || "");
 }
 
+function decodeEscapedHref(escapedHref: string): string {
+  return String(escapedHref || "").replace(/&amp;/g, "&");
+}
+
 function safeHref(escapedHref: string): string | null {
-  const href = String(escapedHref || "").replace(/&amp;/g, "&");
+  const href = decodeEscapedHref(escapedHref);
   if (!/^https?:\/\//i.test(href)) return null;
   return escapeHtml(href);
 }
 
-/** Escape user text, then apply a small Markdown subset (headings, lists, links, emphasis, code). */
+function safeImageSrc(escapedHref: string): string | null {
+  const href = decodeEscapedHref(escapedHref);
+  if (KNOWLEDGE_IMAGE_PATH.test(href)) return escapeHtml(href);
+  if (/^https?:\/\//i.test(href)) return escapeHtml(href);
+  return null;
+}
+
+function looksLikeImageHref(escapedHref: string): boolean {
+  const href = decodeEscapedHref(escapedHref);
+  if (KNOWLEDGE_IMAGE_PATH.test(href)) return true;
+  return /^https?:\/\//i.test(href) && IMAGE_EXT.test(href);
+}
+
+function imageTag(src: string, alt: string): string {
+  return `<img src="${src}" alt="${alt}" loading="lazy" />`;
+}
+
+/** Escape user text, then apply a small Markdown subset (headings, lists, links, images, emphasis, code). */
 export function renderMarkdown(source: string): string {
   const raw = String(source || "").replace(/\r\n/g, "\n").trim();
   if (!raw) return "";
@@ -30,7 +53,16 @@ export function renderMarkdown(source: string): string {
     stash(`<pre><code>${String(code).replace(/\n$/, "")}</code></pre>`),
   );
   text = text.replace(/`([^`\n]+)`/g, (_match, code) => stash(`<code>${code}</code>`));
+  text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_match, alt, hrefEscaped) => {
+    const src = safeImageSrc(hrefEscaped);
+    if (!src) return alt;
+    return stash(imageTag(src, alt));
+  });
   text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_match, label, hrefEscaped) => {
+    if (looksLikeImageHref(hrefEscaped)) {
+      const src = safeImageSrc(hrefEscaped);
+      if (src) return stash(imageTag(src, label));
+    }
     const href = safeHref(hrefEscaped);
     if (!href) return label;
     return stash(`<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`);

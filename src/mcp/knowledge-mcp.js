@@ -10,7 +10,16 @@ const {
   createKnowledgeCategory,
   updateKnowledgeCategory,
   deleteKnowledgeCategory,
+  appendKnowledgeArticleImage,
+  stripKnowledgeArticleImage,
 } = require('../db/knowledge-articles');
+const {
+  addKnowledgeImage,
+  appendKnowledgeImageMarkdown,
+  decodeKnowledgeImageData,
+  deleteKnowledgeImage,
+  fetchRemoteImageBuffer,
+} = require('../db/knowledge-images');
 const { logAdminAudit, buildAuditDetails } = require('../db/admin-audit-logs');
 const {
   PROTOCOL_LATEST,
@@ -29,8 +38,38 @@ const INVALID_ARTICLE_CODES = new Set([
   'INVALID_ARTICLE_TAGS',
   'INVALID_ARTICLE_CATEGORY',
   'ARTICLE_LOCKED',
+  'INVALID_IMAGE_TYPE',
+  'INVALID_IMAGE_SIZE',
+  'INVALID_IMAGE_URL',
+  'IMAGE_LIMIT_REACHED',
 ]);
 const INVALID_CATEGORY_CODES = new Set(['INVALID_CATEGORY_NAME', 'INVALID_CATEGORY_TAGS']);
+
+function mapImageForMcp(image) {
+  if (!image) return null;
+  return {
+    id: image.id,
+    url: image.url,
+    original_name: image.original_name || '',
+  };
+}
+
+function mapArticleForMcp(article) {
+  if (!article) return article;
+  return {
+    ...article,
+    images: Array.isArray(article.images) ? article.images.map(mapImageForMcp) : [],
+  };
+}
+
+function filenameFromUrl(urlString) {
+  try {
+    const name = decodeURIComponent(new URL(String(urlString)).pathname.split('/').pop() || '');
+    return name.slice(0, 200);
+  } catch {
+    return '';
+  }
+}
 
 function isKnowledgeReadonly() {
   return isEnvFlag('MCP_KNOWLEDGE_READONLY');
@@ -69,7 +108,8 @@ const READ_TOOLS = [
   },
   {
     name: 'knowledge_get',
-    description: 'Load a full knowledge-base article by id.',
+    description:
+      'Load a full knowledge-base article by id. Body is Markdown; screenshots are listed in images and as ![alt](url) in the body.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -92,7 +132,7 @@ const WRITE_TOOLS = [
   {
     name: 'knowledge_create',
     description:
-      'Create a new knowledge-base article. Body is Markdown. New articles stay unconfirmed until an admin confirms them.',
+      'Create a new knowledge-base article. Body is Markdown; image links (![alt](url) or [label](https://…png)) render as images. Use knowledge_add_screenshot after create to store screenshots. New articles stay unconfirmed until an admin confirms them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -110,7 +150,7 @@ const WRITE_TOOLS = [
   {
     name: 'knowledge_update',
     description:
-      'Update an existing knowledge-base article. Body is Markdown. Omit fields you do not want to change.',
+      'Update an existing knowledge-base article. Body is Markdown; image links render as images. Use knowledge_add_screenshot to store screenshots. Omit fields you do not want to change.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -135,6 +175,34 @@ const WRITE_TOOLS = [
         id: { type: ['integer', 'number', 'string'], description: 'Article id' },
       },
       required: ['id'],
+    },
+  },
+  {
+    name: 'knowledge_add_screenshot',
+    description:
+      'Store a screenshot on an article and append Markdown ![alt](url) to the body. Prefer url (http/https image). data_base64 is for small images only. Fails if the article is locked.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        article_id: { type: ['integer', 'number', 'string'], description: 'Article id' },
+        url: { type: 'string', description: 'Public http(s) image URL to download and store. Preferred.' },
+        data_base64: { type: 'string', description: 'Raw or data-URL base64 image (JPEG, PNG, WebP, GIF).' },
+        filename: { type: 'string', description: 'Original file name (optional).' },
+        alt: { type: 'string', description: 'Alt text for the Markdown image (optional).' },
+      },
+      required: ['article_id'],
+    },
+  },
+  {
+    name: 'knowledge_delete_screenshot',
+    description: 'Delete a stored screenshot from an article and remove its Markdown image from the body.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        article_id: { type: ['integer', 'number', 'string'], description: 'Article id' },
+        image_id: { type: ['integer', 'number', 'string'], description: 'Screenshot id from knowledge_get images.' },
+      },
+      required: ['article_id', 'image_id'],
     },
   },
   {
@@ -213,7 +281,7 @@ function auditKnowledgeWrite(db, entry) {
   }
 }
 
-function callTool(db, name, args = {}) {
+async function callTool(db, name, args = {}) {
   if (WRITE_TOOL_NAMES.has(name) && isKnowledgeReadonly()) {
     return errorResult('Knowledge base is read-only.');
   }
@@ -247,7 +315,7 @@ function callTool(db, name, args = {}) {
     case 'knowledge_get': {
       const article = getKnowledgeArticle(db, args.id);
       if (!article) return errorResult('Article not found.', { id: args.id });
-      return textResult({ article });
+      return textResult({ article: mapArticleForMcp(article) });
     }
     case 'knowledge_list_categories': {
       return textResult({ categories: listKnowledgeCategories(db) });
@@ -271,7 +339,7 @@ function callTool(db, name, args = {}) {
           summary: `Создана статья «${article.title}»`,
           details: buildAuditDetails({ before: null, after: article }),
         });
-        return textResult({ article });
+        return textResult({ article: mapArticleForMcp(article) });
       } catch (error) {
         if (INVALID_ARTICLE_CODES.has(error.message)) {
           return errorResult('Invalid article data.', { code: error.message });
@@ -296,7 +364,7 @@ function callTool(db, name, args = {}) {
           summary: `Изменена статья #${article.id}`,
           details: buildAuditDetails({ before, after: article }),
         });
-        return textResult({ article });
+        return textResult({ article: mapArticleForMcp(article) });
       } catch (error) {
         if (error.message === 'NOT_FOUND') {
           return errorResult('Article not found.', { id: args.id });
@@ -326,6 +394,80 @@ function callTool(db, name, args = {}) {
       } catch (error) {
         if (error.message === 'ARTICLE_LOCKED') {
           return errorResult('Article is locked.', { code: error.message, id: args.id });
+        }
+        throw error;
+      }
+    }
+    case 'knowledge_add_screenshot': {
+      try {
+        const article = getKnowledgeArticle(db, args.article_id);
+        if (!article) return errorResult('Article not found.', { id: args.article_id });
+        if (article.locked) return errorResult('Article is locked.', { code: 'ARTICLE_LOCKED', id: article.id });
+        const hasData = args.data_base64 != null && String(args.data_base64).trim() !== '';
+        const hasUrl = args.url != null && String(args.url).trim() !== '';
+        if (hasData === hasUrl) {
+          return errorResult('Provide exactly one of url or data_base64.');
+        }
+        let buffer;
+        let originalName = String(args.filename || '').trim();
+        if (hasData) {
+          buffer = decodeKnowledgeImageData(args.data_base64);
+        } else {
+          buffer = await fetchRemoteImageBuffer(args.url);
+          if (!originalName) originalName = filenameFromUrl(args.url);
+        }
+        const image = addKnowledgeImage(db, article.id, {
+          buffer,
+          originalName: originalName || 'screenshot',
+        });
+        const markdown = appendKnowledgeImageMarkdown('', image, args.alt || originalName).trim();
+        const updated = appendKnowledgeArticleImage(db, article, image, args.alt || originalName);
+        auditKnowledgeWrite(db, {
+          entityType: 'knowledge_article',
+          entityId: updated.id,
+          action: 'update',
+          summary: `Добавлен скриншот статьи #${updated.id}`,
+          details: buildAuditDetails({ before: article, after: updated }),
+        });
+        return textResult({
+          image: { ...mapImageForMcp(image), markdown },
+          article: mapArticleForMcp(updated),
+          markdown,
+        });
+      } catch (error) {
+        if (error.message === 'NOT_FOUND') {
+          return errorResult('Article not found.', { id: args.article_id });
+        }
+        if (error.message === 'ARTICLE_LOCKED') {
+          return errorResult('Article is locked.', { code: error.message, id: args.article_id });
+        }
+        if (INVALID_ARTICLE_CODES.has(error.message)) {
+          return errorResult('Invalid screenshot data.', { code: error.message });
+        }
+        throw error;
+      }
+    }
+    case 'knowledge_delete_screenshot': {
+      try {
+        const before = getKnowledgeArticle(db, args.article_id);
+        if (!before) return errorResult('Article not found.', { id: args.article_id });
+        if (before.locked) return errorResult('Article is locked.', { code: 'ARTICLE_LOCKED', id: before.id });
+        const image = deleteKnowledgeImage(db, before.id, args.image_id);
+        const article = stripKnowledgeArticleImage(db, before, image);
+        auditKnowledgeWrite(db, {
+          entityType: 'knowledge_article',
+          entityId: article.id,
+          action: 'update',
+          summary: `Удалён скриншот статьи #${article.id}`,
+          details: buildAuditDetails({ before, after: article }),
+        });
+        return textResult({ ok: true, id: image.id, article: mapArticleForMcp(article) });
+      } catch (error) {
+        if (error.message === 'NOT_FOUND') {
+          return errorResult('Screenshot not found.', { article_id: args.article_id, image_id: args.image_id });
+        }
+        if (error.message === 'ARTICLE_LOCKED') {
+          return errorResult('Article is locked.', { code: error.message, id: args.article_id });
         }
         throw error;
       }
@@ -391,6 +533,7 @@ function callTool(db, name, args = {}) {
 function createKnowledgeMcpRouter(db) {
   return createMcpRouter({
     path: '/mcp',
+    jsonLimit: '8mb',
     serverInfo: SERVER_INFO,
     listTools: () => listMcpTools(db),
     callTool: (name, args) => callTool(db, name, args),

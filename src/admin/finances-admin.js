@@ -6,6 +6,7 @@ const {
   listAccountPayments,
   getAccountPayment,
   createAccountPayment,
+  updateAccountPayment,
   deleteAccountPayment,
 } = require('../db/account-payments');
 const {
@@ -27,6 +28,7 @@ function paymentWriteErrorMessage(code) {
     INVALID_ACCOUNT_PAYMENT_AMOUNT: 'Укажите сумму больше 0.',
     INVALID_ACCOUNT_PAYMENT_CURRENCY: 'Валюта платежа: UZS или USD.',
     INVALID_ACCOUNT_PAYMENT_NOTE: 'Слишком длинный комментарий к платежу.',
+    INVALID_ACCOUNT_PAYMENT_CREATED_AT: 'Укажите корректную дату платежа.',
     INVALID_FINANCE_CATEGORY: 'Некорректная категория.',
     INVALID_CATEGORY_NAME: 'Укажите название категории.',
     INVALID_ACCOUNT_PAYMENT_LOCATION: 'Выберите филиал, к которому у вас есть доступ.',
@@ -166,6 +168,7 @@ function registerFinancesRoutes(router, db, { auditAdminChange, buildAuditDetail
           note: req.body?.note,
           category_id: req.body?.category_id,
           location_id: req.body?.location_id,
+          created_at: req.body?.created_at,
           created_by_user_id: sessionUserId(db, req),
         },
         { viewer: financeViewer(db, req) }
@@ -182,6 +185,44 @@ function registerFinancesRoutes(router, db, { auditAdminChange, buildAuditDetail
       return res.status(201).json({ payment, account });
     } catch (error) {
       return respondWriteError(res, error, 'Не удалось создать платёж.');
+    }
+  });
+
+  router.put('/api/finances/payments/:id', requireRight(db, 'finances_edit'), express.json(), (req, res) => {
+    try {
+      const before = getAccountPayment(db, req.params.id);
+      if (!before) return res.status(404).json({ message: 'Платёж не найден.' });
+      const payment = updateAccountPayment(
+        db,
+        before.id,
+        {
+          account_id: req.body?.account_id,
+          direction: req.body?.direction,
+          amount: req.body?.amount,
+          currency: req.body?.currency,
+          note: req.body?.note,
+          category_id: req.body?.category_id,
+          location_id: req.body?.location_id,
+          created_at: req.body?.created_at,
+        },
+        { viewer: financeViewer(db, req) }
+      );
+      const account = getAccount(db, payment.account_id);
+      const label = payment.direction === 'out' ? 'Расход' : 'Приход';
+      auditAdminChange(db, req, {
+        entityType: 'account_payment',
+        entityId: payment.id,
+        action: 'update',
+        summary: `Изменён ${label.toLowerCase()} ${payment.amount} ${payment.currency} по счёту «${account?.name || payment.account_id}»`,
+        details: buildAuditDetails({ before, after: payment }),
+      });
+      return res.json({ payment, account });
+    } catch (error) {
+      return respondWriteError(
+        res,
+        error,
+        error.message === 'NOT_FOUND' ? 'Платёж не найден.' : 'Не удалось обновить платёж.'
+      );
     }
   });
 

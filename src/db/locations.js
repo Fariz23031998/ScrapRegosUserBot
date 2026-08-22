@@ -277,6 +277,18 @@ function appendLocationAccessFilter(where, params, viewer, alias = 't') {
   params.push(viewer.userId);
 }
 
+function appendLocationChoiceFilter(where, params, locationId, alias = 't') {
+  if (locationId == null || locationId === '') return;
+  if (locationId === 'none') {
+    where.push(`(${alias}.location_id IS NULL OR ${alias}.location_id = 0)`);
+    return;
+  }
+  const id = Number(locationId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  where.push(`${alias}.location_id = ?`);
+  params.push(id);
+}
+
 module.exports = {
   MAX_LOCATION_NAME,
   ensureLocationTables,
@@ -290,4 +302,5 @@ module.exports = {
   getLocationViewer,
   canViewerAccessLocation,
   appendLocationAccessFilter,
+  appendLocationChoiceFilter,
 };

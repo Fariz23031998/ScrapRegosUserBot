@@ -131,6 +131,7 @@ function mapEmployee(user) {
     display_name: user.display_name || null,
     phone: user.phone || null,
     job_title: user.job_title || null,
+    schedule: user.schedule || null,
   };
 }
 
@@ -242,6 +243,8 @@ function taskWriteErrorMessage(code) {
     INVALID_TASK_LOCATION: 'Выберите филиал, к которому у вас есть доступ.',
     INVALID_TASK_MANAGER: 'Некорректный менеджер.',
     INVALID_TASK_TECHNICIAN: 'Некорректный техник.',
+    INVALID_TASK_PLAN: 'Некорректные дата и время начала или окончания задачи.',
+    INVALID_TASK_PLAN_RANGE: 'Ориентировочное окончание не может быть раньше начала.',
     INVALID_TASK_DEVICES: 'Некорректный список устройств.',
     INVALID_TASK_DEVICE: 'Некорректное устройство в задаче.',
     INVALID_TASK_ACTION: 'Укажите действие: установка, ремонт или продажа.',

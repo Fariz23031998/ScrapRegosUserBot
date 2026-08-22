@@ -21,8 +21,9 @@ Always load the tool schema with `GetMcpTools` before the first `CallMcpTool` in
 | Action | Tool | Notes |
 | --- | --- | --- |
 | Find duplicates | `knowledge_search` | Query title keywords + product name. Empty query = recent articles. |
-| Read style / existing | `knowledge_get` | Load a close match before writing. |
-| Create | `knowledge_create` | `title` (max 200), Markdown `body` (max 20000), `tags` (comma-separated, max 300). New articles are unconfirmed until an admin confirms them. |
+| Read style / existing | `knowledge_get` | Load a close match before writing. Includes `images` for stored screenshots. |
+| Create | `knowledge_create` | `title` (max 200), Markdown `body` (max 20000), `tags` (comma-separated, max 300). New articles are unconfirmed until an admin confirms them. Image links (`![alt](url)` or `[label](https://…png)`) render as images. |
+| Screenshot | `knowledge_add_screenshot` | After create/update. Prefer `url` (public http/https image). Optional `alt`, `filename`. `data_base64` only for small images. Skip locked articles. |
 | Refresh | `knowledge_update` | Same limits. Body is Markdown. Skip locked articles. |
 | Delete | `knowledge_delete` | Only if the user asked. |
 
@@ -38,6 +39,7 @@ Copy and track:
 - [ ] Fetch page(s)
 - [ ] Draft article
 - [ ] Create or update via MCP
+- [ ] Attach screenshots via knowledge_add_screenshot when the page has useful UI images
 - [ ] Report id, title, tags, source URL
 ```
 
@@ -82,7 +84,7 @@ Rules:
 
 ### 5. Save
 
-`CallMcpTool` → `knowledge_create` or `knowledge_update`. Then report:
+`CallMcpTool` → `knowledge_create` or `knowledge_update`. If the page has official screenshots or UI images, create/update first, then `knowledge_add_screenshot` with the public `url` (do not embed huge base64). Then report:
 
 - article **id**
 - **title** and **tags**

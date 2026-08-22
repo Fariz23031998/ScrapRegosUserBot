@@ -32,6 +32,8 @@ export type TaskPayload = {
   manager_user_id?: number | null;
   technician_user_id?: number | null;
   currency?: "UZS" | "USD" | null;
+  planned_start_at?: string | null;
+  planned_finish_at?: string | null;
   devices?: Array<{ device_id: number; action: string; notes?: string; quantity?: number }>;
 };
 

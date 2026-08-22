@@ -1,4 +1,11 @@
 const { mapSessionMessage, stringifyAttachments } = require('../ai/chat-uploads');
+const {
+  attachKnowledgeImages,
+  deleteKnowledgeImagesForArticle,
+  ensureKnowledgeImageTables,
+  appendKnowledgeImageMarkdown,
+  stripKnowledgeImageMarkdown,
+} = require('./knowledge-images');
 
 const MAX_TITLE = 200;
 const MAX_BODY = 20000;
@@ -301,6 +308,7 @@ function ensureKnowledgeTables(db) {
   ensureColumn(db, 'knowledge_articles', 'category_id', 'INTEGER');
   ensureColumn(db, 'knowledge_articles', 'is_confirmed', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'knowledge_articles', 'creator', 'TEXT');
+  ensureKnowledgeImageTables(db);
   ensureKnowledgeFts(db);
   seedKnowledgeArticles(db);
 }
@@ -525,6 +533,7 @@ function getKnowledgeArticle(db, id, { confirmedOnly = false } = {}) {
   );
   if (!article) return null;
   if (confirmedOnly && !article.is_confirmed) return null;
+  attachKnowledgeImages(db, article);
   return article;
 }
 
@@ -572,8 +581,35 @@ function deleteKnowledgeArticle(db, id) {
   const current = getKnowledgeArticle(db, id);
   if (!current) return false;
   assertArticleWritable(current);
+  deleteKnowledgeImagesForArticle(db, current.id);
   db.prepare('DELETE FROM knowledge_articles WHERE id = ?').run(current.id);
   return true;
+}
+
+function appendKnowledgeArticleImage(db, article, image, alt, { updatedBy } = {}) {
+  const nextBody = appendKnowledgeImageMarkdown(article.body, image, alt);
+  if (nextBody === article.body || nextBody.length > MAX_BODY) {
+    return getKnowledgeArticle(db, article.id);
+  }
+  db.prepare(
+    `UPDATE knowledge_articles
+     SET body = ?, updated_by = COALESCE(?, updated_by), updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(nextBody, updatedBy ?? null, article.id);
+  return getKnowledgeArticle(db, article.id);
+}
+
+function stripKnowledgeArticleImage(db, article, image, { updatedBy } = {}) {
+  const nextBody = stripKnowledgeImageMarkdown(article.body, image);
+  if (nextBody === String(article.body || '').trim()) {
+    return getKnowledgeArticle(db, article.id);
+  }
+  db.prepare(
+    `UPDATE knowledge_articles
+     SET body = ?, updated_by = COALESCE(?, updated_by), updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(nextBody || article.title, updatedBy ?? null, article.id);
+  return getKnowledgeArticle(db, article.id);
 }
 
 function setKnowledgeArticleLocked(db, id, locked, { updatedBy } = {}) {
@@ -688,6 +724,8 @@ module.exports = {
   createKnowledgeArticle,
   updateKnowledgeArticle,
   deleteKnowledgeArticle,
+  appendKnowledgeArticleImage,
+  stripKnowledgeArticleImage,
   setKnowledgeArticleLocked,
   setKnowledgeArticleConfirmed,
   getOrCreateKbSession,

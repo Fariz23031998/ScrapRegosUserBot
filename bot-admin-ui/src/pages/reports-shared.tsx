@@ -4,6 +4,7 @@ import {
   type CommissionReport,
   type CommissionReportRow,
   type FinanceReport,
+  type FinanceReportOrders,
   type FinanceReportRow,
   type ReportJob,
   type ReportJobStatus,
@@ -16,7 +17,8 @@ import { formatTechnicianScore } from "../components/CatalogStaffFields";
 import EntityCards from "../components/EntityCards";
 import SimpleTable from "../components/SimpleTable";
 import { PeriodFilterButton } from "../components/TicketPeriodModal";
-import { formatMoneyLine } from "../lib/money";
+import { formatMoneyLine, parseDisplayCurrency, totalsPriceLines, type MoneyCurrency } from "../lib/money";
+import type { TaskLocation } from "../lib/types";
 import { datetimeLocalToUnix, getTicketPeriodDefaults, toDatetimeLocalValue } from "../lib/ticket-display";
 
 export const FILTERS_STORAGE_KEY = "bot-admin.reports.filters";
@@ -28,6 +30,12 @@ export const REPORT_TABS = [
   { id: "finance", label: "Финансы" },
 ] as const;
 
+export const REPORT_CURRENCIES = [
+  { value: "", label: "Обе валюты" },
+  { value: "UZS", label: "UZS" },
+  { value: "USD", label: "USD" },
+] as const;
+
 export type ReportTab = (typeof REPORT_TABS)[number]["id"];
 
 export type ReportFilters = {
@@ -37,6 +45,8 @@ export type ReportFilters = {
   withoutDuplicates: boolean;
   duplicateInterval: string;
   scorePerTicket: string;
+  locationId: string;
+  currency: string;
 };
 
 export type TechnicianDisplayRow = TechnicianReportRow & {
@@ -94,6 +104,8 @@ export function defaultFilters(periodDays?: number): ReportFilters {
     withoutDuplicates: false,
     duplicateInterval: "10",
     scorePerTicket: DEFAULT_SCORE_PER_TICKET,
+    locationId: "",
+    currency: "",
   };
 }
 
@@ -114,6 +126,8 @@ export function loadFilters(periodDays?: number): ReportFilters {
         parsed.scorePerTicket != null && parsed.scorePerTicket !== ""
           ? String(parsed.scorePerTicket)
           : base.scorePerTicket,
+      locationId: typeof parsed.locationId === "string" ? parsed.locationId : base.locationId,
+      currency: parseDisplayCurrency(parsed.currency) || "",
     };
   } catch {
     return base;
@@ -129,6 +143,8 @@ export function saveFilters(filters: ReportFilters) {
         minDuration: filters.minDuration,
         duplicateInterval: filters.duplicateInterval,
         scorePerTicket: filters.scorePerTicket,
+        locationId: filters.locationId,
+        currency: filters.currency,
       }),
     );
   } catch {
@@ -162,6 +178,8 @@ export function filtersFromParams(params: StoredReportParams | undefined, period
     withoutDuplicates: Boolean(params?.without_duplicates),
     duplicateInterval:
       params?.duplicate_interval_minutes != null ? String(params.duplicate_interval_minutes) : base.duplicateInterval,
+    locationId: params?.location_id == null || params.location_id === "" ? "" : String(params.location_id),
+    currency: parseDisplayCurrency(params?.currency) || "",
   };
 }
 
@@ -184,13 +202,25 @@ export function buildTechnicianParams(filters: ReportFilters): Record<string, st
   return params;
 }
 
+export function buildFinanceParams(filters: ReportFilters): Record<string, string> {
+  const params = buildPeriodParams(filters);
+  if (filters.locationId) params.location_id = filters.locationId;
+  if (filters.currency) params.currency = filters.currency;
+  return params;
+}
+
 export function buildCreateParams(tab: ReportTab, filters: ReportFilters): Record<string, string> {
-  return tab === "technician" ? buildTechnicianParams(filters) : buildPeriodParams(filters);
+  if (tab === "technician") return buildTechnicianParams(filters);
+  if (tab === "finance") return buildFinanceParams(filters);
+  return buildPeriodParams(filters);
 }
 
 export function filtersHaveAdvancedValues(filters: ReportFilters, tab: ReportTab, periodDays?: number) {
   const defaults = defaultFilters(periodDays);
   const periodChanged = filters.dateFrom !== defaults.dateFrom || filters.dateTo !== defaults.dateTo;
+  if (tab === "finance") {
+    return periodChanged || Boolean(filters.locationId) || Boolean(filters.currency);
+  }
   if (tab !== "technician") return periodChanged;
   return (
     periodChanged ||
@@ -200,13 +230,68 @@ export function filtersHaveAdvancedValues(filters: ReportFilters, tab: ReportTab
   );
 }
 
-export function DualMoney({ uzs, usd }: { uzs: number; usd: number }) {
+export function DualMoney({
+  uzs,
+  usd,
+  currency,
+}: {
+  uzs: number;
+  usd: number;
+  currency?: MoneyCurrency | null;
+}) {
+  const lines = totalsPriceLines(uzs, usd, currency);
   return (
-    <div>
-      {formatMoneyLine(uzs, "UZS")}
-      <div className="muted-copy">{formatMoneyLine(usd, "USD")}</div>
+    <div className="dual-money">
+      <span>{lines.primary}</span>
+      {lines.muted ? <div className="dual-money__muted muted-copy">{lines.muted}</div> : null}
     </div>
   );
+}
+
+type FinanceDisplayRow = FinanceReportRow & {
+  kind?: "totals";
+};
+
+function financeOrderAmount(orders?: FinanceReportOrders | null, currency?: MoneyCurrency | null) {
+  const uzs = orders?.amount_uzs ?? orders?.amount ?? 0;
+  const usd = orders?.amount_usd ?? 0;
+  if (currency === "USD") return formatMoneyLine(usd, "USD");
+  return formatMoneyLine(uzs, "UZS");
+}
+
+function financeOrderSummaryItems(orders?: FinanceReportOrders | null, currency?: MoneyCurrency | null) {
+  return [
+    {
+      label: "заказов",
+      value: orders?.count ?? 0,
+      valueFirst: true as const,
+    },
+    {
+      label: "сумма",
+      value: financeOrderAmount(orders, currency),
+      tone: "info" as const,
+    },
+    {
+      label: "неоплачен",
+      value: orders?.pending ?? 0,
+      tone: "warn" as const,
+    },
+    {
+      label: "оплачен",
+      value: orders?.paid ?? 0,
+      tone: "ok" as const,
+    },
+    {
+      label: "удалён",
+      value: orders?.deleted ?? 0,
+      tone: "muted" as const,
+    },
+  ];
+}
+
+function summaryMoney(uzs: number, usd: number, currency?: MoneyCurrency | null) {
+  if (currency === "USD") return formatMoneyLine(usd, "USD");
+  return formatMoneyLine(uzs, "UZS");
 }
 
 type ReportFilterFieldsProps = {
@@ -214,6 +299,8 @@ type ReportFilterFieldsProps = {
   setFilters: (next: ReportFilters) => void;
   onOpenPeriod: () => void;
   showTicketFilters: boolean;
+  showFinanceFilters?: boolean;
+  locations?: TaskLocation[];
   showActions?: boolean;
   onRefresh?: () => void;
   refreshing?: boolean;
@@ -225,6 +312,8 @@ export function ReportFilterFields({
   setFilters,
   onOpenPeriod,
   showTicketFilters,
+  showFinanceFilters = false,
+  locations = [],
   showActions = false,
   onRefresh,
   refreshing,
@@ -232,10 +321,46 @@ export function ReportFilterFields({
 }: ReportFilterFieldsProps) {
   return (
     <>
-      <label className="ticket-filters__field ticket-filters__field--period">
+      <label
+        className={`ticket-filters__field ticket-filters__field--period${
+          showFinanceFilters ? " ticket-filters__field--period-compact" : ""
+        }`}
+      >
         <span>Период</span>
         <PeriodFilterButton dateFrom={filters.dateFrom} dateTo={filters.dateTo} onClick={onOpenPeriod} />
       </label>
+      {showFinanceFilters ? (
+        <>
+          <label className="ticket-filters__field ticket-filters__field--location">
+            <span>Филиал</span>
+            <select
+              value={filters.locationId}
+              onChange={(event) => setFilters({ ...filters, locationId: event.target.value })}
+            >
+              <option value="">Все</option>
+              <option value="none">Без филиала</option>
+              {locations.map((location) => (
+                <option key={location.id} value={location.id}>
+                  {location.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="ticket-filters__field ticket-filters__field--currency">
+            <span>Валюта</span>
+            <select
+              value={filters.currency}
+              onChange={(event) => setFilters({ ...filters, currency: event.target.value })}
+            >
+              {REPORT_CURRENCIES.map((item) => (
+                <option key={item.value || "both"} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : null}
       {showTicketFilters ? (
         <>
           <label className="ticket-filters__field">
@@ -356,16 +481,19 @@ export function ReportResultTables({
   job,
   scorePerTicket,
   compact,
+  displayCurrency,
 }: {
   job: ReportJob;
   scorePerTicket: number;
   compact: boolean;
+  displayCurrency?: MoneyCurrency | null;
 }) {
   const tab = parseReportTab(job.type);
   const technicianReport = tab === "technician" && job.status === "ready" ? (job.result as TechnicianReport | null) : null;
   const commissionReport = tab === "commission" && job.status === "ready" ? (job.result as CommissionReport | null) : null;
   const financeReport = tab === "finance" && job.status === "ready" ? (job.result as FinanceReport | null) : null;
   const technicianRows = technicianDisplayRows(technicianReport, scorePerTicket);
+  const money = (uzs: number, usd: number) => <DualMoney uzs={uzs} usd={usd} currency={displayCurrency} />;
 
   const technicianColumns: ColumnDef<TechnicianDisplayRow>[] = [
     { id: "id", header: "ID", accessorKey: "user_id" },
@@ -396,48 +524,68 @@ export function ReportResultTables({
     {
       id: "commission",
       header: "Комиссия",
-      cell: ({ row }) => <DualMoney uzs={row.original.commission_uzs} usd={row.original.commission_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.commission_uzs, row.original.commission_usd),
     },
   ];
 
   const financeColumns: ColumnDef<FinanceReportRow>[] = [
     { id: "id", header: "ID", accessorFn: (row) => row.location_id ?? "—" },
     { id: "name", header: "Филиал", accessorKey: "name" },
-    { id: "task_count", header: "Задач", accessorKey: "task_count" },
+    { id: "task_count", header: "Задач", accessorKey: "task_count", meta: { align: "right" } },
     {
       id: "net_revenue",
       header: "Выручка",
-      cell: ({ row }) => <DualMoney uzs={row.original.net_revenue_uzs} usd={row.original.net_revenue_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.net_revenue_uzs, row.original.net_revenue_usd),
     },
     {
       id: "refund",
       header: "Возвраты",
-      cell: ({ row }) => <DualMoney uzs={row.original.refund_uzs} usd={row.original.refund_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.refund_uzs, row.original.refund_usd),
     },
     {
       id: "cost",
       header: "Себестоимость",
-      cell: ({ row }) => <DualMoney uzs={row.original.cost_uzs} usd={row.original.cost_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.cost_uzs, row.original.cost_usd),
     },
     {
       id: "profit",
       header: "Прибыль",
-      cell: ({ row }) => <DualMoney uzs={row.original.profit_uzs} usd={row.original.profit_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.profit_uzs, row.original.profit_usd),
+    },
+    {
+      id: "income",
+      header: "Приход",
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.income_uzs, row.original.income_usd),
+    },
+    {
+      id: "expense",
+      header: "Расход",
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.expense_uzs, row.original.expense_usd),
     },
     {
       id: "paid",
       header: "Оплачено",
-      cell: ({ row }) => <DualMoney uzs={row.original.paid_uzs} usd={row.original.paid_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.paid_uzs, row.original.paid_usd),
     },
     {
       id: "refunded_cash",
       header: "Возврат денег",
-      cell: ({ row }) => <DualMoney uzs={row.original.refunded_cash_uzs} usd={row.original.refunded_cash_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.refunded_cash_uzs, row.original.refunded_cash_usd),
     },
     {
       id: "due",
       header: "К оплате",
-      cell: ({ row }) => <DualMoney uzs={row.original.due_uzs} usd={row.original.due_usd} />,
+      meta: { align: "right" },
+      cell: ({ row }) => money(row.original.due_uzs, row.original.due_usd),
     },
   ];
 
@@ -476,7 +624,7 @@ export function ReportResultTables({
         getTitle={(row) => row.name}
         getFields={(row) => [
           { label: "Задач", value: row.manager_task_count },
-          { label: "Комиссия", value: <DualMoney uzs={row.commission_uzs} usd={row.commission_usd} /> },
+          { label: "Комиссия", value: money(row.commission_uzs, row.commission_usd) },
         ]}
       />
     ) : (
@@ -490,35 +638,47 @@ export function ReportResultTables({
     );
   }
 
+  const financeRows: FinanceDisplayRow[] = financeReport?.rows || [];
+  const financeTotalsRow: FinanceDisplayRow | null = financeReport
+    ? { kind: "totals", location_id: null, name: "Итого", ...financeReport.totals }
+    : null;
+  const financeCardItems = [...financeRows, ...(financeTotalsRow ? [financeTotalsRow] : [])];
+  const financeFields = (row: FinanceDisplayRow) => [
+    { label: "Задач", value: row.task_count },
+    { label: "Выручка", value: money(row.net_revenue_uzs, row.net_revenue_usd) },
+    { label: "Возвраты", value: money(row.refund_uzs, row.refund_usd) },
+    { label: "Себестоимость", value: money(row.cost_uzs, row.cost_usd) },
+    { label: "Прибыль", value: money(row.profit_uzs, row.profit_usd) },
+    { label: "Приход", value: money(row.income_uzs, row.income_usd) },
+    { label: "Расход", value: money(row.expense_uzs, row.expense_usd) },
+    { label: "Оплачено", value: money(row.paid_uzs, row.paid_usd) },
+    { label: "Возврат денег", value: money(row.refunded_cash_uzs, row.refunded_cash_usd) },
+    { label: "К оплате", value: money(row.due_uzs, row.due_usd) },
+  ];
+
   return compact ? (
     <EntityCards
-      items={financeReport?.rows || []}
+      items={financeCardItems}
       emptyMessage="Нет данных за выбранный период."
-      getKey={(row) => String(row.location_id ?? "none")}
+      getKey={(row) => (row.kind === "totals" ? "totals" : String(row.location_id ?? "none"))}
       getTitle={(row) => row.name}
-      getFields={(row) => [
-        { label: "Задач", value: row.task_count },
-        { label: "Выручка", value: <DualMoney uzs={row.net_revenue_uzs} usd={row.net_revenue_usd} /> },
-        { label: "Возвраты", value: <DualMoney uzs={row.refund_uzs} usd={row.refund_usd} /> },
-        { label: "Себестоимость", value: <DualMoney uzs={row.cost_uzs} usd={row.cost_usd} /> },
-        { label: "Прибыль", value: <DualMoney uzs={row.profit_uzs} usd={row.profit_usd} /> },
-        { label: "Оплачено", value: <DualMoney uzs={row.paid_uzs} usd={row.paid_usd} /> },
-        { label: "Возврат денег", value: <DualMoney uzs={row.refunded_cash_uzs} usd={row.refunded_cash_usd} /> },
-        { label: "К оплате", value: <DualMoney uzs={row.due_uzs} usd={row.due_usd} /> },
-      ]}
+      getFields={financeFields}
     />
   ) : (
-    <SimpleTable
-      tableKey="bot-admin.reports.finance"
-      data={financeReport?.rows || []}
-      columns={financeColumns}
-      emptyMessage="Нет данных за выбранный период."
-      getRowId={(row) => String(row.location_id ?? "none")}
-    />
+    <div className="report-result-table report-result-table--finance">
+      <SimpleTable
+        tableKey="bot-admin.reports.finance"
+        data={financeRows}
+        columns={financeColumns}
+        emptyMessage="Нет данных за выбранный период."
+        getRowId={(row) => String(row.location_id ?? "none")}
+        footerData={financeTotalsRow || undefined}
+      />
+    </div>
   );
 }
 
-export function reportSummaryItems(job: ReportJob, scorePerTicket: number) {
+export function reportSummaryItems(job: ReportJob, scorePerTicket: number, displayCurrency?: MoneyCurrency | null) {
   const tab = parseReportTab(job.type);
   if (job.status !== "ready") return undefined;
   const technicianReport = tab === "technician" ? (job.result as TechnicianReport | null) : null;
@@ -548,7 +708,11 @@ export function reportSummaryItems(job: ReportJob, scorePerTicket: number) {
       },
       {
         label: "комиссия",
-        value: formatMoneyLine(commissionReport?.totals.commission_uzs ?? 0, "UZS"),
+        value: summaryMoney(
+          commissionReport?.totals.commission_uzs ?? 0,
+          commissionReport?.totals.commission_usd ?? 0,
+          displayCurrency,
+        ),
         tone: "ok" as const,
       },
     ];
@@ -556,25 +720,35 @@ export function reportSummaryItems(job: ReportJob, scorePerTicket: number) {
   return [
     {
       label: "выручка",
-      value: formatMoneyLine(financeReport?.totals.net_revenue_uzs ?? 0, "UZS"),
+      value: summaryMoney(financeReport?.totals.net_revenue_uzs ?? 0, financeReport?.totals.net_revenue_usd ?? 0, displayCurrency),
       tone: "ok" as const,
     },
     {
       label: "себестоимость",
-      value: formatMoneyLine(financeReport?.totals.cost_uzs ?? 0, "UZS"),
+      value: summaryMoney(financeReport?.totals.cost_uzs ?? 0, financeReport?.totals.cost_usd ?? 0, displayCurrency),
     },
     {
       label: "прибыль",
-      value: formatMoneyLine(financeReport?.totals.profit_uzs ?? 0, "UZS"),
+      value: summaryMoney(financeReport?.totals.profit_uzs ?? 0, financeReport?.totals.profit_usd ?? 0, displayCurrency),
       tone: "info" as const,
     },
     {
+      label: "приход",
+      value: summaryMoney(financeReport?.totals.income_uzs ?? 0, financeReport?.totals.income_usd ?? 0, displayCurrency),
+      tone: "ok" as const,
+    },
+    {
+      label: "расход",
+      value: summaryMoney(financeReport?.totals.expense_uzs ?? 0, financeReport?.totals.expense_usd ?? 0, displayCurrency),
+    },
+    {
       label: "оплачено",
-      value: formatMoneyLine(financeReport?.totals.paid_uzs ?? 0, "UZS"),
+      value: summaryMoney(financeReport?.totals.paid_uzs ?? 0, financeReport?.totals.paid_usd ?? 0, displayCurrency),
     },
     {
       label: "к оплате",
-      value: formatMoneyLine(financeReport?.totals.due_uzs ?? 0, "UZS"),
+      value: summaryMoney(financeReport?.totals.due_uzs ?? 0, financeReport?.totals.due_usd ?? 0, displayCurrency),
     },
+    ...financeOrderSummaryItems(financeReport?.orders, displayCurrency),
   ];
 }

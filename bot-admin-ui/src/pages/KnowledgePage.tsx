@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   confirmKnowledgeArticle,
   createKnowledgeArticle,
@@ -26,12 +27,13 @@ import {
   unlockKnowledgeArticle,
   updateKnowledgeArticle,
   updateKnowledgeCategory,
+  uploadKnowledgeImages,
 } from "../api/ai";
 import AgentChatMessages from "../components/AgentChatMessages";
 import ChatCompose, { type ChatComposeHandle } from "../components/ChatCompose";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
+import KnowledgeArticleEditor from "../components/KnowledgeArticleEditor";
 import LoadingState from "../components/LoadingState";
-import MarkdownPreview from "../components/MarkdownPreview";
 import Modal from "../components/Modal";
 import SearchField from "../components/SearchField";
 import { useAuth } from "../hooks/useAuth";
@@ -80,6 +82,7 @@ export default function KnowledgePage() {
   const { hasPermission } = useAuth();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const isMobile = useMediaQuery("(max-width: 960px)");
   const canEdit = hasPermission("knowledge_edit");
   const canLock = hasPermission("knowledge_lock");
@@ -92,7 +95,8 @@ export default function KnowledgePage() {
   const [sessionId, setSessionId] = useState<number | undefined>();
   const [editor, setEditor] = useState<Partial<KnowledgeArticle> | null>(null);
   const [editorPreview, setEditorPreview] = useState(false);
-  const [preview, setPreview] = useState<KnowledgeArticle | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [formError, setFormError] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categoryEditor, setCategoryEditor] = useState<Partial<KnowledgeCategory> | null>(null);
@@ -150,11 +154,14 @@ export default function KnowledgePage() {
         category_id: category_id != null && Number.isFinite(category_id) && category_id > 0 ? category_id : null,
       };
       if (editor?.id) return updateKnowledgeArticle(editor.id, payload);
-      return createKnowledgeArticle(payload);
+      const created = await createKnowledgeArticle(payload);
+      if (!pendingFiles.length) return created;
+      return uploadKnowledgeImages(created.article.id, pendingFiles);
     },
-            onSuccess: () => {
+    onSuccess: () => {
       setEditor(null);
       setEditorPreview(false);
+      setPendingFiles([]);
       invalidateKnowledge();
     },
     onError: (error: Error) => setFormError(error.message),
@@ -246,6 +253,7 @@ export default function KnowledgePage() {
   function openNewArticle() {
     setFormError("");
     setEditorPreview(false);
+    setPendingFiles([]);
     setEditor({
       title: "",
       body: "",
@@ -257,7 +265,29 @@ export default function KnowledgePage() {
   function openEditor(article: KnowledgeArticle) {
     setFormError("");
     setEditorPreview(false);
+    setPendingFiles([]);
     setEditor(article);
+  }
+
+  async function handleEditorUpload(files: File[]) {
+    if (!editor?.id || editor.locked) return;
+    setFormError("");
+    setUploading(true);
+    try {
+      const data = await uploadKnowledgeImages(editor.id, files);
+      setEditor(data.article);
+      invalidateKnowledge();
+    } catch (error) {
+      setFormError((error as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function closeEditor() {
+    setEditor(null);
+    setEditorPreview(false);
+    setPendingFiles([]);
   }
 
   async function handleDelete(article: KnowledgeArticle) {
@@ -437,7 +467,13 @@ export default function KnowledgePage() {
                 return (
                   <li key={article.id} className="knowledge-list__item">
                     <div className="knowledge-list__title">
-                      <strong>{article.title}</strong>
+                      <button
+                        type="button"
+                        className="knowledge-list__open"
+                        onClick={() => navigate(`/knowledge/${article.id}`)}
+                      >
+                        <strong>{article.title}</strong>
+                      </button>
                       {article.category?.name ? <span className="badge badge--muted">{article.category.name}</span> : null}
                       {locked ? <span className="badge badge--warn">Заблокирована</span> : null}
                       {confirmed ? null : <span className="badge badge--warn">Не подтверждена</span>}
@@ -449,7 +485,7 @@ export default function KnowledgePage() {
                       {article.body.length > 180 ? "…" : ""}
                     </p>
                     <div className="cell-actions">
-                      <IconAction label="Просмотр" icon={Eye} onClick={() => setPreview(article)} />
+                      <IconAction label="Просмотр" icon={Eye} onClick={() => navigate(`/knowledge/${article.id}`)} />
                       {canEdit && !locked ? (
                         <IconAction label="Изменить" icon={Pencil} onClick={() => openEditor(article)} />
                       ) : null}
@@ -559,101 +595,29 @@ export default function KnowledgePage() {
       <Modal
         open={editor != null}
         title={editor?.id ? "Редактирование статьи" : "Новая статья"}
-        onClose={() => {
-          setEditor(null);
-          setEditorPreview(false);
-        }}
+        onClose={closeEditor}
         size="workspace"
       >
-        <form
-          className="stack-form knowledge-article-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setFormError("");
-            saveArticle.mutate();
-          }}
-        >
-          <label>
-            Заголовок
-            <input
-              value={editor?.title || ""}
-              onChange={(event) => setEditor((prev) => ({ ...prev, title: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            Категория
-            <select
-              value={editor?.category_id ?? ""}
-              onChange={(event) => {
-                const value = event.target.value;
-                setEditor((prev) => ({ ...prev, category_id: value ? Number(value) : null }));
-              }}
-            >
-              <option value="">Без категории</option>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="knowledge-article-form__body">
-            <div className="knowledge-article-form__body-head">
-              <span>Текст (Markdown)</span>
-              <IconAction
-                label={editorPreview ? "Редактировать" : "Просмотр"}
-                icon={editorPreview ? Pencil : Eye}
-                onClick={() => setEditorPreview((prev) => !prev)}
-              />
-            </div>
-            {editorPreview ? (
-              <div className="knowledge-article-form__preview">
-                <MarkdownPreview source={editor?.body || ""} />
-              </div>
-            ) : (
-              <textarea
-                rows={8}
-                value={editor?.body || ""}
-                onChange={(event) => setEditor((prev) => ({ ...prev, body: event.target.value }))}
-                required
-              />
-            )}
-          </div>
-          <label>
-            Теги
-            <input
-              value={editor?.tags || ""}
-              onChange={(event) => setEditor((prev) => ({ ...prev, tags: event.target.value }))}
-            />
-          </label>
-          {editor?.creator ? <small>Создал: {editor.creator}</small> : null}
-          {formError ? <p className="message error">{formError}</p> : null}
-          <div className="form-actions">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setEditor(null);
-                setEditorPreview(false);
-              }}
-            >
-              Отмена
-            </button>
-            <button type="submit" className="btn-primary" disabled={saveArticle.isPending || Boolean(editor?.locked)}>
-              Сохранить
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal
-        open={preview != null}
-        title={preview?.title || "Просмотр статьи"}
-        onClose={() => setPreview(null)}
-        size="wide"
-      >
-        {preview ? <MarkdownPreview source={preview.body} className="markdown-preview--article" /> : null}
+        {editor ? (
+          <KnowledgeArticleEditor
+            editor={editor}
+            categories={categories}
+            formError={formError}
+            saving={saveArticle.isPending}
+            uploading={uploading}
+            pendingFiles={pendingFiles}
+            editorPreview={editorPreview}
+            onChange={(updater) => setEditor((prev) => (prev ? updater(prev) : prev))}
+            onPreviewToggle={() => setEditorPreview((prev) => !prev)}
+            onPendingFilesChange={setPendingFiles}
+            onUpload={(files) => void handleEditorUpload(files)}
+            onClose={closeEditor}
+            onSubmit={() => {
+              setFormError("");
+              saveArticle.mutate();
+            }}
+          />
+        ) : null}
       </Modal>
 
       <Modal

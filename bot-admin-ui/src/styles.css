@@ -308,6 +308,7 @@ label {
 
 .admin-content:has(> .page--ticket-detail),
 .admin-content:has(> .page--knowledge),
+.admin-content:has(> .page--knowledge-article),
 .admin-content:has(> .page--task-detail) {
   overflow: hidden;
   padding-bottom: 1rem;
@@ -315,6 +316,7 @@ label {
 
 .admin-content > .page--ticket-detail,
 .admin-content > .page--knowledge,
+.admin-content > .page--knowledge-article,
 .admin-content > .page--task-detail {
   flex: 1;
   min-height: 0;
@@ -332,6 +334,31 @@ label {
   border: 0;
   padding: 0;
   overflow: hidden;
+}
+
+.page--knowledge-article {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.knowledge-article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+}
+
+.knowledge-article-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .knowledge-view-header {
@@ -637,6 +664,23 @@ label {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem;
+}
+
+.knowledge-list__open {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.knowledge-list__open:hover strong,
+.knowledge-list__open:focus-visible strong {
+  text-decoration: underline;
 }
 
 .knowledge-list__title strong {
@@ -1051,6 +1095,46 @@ label {
 
 .data-table th:has(.columns-menu) {
   z-index: 9;
+}
+
+.data-table tfoot td {
+  font-weight: 600;
+  background: var(--muted);
+  border-top: 2px solid var(--border);
+}
+
+.data-table tfoot tr:last-child td {
+  position: sticky;
+  bottom: 0;
+  z-index: 7;
+}
+
+.data-table__cell--right {
+  text-align: right;
+}
+
+.data-table__cell--right .table-header-cell__content,
+.data-table__cell--right .table-sort-btn {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.dual-money {
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.dual-money__muted {
+  font-size: 0.82em;
+}
+
+.report-result-table--finance .data-table th,
+.report-result-table--finance .data-table td {
+  padding: 0.4rem 0.55rem;
+}
+
+.report-result-table--finance .data-table tfoot td {
+  background: color-mix(in srgb, var(--primary) 8%, var(--muted));
 }
 
 .data-table__row--clickable {
@@ -1615,6 +1699,12 @@ body.is-column-resizing * {
   gap: 0.5rem;
 }
 
+.knowledge-article-form__body-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .knowledge-article-form__preview {
   flex: 1;
   min-height: 0;
@@ -1668,6 +1758,13 @@ body.is-column-resizing * {
 
 .markdown-preview a {
   color: var(--accent, #2563eb);
+}
+
+.markdown-preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
 }
 
 .markdown-preview code {
@@ -1789,6 +1886,115 @@ body.is-column-resizing * {
 .stack-form {
   display: grid;
   gap: 0.85rem;
+}
+
+.task-editor-form .task-editor-fields,
+.task-editor-form .task-editor-plan {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.task-editor-form .task-editor-fields {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11.5rem), 1fr));
+}
+
+.task-editor-form .task-editor-plan {
+  grid-template-columns: minmax(0, 1.2fr) minmax(10rem, 0.7fr) minmax(0, 1.3fr);
+}
+
+.task-editor-form .task-editor-plan > label,
+.task-editor-form .task-editor-fields > label {
+  min-width: 0;
+}
+
+.task-editor-form input[type="datetime-local"] {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.88rem;
+}
+
+.task-editor-form input[type="datetime-local"]::-webkit-datetime-edit {
+  min-width: 0;
+  padding: 0;
+}
+
+.task-editor-form input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  margin-inline-start: 0.15rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+.task-duration-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.task-duration-fields span {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.task-duration-fields input[type="number"] {
+  min-width: 0;
+  text-align: center;
+  padding-inline: 0.35rem;
+  appearance: textfield;
+}
+
+.task-duration-fields input[type="number"]::-webkit-outer-spin-button,
+.task-duration-fields input[type="number"]::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .task-editor-form .task-editor-plan {
+    grid-template-columns: 1fr;
+  }
+}
+
+.schedule-editor {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.schedule-editor legend {
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
+
+.schedule-editor__rows {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.schedule-editor__row {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.schedule-editor__off {
+  grid-column: 2 / -1;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 720px) {
+  .schedule-editor__row {
+    grid-template-columns: 4.5rem minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.4rem;
+  }
 }
 
 .settings-form {
@@ -2296,6 +2502,19 @@ body.is-column-resizing * {
 .ticket-filters__field--period {
   min-width: min(100%, 280px);
   flex: 1 1 220px;
+  overflow: hidden;
+}
+
+.ticket-filters__field--period-compact {
+  flex: 0 0 20rem;
+  min-width: 20rem;
+  overflow: hidden;
+}
+
+.ticket-filters__field--location,
+.ticket-filters__field--currency {
+  min-width: 150px;
+  flex: 0 0 160px;
 }
 
 .ticket-filters__field--checkbox {
@@ -2372,6 +2591,18 @@ body.is-column-resizing * {
   gap: 0.45rem;
 }
 
+.page--reports .ticket-filters__row--desktop {
+  justify-content: flex-end;
+}
+
+.page--reports .ticket-filters__field--period {
+  margin-left: 0.75rem;
+}
+
+.page--reports .ticket-filters__actions {
+  margin-left: 0;
+}
+
 .btn-icon {
   display: inline-flex;
   align-items: center;
@@ -2426,6 +2657,7 @@ body.is-column-resizing * {
 
 .tickets-page .summary-bar {
   margin-bottom: 0.75rem;
+  max-height: none;
 }
 
 .tickets-fab-dock {
@@ -2589,6 +2821,9 @@ body.is-column-resizing * {
   align-items: center;
   gap: 0.45rem;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   min-height: 2.35rem;
   padding: 0.45rem 0.75rem;
   border: 1px solid var(--border);
@@ -2608,6 +2843,8 @@ body.is-column-resizing * {
 }
 
 .period-filter-btn__label {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3363,6 +3600,12 @@ body.is-column-resizing * {
 
 .ticket-detail-header__heading h1 {
   flex: 0 1 auto;
+}
+
+.page--report-detail .ticket-detail-header__period {
+  margin: 0 0 0 auto;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .ticket-detail-header__actions {

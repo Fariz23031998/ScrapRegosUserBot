@@ -42,6 +42,7 @@ const TASK_SELECT = `
   t.id, t.title, t.status, t.posted, t.action, t.notes, t.address, t.category_id, t.location_id,
   t.regos_client_id, t.client_name, t.client_phone,
   t.manager_user_id, t.technician_user_id, t.currency,
+  t.planned_start_at, t.planned_finish_at,
   t.created_at, t.updated_at,
   c.name AS category_name,
   loc.name AS location_name,
@@ -157,6 +158,8 @@ function ensureTaskTables(db) {
   ensureColumn(db, 'task_services', 'discount_currency', 'TEXT');
   ensureColumn(db, 'tasks', 'currency', 'TEXT');
   ensureColumn(db, 'tasks', 'posted', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'tasks', 'planned_start_at', 'TEXT');
+  ensureColumn(db, 'tasks', 'planned_finish_at', 'TEXT');
   if (ensureColumn(db, 'tasks', 'action', "TEXT NOT NULL DEFAULT 'install'")) {
     db.exec(`
       UPDATE tasks
@@ -274,6 +277,8 @@ function mapTask(row, devices = [], services = [], totals = null, payments = nul
     technician_user_id: row.technician_user_id ?? null,
     technician: mapEmployeeSummary(row.technician_user_id, technicianName),
     currency: row.currency === 'USD' ? 'USD' : row.currency === 'UZS' ? 'UZS' : null,
+    planned_start_at: row.planned_start_at || null,
+    planned_finish_at: row.planned_finish_at || null,
     devices,
     services,
     totals: totals || emptyMoneyTotals(),
@@ -487,6 +492,17 @@ function normalizeDisplayCurrency(value, fallback = null) {
   return currency;
 }
 
+function normalizePlannedAt(value) {
+  if (value == null || value === '') return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const date = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(raw)
+    ? new Date(`${raw.replace(' ', 'T')}Z`)
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) throw new Error('INVALID_TASK_PLAN');
+  return date.toISOString();
+}
+
 function normalizeQuantity(value, fallback = 1) {
   if (value == null || value === '') return fallback;
   const qty = Number(value);
@@ -583,6 +599,15 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null, r
   const currency = input.currency !== undefined
     ? normalizeDisplayCurrency(input.currency)
     : current?.currency ?? null;
+  const plannedStartAt = input.planned_start_at !== undefined
+    ? normalizePlannedAt(input.planned_start_at)
+    : current?.planned_start_at ?? null;
+  const plannedFinishAt = input.planned_finish_at !== undefined
+    ? normalizePlannedAt(input.planned_finish_at)
+    : current?.planned_finish_at ?? null;
+  if (plannedStartAt && plannedFinishAt && new Date(plannedFinishAt) < new Date(plannedStartAt)) {
+    throw new Error('INVALID_TASK_PLAN_RANGE');
+  }
 
   const nextLocationId = locationId === undefined ? current?.location_id ?? null : locationId;
   if (requireLocation && nextLocationId == null) {
@@ -608,6 +633,8 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null, r
       ? null
       : (technicianUserId === undefined ? current?.technician_user_id ?? null : technicianUserId),
     currency,
+    planned_start_at: plannedStartAt,
+    planned_finish_at: plannedFinishAt,
   };
 }
 
@@ -747,8 +774,9 @@ function createTask(db, input, options = {}) {
         `INSERT INTO tasks (
            title, status, action, notes, address, category_id, location_id,
            regos_client_id, client_name, client_phone,
-           manager_user_id, technician_user_id, currency, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+           manager_user_id, technician_user_id, currency,
+           planned_start_at, planned_finish_at, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
       )
       .run(
         task.title,
@@ -763,7 +791,9 @@ function createTask(db, input, options = {}) {
         task.client_phone,
         task.manager_user_id,
         task.technician_user_id,
-        task.currency
+        task.currency,
+        task.planned_start_at,
+        task.planned_finish_at
       );
     const taskId = Number(result.lastInsertRowid);
     replaceTaskDevices(db, taskId, devices);
@@ -791,7 +821,8 @@ function updateTask(db, id, input = {}, options = {}) {
       `UPDATE tasks
        SET title = ?, status = ?, action = ?, notes = ?, address = ?, category_id = ?, location_id = ?,
            regos_client_id = ?, client_name = ?, client_phone = ?,
-           manager_user_id = ?, technician_user_id = ?, currency = ?, updated_at = datetime('now')
+           manager_user_id = ?, technician_user_id = ?, currency = ?,
+           planned_start_at = ?, planned_finish_at = ?, updated_at = datetime('now')
        WHERE id = ?`
     ).run(
       task.title,
@@ -807,6 +838,8 @@ function updateTask(db, id, input = {}, options = {}) {
       task.manager_user_id,
       task.technician_user_id,
       task.currency,
+      task.planned_start_at,
+      task.planned_finish_at,
       current.id
     );
     if (devices) replaceTaskDevices(db, current.id, devices);

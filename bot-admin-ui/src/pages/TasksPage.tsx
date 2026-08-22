@@ -313,6 +313,16 @@ export default function TasksPage() {
         accessorFn: (row) => row.action_label || "—",
       },
       {
+        id: "planned_start_at",
+        header: "Начало",
+        accessorFn: (row) => formatDateTime(row.planned_start_at),
+      },
+      {
+        id: "planned_finish_at",
+        header: "Окончание",
+        accessorFn: (row) => formatDateTime(row.planned_finish_at),
+      },
+      {
         id: "updated_at",
         header: "Обновлено",
         accessorFn: (row) => formatDateTime(row.updated_at),
@@ -417,6 +427,8 @@ export default function TasksPage() {
                 ? []
                 : [{ label: "Техник", value: task.technician?.name || "—" }]),
               { label: "Устройства", value: taskDevicesSummary(task) },
+              { label: "Начало", value: formatDateTime(task.planned_start_at) },
+              { label: "Окончание", value: formatDateTime(task.planned_finish_at) },
               { label: "Обновлено", value: formatDateTime(task.updated_at) },
             ]}
             getActions={(task) => taskActions(task)}

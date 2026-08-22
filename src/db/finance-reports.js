@@ -1,6 +1,18 @@
-const { ensureLocationTables, getLocation } = require('./locations');
+const { ensureAccountPaymentTables } = require('./account-payments');
+const {
+  appendLocationAccessFilter,
+  appendLocationChoiceFilter,
+  ensureLocationTables,
+  getLocation,
+} = require('./locations');
 const { computeLineMoney, roundMoney } = require('./money');
-const { loadPostedTaskReportContext, queryInChunks, tableExists, isRepairDeviceLine } = require('./staff-reports');
+const {
+  loadPostedTaskReportContext,
+  queryInChunks,
+  tableExists,
+  isRepairDeviceLine,
+  unixSecondsToSqliteUtc,
+} = require('./staff-reports');
 const { ensureTaskPaymentTables } = require('./task-payments');
 const { ensureTaskRefundTables } = require('./task-refunds');
 
@@ -38,6 +50,10 @@ function emptyFinanceRow(locationId, name) {
     refunded_cash_usd: 0,
     due_uzs: 0,
     due_usd: 0,
+    income_uzs: 0,
+    income_usd: 0,
+    expense_uzs: 0,
+    expense_usd: 0,
   };
 }
 
@@ -68,6 +84,10 @@ function presentFinanceRow(row) {
   const refundedCashUsd = roundFinanceMoney(row.refunded_cash_usd);
   const netPaidUzs = roundFinanceMoney(paidUzs - refundedCashUzs);
   const netPaidUsd = roundFinanceMoney(paidUsd - refundedCashUsd);
+  const incomeUzs = roundFinanceMoney(row.income_uzs);
+  const incomeUsd = roundFinanceMoney(row.income_usd);
+  const expenseUzs = roundFinanceMoney(row.expense_uzs);
+  const expenseUsd = roundFinanceMoney(row.expense_usd);
   return {
     location_id: row.location_id,
     name: row.name,
@@ -88,6 +108,10 @@ function presentFinanceRow(row) {
     refunded_cash_usd: refundedCashUsd,
     due_uzs: roundFinanceMoney(netRevenueUzs - netPaidUzs),
     due_usd: roundFinanceMoney(netRevenueUsd - netPaidUsd),
+    income_uzs: incomeUzs,
+    income_usd: incomeUsd,
+    expense_uzs: expenseUzs,
+    expense_usd: expenseUsd,
   };
 }
 
@@ -109,8 +133,20 @@ function sumFinanceTotals(rows) {
     addMoney(totals, 'paid', row.paid_uzs, row.paid_usd);
     addMoney(totals, 'refunded_cash', row.refunded_cash_uzs, row.refunded_cash_usd);
     addMoney(totals, 'due', row.due_uzs, row.due_usd);
+    addMoney(totals, 'income', row.income_uzs, row.income_usd);
+    addMoney(totals, 'expense', row.expense_uzs, row.expense_usd);
   }
   return presentFinanceTotals(totals);
+}
+
+function isFinanceRowActive(row) {
+  return (
+    (Number(row.task_count) || 0) > 0 ||
+    (Number(row.income_uzs) || 0) !== 0 ||
+    (Number(row.income_usd) || 0) !== 0 ||
+    (Number(row.expense_uzs) || 0) !== 0 ||
+    (Number(row.expense_usd) || 0) !== 0
+  );
 }
 
 function locationNameFor(db, locationId) {
@@ -145,6 +181,37 @@ function listRefundTotalsByTask(db, taskIds) {
   );
 }
 
+function listAccountPaymentTotalsByLocation(
+  db,
+  { fromUnix = null, toUnix = null, viewer = null, locationId = null } = {}
+) {
+  ensureAccountPaymentTables(db);
+  if (!tableExists(db, 'account_payments')) return [];
+  const from = unixSecondsToSqliteUtc(fromUnix);
+  const to = unixSecondsToSqliteUtc(toUnix);
+  const where = [];
+  const params = [];
+  if (from) {
+    where.push(`datetime(p.created_at) >= datetime(?)`);
+    params.push(from);
+  }
+  if (to) {
+    where.push(`datetime(p.created_at) <= datetime(?)`);
+    params.push(to);
+  }
+  appendLocationAccessFilter(where, params, viewer, 'p');
+  appendLocationChoiceFilter(where, params, locationId, 'p');
+  const sql = `
+    SELECT p.location_id, p.direction,
+           SUM(p.amount_uzs) AS amount_uzs,
+           SUM(p.amount_usd) AS amount_usd
+    FROM account_payments p
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    GROUP BY p.location_id, p.direction
+  `;
+  return db.prepare(sql).all(...params);
+}
+
 function listPaymentTotalsByTask(db, taskIds) {
   if (!tableExists(db, 'task_payments')) return [];
   return queryInChunks(
@@ -168,8 +235,64 @@ function sortFinanceRows(rows) {
   return [...named, ...unassigned];
 }
 
-function buildFinanceReport(db, { fromUnix = null, toUnix = null, viewer = null } = {}) {
+function emptyOrderSummary() {
+  return { count: 0, pending: 0, paid: 0, deleted: 0, amount: 0, amount_uzs: 0, amount_usd: 0 };
+}
+
+function summarizeFinanceOrders(db, { fromUnix = null, toUnix = null, rate = 0 } = {}) {
+  if (!tableExists(db, 'orders')) return emptyOrderSummary();
+  const from = unixSecondsToSqliteUtc(fromUnix);
+  const to = unixSecondsToSqliteUtc(toUnix);
+  const where = [];
+  const params = [];
+  if (from) {
+    where.push(`datetime(created_at) >= datetime(?)`);
+    params.push(from);
+  }
+  if (to) {
+    where.push(`datetime(created_at) <= datetime(?)`);
+    params.push(to);
+  }
+  const row = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS count,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN status IN ('paid', 'paid_cash') THEN 1 ELSE 0 END) AS paid,
+        SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END) AS deleted,
+        SUM(CASE WHEN status IN ('paid', 'paid_cash') AND UPPER(IFNULL(currency, 'UZS')) = 'USD' THEN amount ELSE 0 END) AS paid_usd,
+        SUM(CASE WHEN status IN ('paid', 'paid_cash') AND UPPER(IFNULL(currency, 'UZS')) != 'USD' THEN amount ELSE 0 END) AS paid_uzs
+      FROM orders
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    `
+    )
+    .get(...params);
+  const nativeUzs = Number(row?.paid_uzs) || 0;
+  const nativeUsd = Number(row?.paid_usd) || 0;
+  const safeRate = Number(rate) > 0 ? Number(rate) : 1;
+  const amount_uzs = roundFinanceMoney(nativeUzs + nativeUsd * safeRate);
+  const amount_usd = roundFinanceMoney(nativeUsd + nativeUzs / safeRate);
+  return {
+    count: Number(row?.count) || 0,
+    pending: Number(row?.pending) || 0,
+    paid: Number(row?.paid) || 0,
+    deleted: Number(row?.deleted) || 0,
+    amount: amount_uzs,
+    amount_uzs,
+    amount_usd,
+  };
+}
+
+function addOrderAmountsToTotals(totals, orders) {
+  addMoney(totals, 'income', orders.amount_uzs, orders.amount_usd);
+  addMoney(totals, 'paid', orders.amount_uzs, orders.amount_usd);
+  return totals;
+}
+
+function buildFinanceReport(db, { fromUnix = null, toUnix = null, viewer = null, locationId = null } = {}) {
   ensureLocationTables(db);
+  ensureAccountPaymentTables(db);
   ensureTaskPaymentTables(db);
   ensureTaskRefundTables(db);
 
@@ -177,6 +300,7 @@ function buildFinanceReport(db, { fromUnix = null, toUnix = null, viewer = null 
     fromUnix,
     toUnix,
     viewer,
+    locationId,
   });
   const byLocation = new Map();
 
@@ -214,11 +338,25 @@ function buildFinanceReport(db, { fromUnix = null, toUnix = null, viewer = null 
     }
   }
 
-  const rows = sortFinanceRows([...byLocation.values()].map(presentFinanceRow).filter((row) => row.task_count > 0));
+  for (const payment of listAccountPaymentTotalsByLocation(db, { fromUnix, toUnix, viewer, locationId })) {
+    const row = ensureFinanceRow(byLocation, db, payment.location_id);
+    if (payment.direction === 'out') {
+      addMoney(row, 'expense', payment.amount_uzs, payment.amount_usd);
+    } else {
+      addMoney(row, 'income', payment.amount_uzs, payment.amount_usd);
+    }
+  }
+
+  const rows = sortFinanceRows(
+    [...byLocation.values()].map(presentFinanceRow).filter(isFinanceRowActive)
+  );
+  const orders = summarizeFinanceOrders(db, { fromUnix, toUnix, rate });
+  const totals = addOrderAmountsToTotals(sumFinanceTotals(rows), orders);
 
   return {
     rows,
-    totals: sumFinanceTotals(rows),
+    totals,
+    orders,
   };
 }
 

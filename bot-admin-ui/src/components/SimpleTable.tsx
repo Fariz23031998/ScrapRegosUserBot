@@ -27,6 +27,9 @@ import {
   getFilteredRowModel,
   getSortedRowModel,
   useReactTable,
+  type CellContext,
+  type Column,
+  type Table,
 } from "@tanstack/react-table";
 import { SlidersHorizontal } from "lucide-react";
 import {
@@ -56,7 +59,39 @@ type SimpleTableProps<T> = {
   getRowId?: (row: T) => string;
   onRowClick?: (row: T) => void;
   serverSideSearch?: boolean;
+  footerData?: T | T[];
+  extraFooter?: ReactNode;
 };
+
+function readColumnValue<T>(column: Column<T, unknown>, row: T): unknown {
+  if (column.accessorFn) return column.accessorFn(row, 0);
+  const def = column.columnDef as ColumnDef<T, unknown> & { accessorKey?: keyof T | string };
+  if (def.accessorKey != null) return (row as Record<string, unknown>)[String(def.accessorKey)];
+  return undefined;
+}
+
+function columnAlignClass(column: Column<unknown, unknown> | { columnDef: { meta?: unknown } }): string | undefined {
+  const meta = column.columnDef.meta as { align?: string } | undefined;
+  return meta?.align === "right" ? "data-table__cell--right" : undefined;
+}
+
+function renderFooterCell<T>(column: Column<T, unknown>, footerData: T, table: Table<T>): ReactNode {
+  const getValue = () => readColumnValue(column, footerData);
+  const cellDef = column.columnDef.cell;
+  if (cellDef) {
+    return flexRender(cellDef, {
+      table,
+      column,
+      row: { original: footerData, id: "__footer__", index: -1, getValue },
+      cell: { id: `footer_${column.id}`, column, getValue },
+      getValue,
+      renderValue: getValue,
+    } as unknown as CellContext<T, unknown>);
+  }
+  const value = getValue();
+  if (value == null || value === "") return null;
+  return String(value);
+}
 
 class HeaderPointerSensor extends PointerSensor {
   static activators = [
@@ -79,11 +114,13 @@ function SortableHeader({
   id,
   children,
   width,
+  className,
   onResizeStart,
 }: {
   id: string;
   children: ReactNode;
   width: number;
+  className?: string;
   onResizeStart: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -94,9 +131,10 @@ function SortableHeader({
     minWidth: width,
     opacity: isDragging ? 0.6 : 1,
   };
+  const classes = [className, isDragging ? "is-dragging" : undefined].filter(Boolean).join(" ") || undefined;
 
   return (
-    <th ref={setNodeRef} style={style} className={isDragging ? "is-dragging" : undefined}>
+    <th ref={setNodeRef} style={style} className={classes}>
       <div className="table-header-cell">
         <div className="table-header-cell__drag" {...attributes} {...listeners}>
           {children}
@@ -126,6 +164,8 @@ export default function SimpleTable<T>({
   getRowId,
   onRowClick,
   serverSideSearch = false,
+  footerData,
+  extraFooter,
 }: SimpleTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
@@ -255,6 +295,8 @@ export default function SimpleTable<T>({
 
   const headerGroup = table.getHeaderGroups()[0];
   const showToolbar = Boolean(onGlobalSearchChange || toolbar);
+  const footerRows = footerData == null ? [] : Array.isArray(footerData) ? footerData : [footerData];
+  const hasRows = data.length > 0 || footerRows.length > 0 || Boolean(extraFooter);
 
   const columnsMenu = (
     <div
@@ -302,7 +344,7 @@ export default function SimpleTable<T>({
 
       {isLoading ? (
         <LoadingState />
-      ) : data.length === 0 ? (
+      ) : !hasRows ? (
         <p className="empty-state">{emptyMessage}</p>
       ) : (
         <div className="table-scroll">
@@ -316,6 +358,7 @@ export default function SimpleTable<T>({
                         key={header.id}
                         id={header.column.id}
                         width={header.getSize()}
+                        className={columnAlignClass(header.column)}
                         onResizeStart={(event) => startResize(header.column.id, event)}
                       >
                         <div className="table-header-cell__content">
@@ -345,13 +388,39 @@ export default function SimpleTable<T>({
                     onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} style={{ width: cell.column.getSize(), minWidth: cell.column.getSize() }}>
+                      <td
+                        key={cell.id}
+                        className={columnAlignClass(cell.column)}
+                        style={{ width: cell.column.getSize(), minWidth: cell.column.getSize() }}
+                      >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
                   </tr>
                 ))}
               </tbody>
+              {footerRows.length || extraFooter ? (
+                <tfoot>
+                  {extraFooter ? (
+                    <tr className="data-table__extra-footer">
+                      <td colSpan={headerGroup.headers.length}>{extraFooter}</td>
+                    </tr>
+                  ) : null}
+                  {footerRows.map((row, index) => (
+                    <tr key={getRowId?.(row) ?? `footer-${index}`}>
+                      {headerGroup.headers.map((header) => (
+                        <td
+                          key={header.id}
+                          className={columnAlignClass(header.column)}
+                          style={{ width: header.getSize(), minWidth: header.getSize() }}
+                        >
+                          {renderFooterCell(header.column, row, table)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tfoot>
+              ) : null}
             </table>
             <DragOverlay>
               {activeDragId ? (

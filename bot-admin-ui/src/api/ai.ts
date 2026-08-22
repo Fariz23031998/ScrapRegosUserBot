@@ -199,6 +199,10 @@ export function listKnowledgeArticles(params: {
   );
 }
 
+export function getKnowledgeArticle(id: number) {
+  return apiFetch<{ article: KnowledgeArticle }>(`/bot-admin/api/knowledge/articles/${id}`);
+}
+
 export function createKnowledgeArticle(payload: {
   title: string;
   body: string;
@@ -223,6 +227,21 @@ export function updateKnowledgeArticle(
 
 export function deleteKnowledgeArticle(id: number) {
   return apiFetch<{ ok: boolean }>(`/bot-admin/api/knowledge/articles/${id}`, { method: "DELETE" });
+}
+
+export function uploadKnowledgeImages(id: number, files: File[]) {
+  const body = new FormData();
+  for (const file of files) body.append("image", file);
+  return apiFetch<{ article: KnowledgeArticle }>(`/bot-admin/api/knowledge/articles/${id}/images`, {
+    method: "POST",
+    body,
+  });
+}
+
+export function deleteKnowledgeImage(id: number, imageId: number) {
+  return apiFetch<{ article: KnowledgeArticle }>(`/bot-admin/api/knowledge/articles/${id}/images/${imageId}`, {
+    method: "DELETE",
+  });
 }
 
 export function lockKnowledgeArticle(id: number) {

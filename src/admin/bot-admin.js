@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const multer = require('multer');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const {
@@ -17,6 +18,7 @@ const {
   clearBotUserRegosLink,
   listEmployeeUsers,
 } = require('../db/bot-users-db');
+const { parseSchedule } = require('../lib/employee-schedule');
 const { RIGHTS } = require('../db/user-rights');
 const { listOrderLogs, mapOrderLogRow, formatPaymentProviderLabel } = require('../db/order-logs');
 const {
@@ -221,7 +223,43 @@ const {
   createKnowledgeCategory,
   updateKnowledgeCategory,
   deleteKnowledgeCategory,
+  appendKnowledgeArticleImage,
+  stripKnowledgeArticleImage,
 } = require('../db/knowledge-articles');
+const {
+  MAX_IMAGES_PER_ARTICLE,
+  MAX_IMAGE_BYTES,
+  addKnowledgeImage,
+  deleteKnowledgeImage,
+  getKnowledgeImage,
+  resolveKnowledgeImageFile,
+} = require('../db/knowledge-images');
+
+function knowledgeImageErrorMessage(code) {
+  if (code === 'INVALID_IMAGE_TYPE') return 'Загрузите изображение JPEG, PNG, WebP или GIF.';
+  if (code === 'INVALID_IMAGE_SIZE') return 'Изображение слишком большое. Максимум 5 МБ.';
+  if (code === 'IMAGE_LIMIT_REACHED') return 'Можно прикрепить не больше 20 изображений.';
+  if (code === 'INVALID_IMAGE_URL') return 'Не удалось загрузить изображение по ссылке.';
+  return null;
+}
+
+const knowledgeImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_IMAGE_BYTES, files: MAX_IMAGES_PER_ARTICLE },
+});
+
+function handleKnowledgeImageUpload(req, res, next) {
+  knowledgeImageUpload.array('image', MAX_IMAGES_PER_ARTICLE)(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: knowledgeImageErrorMessage('INVALID_IMAGE_SIZE') });
+    }
+    if (error.code === 'LIMIT_FILE_COUNT') {
+      return res.status(400).json({ message: knowledgeImageErrorMessage('IMAGE_LIMIT_REACHED') });
+    }
+    return res.status(400).json({ message: knowledgeImageErrorMessage('INVALID_IMAGE_TYPE') });
+  });
+}
 const {
   getOrCreateOpsSession,
   listOpsSessionMessages,
@@ -383,6 +421,7 @@ function mapUserResponse(user) {
     display_name: user.display_name,
     job_title: user.job_title || null,
     description: user.description || null,
+    schedule: parseSchedule(user.schedule),
     first_name: user.first_name,
     last_name: user.last_name,
     username: user.username,
@@ -407,6 +446,7 @@ function snapshotUserForAudit(user) {
     display_name: user.display_name ?? null,
     job_title: user.job_title ?? null,
     description: user.description ?? null,
+    schedule: parseSchedule(user.schedule),
     admin_login: user.admin_login || null,
     has_password: Boolean(user.password_hash || user.has_password),
     regos_user_id: user.regos_user_id ?? null,
@@ -2472,6 +2512,10 @@ function createBotAdminRouter(db) {
             : 'Некорректные данные статьи.',
       });
     }
+    const imageMessage = knowledgeImageErrorMessage(error.message);
+    if (imageMessage) {
+      return res.status(400).json({ message: imageMessage });
+    }
     console.error(fallbackMessage, error);
     return res.status(500).json({ message: fallbackMessage });
   }
@@ -2579,6 +2623,86 @@ function createBotAdminRouter(db) {
     if (!article) return res.status(404).json({ message: 'Статья не найдена.' });
     return res.json({ article });
   });
+
+  router.get(
+    '/api/knowledge/articles/:id/images/:imageId',
+    requireRight(db, 'knowledge_read'),
+    (req, res) => {
+      const row = getKnowledgeImage(db, req.params.id, req.params.imageId);
+      if (!row) return res.status(404).json({ message: 'Изображение не найдено.' });
+      const file = resolveKnowledgeImageFile(row);
+      if (!file) return res.status(404).json({ message: 'Изображение не найдено.' });
+      res.setHeader('Content-Type', file.mime);
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      return res.sendFile(file.filePath);
+    }
+  );
+
+  router.post(
+    '/api/knowledge/articles/:id/images',
+    requireRight(db, 'knowledge_edit'),
+    handleKnowledgeImageUpload,
+    (req, res) => {
+      try {
+        const before = getKnowledgeArticle(db, req.params.id);
+        if (!before) return res.status(404).json({ message: 'Статья не найдена.' });
+        if (before.locked) throw new Error('ARTICLE_LOCKED');
+        const files = Array.isArray(req.files) ? req.files : [];
+        if (!files.length) throw new Error('INVALID_IMAGE_TYPE');
+        const remaining = MAX_IMAGES_PER_ARTICLE - (before.images || []).length;
+        if (remaining <= 0 || files.length > remaining) throw new Error('IMAGE_LIMIT_REACHED');
+        let article = before;
+        for (const file of files) {
+          const image = addKnowledgeImage(db, before.id, {
+            buffer: file.buffer,
+            originalName: file.originalname,
+          });
+          article = appendKnowledgeArticleImage(db, article, image, file.originalname, {
+            updatedBy: resolveKnowledgeActorUserId(req),
+          });
+        }
+        auditAdminChange(db, req, {
+          entityType: 'knowledge_article',
+          entityId: article.id,
+          action: 'update',
+          summary: `Добавлены скриншоты статьи #${article.id}`,
+          details: buildAuditDetails({ before, after: article }),
+        });
+        return res.status(201).json({ article });
+      } catch (error) {
+        return respondKnowledgeWriteError(res, error, 'Не удалось загрузить изображение.');
+      }
+    }
+  );
+
+  router.delete(
+    '/api/knowledge/articles/:id/images/:imageId',
+    requireRight(db, 'knowledge_edit'),
+    (req, res) => {
+      try {
+        const before = getKnowledgeArticle(db, req.params.id);
+        if (!before) return res.status(404).json({ message: 'Статья не найдена.' });
+        if (before.locked) throw new Error('ARTICLE_LOCKED');
+        const image = deleteKnowledgeImage(db, before.id, req.params.imageId);
+        const article = stripKnowledgeArticleImage(db, before, image, {
+          updatedBy: resolveKnowledgeActorUserId(req),
+        });
+        auditAdminChange(db, req, {
+          entityType: 'knowledge_article',
+          entityId: article.id,
+          action: 'update',
+          summary: `Удалён скриншот статьи #${article.id}`,
+          details: buildAuditDetails({ before, after: article }),
+        });
+        return res.json({ article });
+      } catch (error) {
+        if (error.message === 'NOT_FOUND') {
+          return res.status(404).json({ message: 'Изображение не найдено.' });
+        }
+        return respondKnowledgeWriteError(res, error, 'Не удалось удалить изображение.');
+      }
+    }
+  );
 
   router.post('/api/knowledge/articles', requireRight(db, 'knowledge_edit'), express.json(), (req, res) => {
     try {
@@ -4607,6 +4731,7 @@ function createBotAdminRouter(db) {
         displayName: req.body?.display_name,
         jobTitle: req.body?.job_title,
         description: req.body?.description,
+        schedule: req.body?.schedule,
         rights: parseRightsBody(req.body?.rights || req.body),
         adminLogin: parseOptionalCredential(req.body?.admin_login),
         password: parseOptionalCredential(req.body?.password),
@@ -4634,6 +4759,11 @@ function createBotAdminRouter(db) {
       const mapped = mapRegosLinkError(error);
       if (mapped) {
         return res.status(mapped.status).json({ message: mapped.message });
+      }
+      if (error.message === 'INVALID_EMPLOYEE_SCHEDULE') {
+        return res.status(400).json({
+          message: 'Некорректный график работы. Укажите время начала и окончания в пределах одного дня.',
+        });
       }
       if (error.message === 'PHONE_EXISTS') {
         return res.status(409).json({ message: 'Пользователь с таким телефоном уже существует.' });
@@ -4664,6 +4794,9 @@ function createBotAdminRouter(db) {
         description: req.body?.description,
         rights: req.body?.rights ? parseRightsBody(req.body.rights) : parseRightsBody(req.body),
       };
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'schedule')) {
+        updates.schedule = req.body.schedule;
+      }
       if (Object.prototype.hasOwnProperty.call(req.body || {}, 'admin_login')) {
         updates.adminLogin = parseOptionalCredential(req.body.admin_login);
       }
@@ -4700,6 +4833,11 @@ function createBotAdminRouter(db) {
       if (mapped) {
         return res.status(mapped.status).json({ message: mapped.message });
       }
+      if (error.message === 'INVALID_EMPLOYEE_SCHEDULE') {
+        return res.status(400).json({
+          message: 'Некорректный график работы. Укажите время начала и окончания в пределах одного дня.',
+        });
+      }
       if (error.message === 'NOT_FOUND') {
         return res.status(404).json({ message: 'Пользователь не найден.' });
       }
@@ -4728,6 +4866,7 @@ function createBotAdminRouter(db) {
         displayName: req.body?.display_name,
         jobTitle: req.body?.job_title,
         description: req.body?.description,
+        schedule: req.body?.schedule,
         rights: parseRightsBody(req.body?.rights || req.body),
         adminLogin: parseOptionalCredential(req.body?.admin_login),
         password: parseOptionalCredential(req.body?.password),
@@ -4755,6 +4894,11 @@ function createBotAdminRouter(db) {
       const mapped = mapRegosLinkError(error);
       if (mapped) {
         return res.status(mapped.status).json({ message: mapped.message });
+      }
+      if (error.message === 'INVALID_EMPLOYEE_SCHEDULE') {
+        return res.status(400).json({
+          message: 'Некорректный график работы. Укажите время начала и окончания в пределах одного дня.',
+        });
       }
       if (error.message === 'NOT_FOUND') {
         return res.status(404).json({ message: 'Пользователь не найден.' });

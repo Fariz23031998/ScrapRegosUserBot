@@ -65,6 +65,20 @@ function parseTechnicianOptions(input) {
   };
 }
 
+function parseFinanceOptions(input) {
+  const rawLocation = input?.location_id;
+  let location_id = null;
+  if (rawLocation === 'none' || rawLocation === 0 || rawLocation === '0') {
+    location_id = 'none';
+  } else if (rawLocation != null && rawLocation !== '') {
+    const n = Number(rawLocation);
+    if (Number.isFinite(n) && n > 0) location_id = n;
+  }
+  const rawCurrency = String(input?.currency || '').trim().toUpperCase();
+  const currency = rawCurrency === 'USD' || rawCurrency === 'UZS' ? rawCurrency : null;
+  return { location_id, currency };
+}
+
 function buildStoredParams(type, input, viewer) {
   const params = {
     from_date: parseUnixValue(input?.from_date),
@@ -76,6 +90,11 @@ function buildStoredParams(type, input, viewer) {
   };
   if (type === 'technician') {
     Object.assign(params, parseTechnicianOptions(input));
+  }
+  if (type === 'finance') {
+    const finance = parseFinanceOptions(input);
+    if (finance.location_id != null) params.location_id = finance.location_id;
+    if (finance.currency) params.currency = finance.currency;
   }
   return params;
 }
@@ -146,7 +165,10 @@ async function buildReport(db, job, fetchAllTickets) {
     return buildCommissionReport(db, context);
   }
   if (job.type === 'finance') {
-    return buildFinanceReport(db, context);
+    return buildFinanceReport(db, {
+      ...context,
+      locationId: params.location_id == null ? null : params.location_id,
+    });
   }
   if (job.type === 'technician') {
     const ticketCounts = await loadTicketCounts(db, params, fetchAllTickets);

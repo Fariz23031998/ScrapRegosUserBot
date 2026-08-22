@@ -4,12 +4,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createAccount } = require('../src/db/accounts');
+const { createAccount, getAccount } = require('../src/db/accounts');
 const {
   createAccountPayment,
   deleteAccountPayment,
   getAccountPayment,
   listAccountPayments,
+  updateAccountPayment,
 } = require('../src/db/account-payments');
 const { createCatalogCategory } = require('../src/db/catalog-categories');
 const { createEmployeeUser } = require('../src/db/bot-users-db');
@@ -188,5 +189,44 @@ describe('account payments', () => {
         }),
       /INVALID_ACCOUNT_PAYMENT_LOCATION/
     );
+  });
+
+  it('stores a chosen created_at and updates a payment', () => {
+    const first = createAccount(db, { name: 'Редактирование А', currency: 'UZS' });
+    const second = createAccount(db, { name: 'Редактирование Б', currency: 'UZS' });
+    const payment = createAccountPayment(db, {
+      account_id: first.id,
+      direction: 'in',
+      amount: 100,
+      note: 'Старый',
+      created_at: '2024-01-15T10:30:00.000Z',
+    });
+    assert.equal(payment.created_at, '2024-01-15 10:30:00');
+    assert.equal(getAccount(db, first.id).value, 100);
+
+    const updated = updateAccountPayment(db, payment.id, {
+      account_id: second.id,
+      direction: 'out',
+      amount: 40,
+      note: 'Новый',
+      created_at: '2024-02-01T08:15:00.000Z',
+    });
+    assert.equal(updated.account_id, second.id);
+    assert.equal(updated.direction, 'out');
+    assert.equal(updated.amount, 40);
+    assert.equal(updated.note, 'Новый');
+    assert.equal(updated.created_at, '2024-02-01 08:15:00');
+    assert.equal(getAccount(db, first.id).value, 0);
+    assert.equal(getAccount(db, second.id).value, -40);
+
+    assert.throws(
+      () => createAccountPayment(db, { account_id: first.id, direction: 'in', amount: 1, created_at: 'not-a-date' }),
+      /INVALID_ACCOUNT_PAYMENT_CREATED_AT/
+    );
+    assert.throws(
+      () => updateAccountPayment(db, updated.id, { created_at: 'not-a-date' }),
+      /INVALID_ACCOUNT_PAYMENT_CREATED_AT/
+    );
+    assert.throws(() => updateAccountPayment(db, 999999, { amount: 1 }), /NOT_FOUND/);
   });
 });

@@ -13,9 +13,21 @@ import {
 } from "../api/tasks";
 import Modal from "./Modal";
 import { useAuth } from "../hooks/useAuth";
+import { useConfirm } from "../contexts/ConfirmContext";
 import type { FieldTask, TaskCategory, TaskClient } from "../lib/types";
+import { technicianFinishWarning } from "../lib/employee-schedule";
 import { parseDisplayCurrency, type MoneyCurrency } from "../lib/money";
+import {
+  addMinutesToDatetimeLocal,
+  datetimeLocalDiffMinutes,
+  formatDurationParts,
+  parseDurationMinutes,
+  sanitizeDurationHours,
+  sanitizeDurationMinutes,
+  toDatetimeLocalMinutes,
+} from "../lib/task-plan";
 import { TASK_STATUSES } from "../lib/task-status";
+import { datetimeLocalToIso } from "../lib/utils";
 
 const TASK_ACTIONS = [
   { value: "install", label: "Установка" },
@@ -41,6 +53,10 @@ type TaskEditor = {
   manager_user_id: string;
   technician_user_id: string;
   currency: "" | MoneyCurrency;
+  planned_start_at: string;
+  planned_finish_at: string;
+  duration_hours: string;
+  duration_minutes: string;
   client: TaskClient | null;
   clientQuery: string;
 };
@@ -57,12 +73,19 @@ function emptyEditor(): TaskEditor {
     manager_user_id: "",
     technician_user_id: "",
     currency: "",
+    planned_start_at: "",
+    planned_finish_at: "",
+    duration_hours: "",
+    duration_minutes: "",
     client: null,
     clientQuery: "",
   };
 }
 
 function editorFromTask(task: FieldTask): TaskEditor {
+  const plannedStart = toDatetimeLocalMinutes(task.planned_start_at);
+  const plannedFinish = toDatetimeLocalMinutes(task.planned_finish_at);
+  const duration = formatDurationParts(datetimeLocalDiffMinutes(plannedStart, plannedFinish));
   return {
     id: task.id,
     title: task.title,
@@ -75,6 +98,10 @@ function editorFromTask(task: FieldTask): TaskEditor {
     manager_user_id: task.manager_user_id ? String(task.manager_user_id) : "",
     technician_user_id: task.technician_user_id ? String(task.technician_user_id) : "",
     currency: parseDisplayCurrency(task.currency) || "",
+    planned_start_at: plannedStart,
+    planned_finish_at: plannedFinish,
+    duration_hours: duration.hours,
+    duration_minutes: duration.minutes,
     client: task.regos_client_id
       ? {
           id: task.regos_client_id,
@@ -84,6 +111,53 @@ function editorFromTask(task: FieldTask): TaskEditor {
       : null,
     clientQuery: "",
   };
+}
+
+function durationFromRange(start: string, finish: string): { hours: string; minutes: string } {
+  return formatDurationParts(datetimeLocalDiffMinutes(start, finish));
+}
+
+function withPlannedStart(editor: TaskEditor, plannedStart: string): TaskEditor {
+  const duration = parseDurationMinutes(editor.duration_hours, editor.duration_minutes);
+  if (duration != null && plannedStart) {
+    return {
+      ...editor,
+      planned_start_at: plannedStart,
+      planned_finish_at: addMinutesToDatetimeLocal(plannedStart, duration),
+    };
+  }
+  if (plannedStart && editor.planned_finish_at) {
+    const durationParts = durationFromRange(plannedStart, editor.planned_finish_at);
+    return {
+      ...editor,
+      planned_start_at: plannedStart,
+      duration_hours: durationParts.hours,
+      duration_minutes: durationParts.minutes,
+    };
+  }
+  return { ...editor, planned_start_at: plannedStart };
+}
+
+function withDuration(editor: TaskEditor, hours: string, minutes: string): TaskEditor {
+  const next = { ...editor, duration_hours: hours, duration_minutes: minutes };
+  const duration = parseDurationMinutes(hours, minutes);
+  if (duration != null && editor.planned_start_at) {
+    next.planned_finish_at = addMinutesToDatetimeLocal(editor.planned_start_at, duration);
+  }
+  return next;
+}
+
+function withPlannedFinish(editor: TaskEditor, plannedFinish: string): TaskEditor {
+  if (editor.planned_start_at && plannedFinish) {
+    const durationParts = durationFromRange(editor.planned_start_at, plannedFinish);
+    return {
+      ...editor,
+      planned_finish_at: plannedFinish,
+      duration_hours: durationParts.hours,
+      duration_minutes: durationParts.minutes,
+    };
+  }
+  return { ...editor, planned_finish_at: plannedFinish };
 }
 
 function emptyCreateClientForm() {
@@ -234,6 +308,7 @@ export default function TaskEditorModal({
   onSaved: (saved: FieldTask) => void;
 }) {
   const { hasPermission } = useAuth();
+  const confirm = useConfirm();
   const canChangeStatus = hasPermission("tasks_status");
   const canChangeManager = hasPermission("tasks_manager");
   const canChangeTechnician = hasPermission("tasks_technician");
@@ -274,6 +349,15 @@ export default function TaskEditorModal({
   const clients = clientsQuery.data?.clients || [];
   const categoryOptions = categories.length ? categories : categoriesQuery.data?.categories || [];
   const locations = locationsQuery.data?.locations || [];
+  const technician = employees.find((employee) => String(employee.id) === editor.technician_user_id);
+  const scheduleWarning =
+    editor.action !== "sale" && editor.technician_user_id && editor.planned_finish_at
+      ? technicianFinishWarning(
+          technician?.name,
+          datetimeLocalToIso(editor.planned_finish_at) || editor.planned_finish_at,
+          technician?.schedule,
+        )
+      : null;
 
   const saveMutation = useMutation({
     mutationFn: (payload: { id?: number; body: TaskPayload }) => {
@@ -293,6 +377,8 @@ export default function TaskEditorModal({
       category_id: current.category_id ? Number(current.category_id) : null,
       location_id: current.location_id ? Number(current.location_id) : null,
       currency: parseDisplayCurrency(current.currency),
+      planned_start_at: datetimeLocalToIso(current.planned_start_at) || null,
+      planned_finish_at: datetimeLocalToIso(current.planned_finish_at) || null,
       regos_client_id: current.client?.id ?? null,
       client_name: current.client?.name || "",
       client_phone: current.client?.phone || "",
@@ -316,23 +402,40 @@ export default function TaskEditorModal({
       size="wide"
     >
       <form
-        className="stack-form"
+        className="stack-form task-editor-form"
         onSubmit={(event) => {
           event.preventDefault();
-          if (task?.posted) {
-            setFormError("Проведённую задачу нельзя изменить.");
-            return;
-          }
-          if (!TASK_ACTIONS.some((item) => item.value === editor.action)) {
-            setFormError("Выберите тип задачи: установка, ремонт или продажа.");
-            return;
-          }
-          if (!editor.location_id) {
-            setFormError("Выберите филиал.");
-            return;
-          }
-          setFormError("");
-          saveMutation.mutate({ id: editor.id, body: buildPayload(editor) });
+          void (async () => {
+            if (task?.posted) {
+              setFormError("Проведённую задачу нельзя изменить.");
+              return;
+            }
+            if (!TASK_ACTIONS.some((item) => item.value === editor.action)) {
+              setFormError("Выберите тип задачи: установка, ремонт или продажа.");
+              return;
+            }
+            if (!editor.location_id) {
+              setFormError("Выберите филиал.");
+              return;
+            }
+            if (editor.planned_start_at && editor.planned_finish_at) {
+              const start = new Date(editor.planned_start_at);
+              const finish = new Date(editor.planned_finish_at);
+              if (finish < start) {
+                setFormError("Ориентировочное окончание не может быть раньше начала.");
+                return;
+              }
+            }
+            if (scheduleWarning) {
+              const ok = await confirm({
+                message: `${scheduleWarning} Всё равно сохранить?`,
+                confirmLabel: "Сохранить",
+              });
+              if (!ok) return;
+            }
+            setFormError("");
+            saveMutation.mutate({ id: editor.id, body: buildPayload(editor) });
+          })();
         }}
       >
         <label>
@@ -344,7 +447,7 @@ export default function TaskEditorModal({
             onChange={(event) => setEditor((prev) => ({ ...prev, title: event.target.value }))}
           />
         </label>
-        <div className="filters-grid">
+        <div className="task-editor-fields">
           {canChangeStatus ? (
             <label>
               Статус
@@ -401,35 +504,37 @@ export default function TaskEditorModal({
             </select>
           </label>
         </div>
-        <label>
-          Категория
-          <select
-            value={editor.category_id}
-            onChange={(event) => setEditor((prev) => ({ ...prev, category_id: event.target.value }))}
-          >
-            <option value="">Без категории</option>
-            {categoryOptions.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Филиал
-          <select
-            required
-            value={editor.location_id}
-            onChange={(event) => setEditor((prev) => ({ ...prev, location_id: event.target.value }))}
-          >
-            <option value="">Выберите филиал</option>
-            {locations.map((location) => (
-              <option key={location.id} value={location.id}>
-                {location.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="task-editor-fields">
+          <label>
+            Категория
+            <select
+              value={editor.category_id}
+              onChange={(event) => setEditor((prev) => ({ ...prev, category_id: event.target.value }))}
+            >
+              <option value="">Без категории</option>
+              {categoryOptions.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Филиал
+            <select
+              required
+              value={editor.location_id}
+              onChange={(event) => setEditor((prev) => ({ ...prev, location_id: event.target.value }))}
+            >
+              <option value="">Выберите филиал</option>
+              {locations.map((location) => (
+                <option key={location.id} value={location.id}>
+                  {location.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div className="field">
           <span>Клиент REGOS</span>
           {editor.client ? (
@@ -505,7 +610,60 @@ export default function TaskEditorModal({
             onChange={(event) => setEditor((prev) => ({ ...prev, notes: event.target.value }))}
           />
         </label>
-        <div className="filters-grid">
+        <div className="task-editor-plan">
+          <label>
+            Начало
+            <input
+              type="datetime-local"
+              value={editor.planned_start_at}
+              onChange={(event) => setEditor((prev) => withPlannedStart(prev, event.target.value))}
+            />
+          </label>
+          <label>
+            Время выполнения
+            <div className="task-duration-fields">
+              <input
+                type="number"
+                min={0}
+                max={999}
+                inputMode="numeric"
+                aria-label="Часы"
+                placeholder="0"
+                value={editor.duration_hours}
+                onChange={(event) =>
+                  setEditor((prev) =>
+                    withDuration(prev, sanitizeDurationHours(event.target.value), prev.duration_minutes),
+                  )
+                }
+              />
+              <span>ч</span>
+              <input
+                type="number"
+                min={0}
+                max={59}
+                inputMode="numeric"
+                aria-label="Минуты"
+                placeholder="00"
+                value={editor.duration_minutes}
+                onChange={(event) =>
+                  setEditor((prev) =>
+                    withDuration(prev, prev.duration_hours, sanitizeDurationMinutes(event.target.value)),
+                  )
+                }
+              />
+              <span>мин</span>
+            </div>
+          </label>
+          <label>
+            Ориентировочное окончание
+            <input
+              type="datetime-local"
+              value={editor.planned_finish_at}
+              onChange={(event) => setEditor((prev) => withPlannedFinish(prev, event.target.value))}
+            />
+          </label>
+        </div>
+        <div className="task-editor-fields">
           <label>
             Менеджер
             <select
@@ -539,6 +697,7 @@ export default function TaskEditorModal({
             </label>
           )}
         </div>
+        {scheduleWarning ? <p className="message warn">{scheduleWarning}</p> : null}
         {formError ? <p className="message error">{formError}</p> : null}
         <div className="form-actions">
           <button type="button" className="btn-secondary" onClick={onClose}>

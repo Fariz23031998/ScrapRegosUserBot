@@ -22,6 +22,18 @@ export type CreateFinancePaymentPayload = {
   note?: string;
   category_id?: number | null;
   location_id?: number | null;
+  created_at?: string;
+};
+
+export type UpdateFinancePaymentPayload = {
+  account_id?: number;
+  direction?: AccountPaymentDirection;
+  amount?: number;
+  currency?: "UZS" | "USD";
+  note?: string;
+  category_id?: number | null;
+  location_id?: number | null;
+  created_at?: string;
 };
 
 export function listFinanceAccounts() {
@@ -45,6 +57,16 @@ export function createFinancePayment(payload: CreateFinancePaymentPayload) {
     "/bot-admin/api/finances/payments",
     {
       method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function updateFinancePayment(id: number, payload: UpdateFinancePaymentPayload) {
+  return apiFetch<{ payment: AccountPayment; account: PaymentAccount }>(
+    `/bot-admin/api/finances/payments/${id}`,
+    {
+      method: "PUT",
       body: JSON.stringify(payload),
     },
   );

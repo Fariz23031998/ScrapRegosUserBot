@@ -145,12 +145,12 @@ function methodNotAllowed(_req, res) {
   return res.status(405).json({ message: 'Method Not Allowed' });
 }
 
-function createMcpRouter({ path: routePath = '/mcp', serverInfo, listTools, callTool } = {}) {
+function createMcpRouter({ path: routePath = '/mcp', serverInfo, listTools, callTool, jsonLimit = '1mb' } = {}) {
   const router = express.Router();
 
   router.get(routePath, methodNotAllowed);
   router.delete(routePath, methodNotAllowed);
-  router.post(routePath, express.json({ limit: '1mb' }), requireMcpAuth, async (req, res) => {
+  router.post(routePath, express.json({ limit: jsonLimit }), requireMcpAuth, async (req, res) => {
     try {
       const result = await handleJsonRpc(req.body, {
         serverInfo,

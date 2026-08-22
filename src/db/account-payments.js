@@ -174,6 +174,21 @@ function convertPaymentAmount(amount, currency, rate) {
   return { amount_uzs: roundMoney(amount), amount_usd: roundMoney(amount / rate) };
 }
 
+function sqliteUtcNow() {
+  return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function normalizePaymentCreatedAt(value) {
+  if (value == null || value === '') return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const date = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(raw)
+    ? new Date(raw.replace(' ', 'T') + 'Z')
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) throw new Error('INVALID_ACCOUNT_PAYMENT_CREATED_AT');
+  return date.toISOString().replace('T', ' ').slice(0, 19);
+}
+
 function getAccountPayment(db, id) {
   ensureAccountPaymentTables(db);
   const paymentId = Number(id);
@@ -214,6 +229,7 @@ function createAccountPayment(db, input = {}, { viewer } = {}) {
   const note = normalizePaymentNote(input.note);
   const categoryId = resolveCatalogCategoryId(db, 'finance', input.category_id);
   const locationId = resolveFinanceLocationId(db, input.location_id, viewer);
+  const createdAt = normalizePaymentCreatedAt(input.created_at) || sqliteUtcNow();
   const rate = getUsdUzsRate(db);
   const converted = convertPaymentAmount(amount, currency, rate);
   const createdBy = Number(input.created_by_user_id);
@@ -223,7 +239,7 @@ function createAccountPayment(db, input = {}, { viewer } = {}) {
          account_id, direction, amount, currency,
          amount_uzs, amount_usd, usd_uzs_rate,
          note, category_id, location_id, created_by_user_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       account.id,
@@ -236,10 +252,67 @@ function createAccountPayment(db, input = {}, { viewer } = {}) {
       note,
       categoryId,
       locationId,
-      Number.isFinite(createdBy) && createdBy > 0 ? createdBy : null
+      Number.isFinite(createdBy) && createdBy > 0 ? createdBy : null,
+      createdAt
     );
   recalculateAccountValue(db, account.id);
   return getAccountPayment(db, Number(result.lastInsertRowid));
+}
+
+function updateAccountPayment(db, id, input = {}, { viewer } = {}) {
+  ensureAccountPaymentTables(db);
+  const current = getAccountPayment(db, id);
+  if (!current) throw new Error('NOT_FOUND');
+  const account = getAccount(db, input.account_id != null && input.account_id !== '' ? input.account_id : current.account_id);
+  if (!account) throw new Error('INVALID_ACCOUNT_PAYMENT_ACCOUNT');
+  const direction =
+    input.direction != null && input.direction !== ''
+      ? normalizePaymentDirection(input.direction)
+      : current.direction;
+  const amount = input.amount != null && input.amount !== '' ? normalizePaymentAmount(input.amount) : current.amount;
+  const currency = normalizePaymentCurrency(
+    input.currency != null && input.currency !== '' ? input.currency : current.currency,
+    account.currency
+  );
+  const note = Object.prototype.hasOwnProperty.call(input, 'note') ? normalizePaymentNote(input.note) : current.note || null;
+  const categoryId = Object.prototype.hasOwnProperty.call(input, 'category_id')
+    ? resolveCatalogCategoryId(db, 'finance', input.category_id)
+    : current.category_id ?? null;
+  const locationId = Object.prototype.hasOwnProperty.call(input, 'location_id')
+    ? resolveFinanceLocationId(db, input.location_id, viewer)
+    : current.location_id ?? null;
+  const createdAt =
+    input.created_at != null && input.created_at !== ''
+      ? normalizePaymentCreatedAt(input.created_at)
+      : current.created_at;
+  const amountChanged = amount !== current.amount || currency !== current.currency;
+  const rate = amountChanged ? getUsdUzsRate(db) : Number(current.usd_uzs_rate) || getUsdUzsRate(db);
+  const converted = amountChanged
+    ? convertPaymentAmount(amount, currency, rate)
+    : { amount_uzs: current.amount_uzs, amount_usd: current.amount_usd };
+  db.prepare(
+    `UPDATE account_payments
+     SET account_id = ?, direction = ?, amount = ?, currency = ?,
+         amount_uzs = ?, amount_usd = ?, usd_uzs_rate = ?,
+         note = ?, category_id = ?, location_id = ?, created_at = ?
+     WHERE id = ?`
+  ).run(
+    account.id,
+    direction,
+    amount,
+    currency,
+    converted.amount_uzs,
+    converted.amount_usd,
+    rate,
+    note,
+    categoryId,
+    locationId,
+    createdAt,
+    current.id
+  );
+  recalculateAccountValue(db, current.account_id);
+  if (account.id !== current.account_id) recalculateAccountValue(db, account.id);
+  return getAccountPayment(db, current.id);
 }
 
 function deleteAccountPayment(db, id) {
@@ -267,6 +340,7 @@ module.exports = {
   listAccountPayments,
   getAccountPayment,
   createAccountPayment,
+  updateAccountPayment,
   deleteAccountPayment,
   countAccountPaymentsForAccount,
 };

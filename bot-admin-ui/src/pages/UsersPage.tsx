@@ -13,6 +13,7 @@ import {
   updateUser,
 } from "../api/admin";
 import EntityCards from "../components/EntityCards";
+import EmployeeScheduleEditor from "../components/EmployeeScheduleEditor";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
@@ -23,6 +24,14 @@ import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import type { BotUser, RegosUser, RightMeta } from "../lib/types";
+import {
+  editorDaysToSchedule,
+  formatScheduleSummary,
+  normalizeSchedule,
+  parseSchedule,
+  scheduleToEditorDays,
+  type ScheduleEditorDay,
+} from "../lib/employee-schedule";
 import { formatDateTime, phonesEqual } from "../lib/utils";
 
 type ModalMode = "create" | "edit" | "promote" | null;
@@ -60,6 +69,7 @@ export default function UsersPage() {
   const [selectedUser, setSelectedUser] = useState<BotUser | null>(null);
   const [regosUserId, setRegosUserId] = useState("");
   const [modalError, setModalError] = useState("");
+  const [scheduleDays, setScheduleDays] = useState<ScheduleEditorDay[]>(() => scheduleToEditorDays(null));
 
   const rightsQuery = useQuery({ queryKey: ["rights-meta"], queryFn: getRightsMeta });
   const regosQuery = useQuery({ queryKey: ["regos-users"], queryFn: listRegosUsers, enabled: modalMode != null });
@@ -127,6 +137,11 @@ export default function UsersPage() {
       },
       { id: "login", header: "Логин", accessorKey: "admin_login", cell: ({ getValue }) => getValue() || "—" },
       { id: "job_title", header: "Должность", accessorKey: "job_title", cell: ({ getValue }) => getValue() || "—" },
+      {
+        id: "schedule",
+        header: "График",
+        accessorFn: (row) => formatScheduleSummary(row.schedule),
+      },
       {
         id: "regos",
         header: "REGOS",
@@ -240,6 +255,7 @@ export default function UsersPage() {
     setModalMode(mode);
     setSelectedUser(user || null);
     setRegosUserId(user?.regos_user_id != null ? String(user.regos_user_id) : "");
+    setScheduleDays(scheduleToEditorDays(parseSchedule(user?.schedule)));
   }
 
   async function handleDelete(id: number) {
@@ -257,6 +273,7 @@ export default function UsersPage() {
       display_name: form.get("display_name"),
       job_title: form.get("job_title"),
       description: form.get("description"),
+      schedule: editorDaysToSchedule(scheduleDays),
       admin_login: String(form.get("admin_login") || "").trim(),
       rights: Object.fromEntries(
         rightsMeta.map((r) => [r.key, form.get(`right_${r.key}`) === "on"]),
@@ -266,6 +283,12 @@ export default function UsersPage() {
     else if (modalMode === "create" || modalMode === "promote") body.auto_link_regos = true;
     const password = String(form.get("password") || "");
     if (modalMode === "create" || modalMode === "promote" || password) body.password = password;
+    try {
+      normalizeSchedule(body.schedule);
+    } catch {
+      setModalError("Некорректный график работы. Укажите время начала и окончания в пределах одного дня.");
+      return;
+    }
 
     saveMutation.mutate({ mode: modalMode, body, userId: selectedUser?.id });
   }
@@ -391,6 +414,7 @@ export default function UsersPage() {
               role === "employee"
                 ? [
                     { label: "Логин", value: user.admin_login || "—" },
+                    { label: "График", value: formatScheduleSummary(user.schedule) },
                     {
                       label: "REGOS",
                       value: user.regos_user_id
@@ -471,6 +495,7 @@ export default function UsersPage() {
             Должность
             <input name="job_title" defaultValue={selectedUser?.job_title || ""} placeholder="Менеджер по продажам" />
           </label>
+          <EmployeeScheduleEditor days={scheduleDays} onChange={setScheduleDays} />
           <label>
             Описание для AI
             <textarea name="description" rows={3} defaultValue={selectedUser?.description || ""} />

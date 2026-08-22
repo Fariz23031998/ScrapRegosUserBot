@@ -26,6 +26,7 @@ const TechnicalSupportPage = lazy(() => import("./pages/TechnicalSupportPage"));
 const PricesPage = lazy(() => import("./pages/PricesPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
+const KnowledgeArticlePage = lazy(() => import("./pages/KnowledgeArticlePage"));
 const TestAgentsPage = lazy(() => import("./pages/TestAgentsPage"));
 const PromptsPage = lazy(() => import("./pages/PromptsPage"));
 
@@ -223,6 +224,14 @@ export default function App() {
               element={
                 <SuspensePage>
                   <KnowledgePage />
+                </SuspensePage>
+              }
+            />
+            <Route
+              path="knowledge/:id"
+              element={
+                <SuspensePage>
+                  <KnowledgeArticlePage />
                 </SuspensePage>
               }
             />

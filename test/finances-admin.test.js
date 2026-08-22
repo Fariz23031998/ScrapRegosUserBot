@@ -8,11 +8,12 @@ const express = require('express');
 
 const { createBotAdminRouter } = require('../src/admin/bot-admin');
 const { createAccount } = require('../src/db/accounts');
-const { createEmployeeUser } = require('../src/db/bot-users-db');
+const { createEmployeeUser, DEFAULT_RIGHTS } = require('../src/db/bot-users-db');
 const { createLocation } = require('../src/db/locations');
 const { listAdminAuditLogs } = require('../src/db/admin-audit-logs');
 const { openDb } = require('../src/db/partners-db');
 const { setUsdUzsRate } = require('../src/db/money');
+const { ADMIN_PERMISSION_KEYS, RIGHTS } = require('../src/db/user-rights');
 
 function makeTempDbPath() {
   return path.join(
@@ -387,5 +388,71 @@ describe('finances admin API', () => {
       body: { account_id: account.id, direction: 'in', amount: 1, location_id: 999999 },
     });
     assert.equal(badLocation.statusCode, 400);
+  });
+
+  it('exposes finances_edit permission', () => {
+    const cols = db.prepare('PRAGMA table_info(user_rights)').all();
+    assert.ok(RIGHTS.finances_edit);
+    assert.equal(DEFAULT_RIGHTS.finances_edit, 0);
+    assert.ok(ADMIN_PERMISSION_KEYS.includes('finances_edit'));
+    assert.ok(cols.some((col) => col.name === 'finances_edit'));
+  });
+
+  it('updates a payment with created_at and requires finances_edit', async () => {
+    const cookie = await login('admin', 'test-password');
+    const account = createAccount(db, { name: 'Касса правки', currency: 'UZS' });
+    const created = await request(server, 'POST', '/bot-admin/api/finances/payments', {
+      headers: { Cookie: cookie },
+      body: {
+        account_id: account.id,
+        direction: 'in',
+        amount: 8000,
+        created_at: '2024-03-10T12:00:00.000Z',
+      },
+    });
+    assert.equal(created.statusCode, 201);
+    const payment = JSON.parse(created.body).payment;
+    assert.equal(payment.created_at, '2024-03-10 12:00:00');
+
+    const updated = await request(server, 'PUT', `/bot-admin/api/finances/payments/${payment.id}`, {
+      headers: { Cookie: cookie },
+      body: {
+        account_id: account.id,
+        direction: 'out',
+        amount: 3000,
+        note: 'Исправление',
+        created_at: '2024-03-11T09:45:00.000Z',
+      },
+    });
+    assert.equal(updated.statusCode, 200);
+    const body = JSON.parse(updated.body);
+    assert.equal(body.payment.direction, 'out');
+    assert.equal(body.payment.amount, 3000);
+    assert.equal(body.payment.note, 'Исправление');
+    assert.equal(body.payment.created_at, '2024-03-11 09:45:00');
+    assert.equal(body.account.value, -3000);
+
+    const logs = listAdminAuditLogs(db, { limit: 20 });
+    assert.ok(logs.logs.map((row) => `${row.entity_type}:${row.action}`).includes('account_payment:update'));
+
+    const missing = await request(server, 'PUT', '/bot-admin/api/finances/payments/999999', {
+      headers: { Cookie: cookie },
+      body: { amount: 1 },
+    });
+    assert.equal(missing.statusCode, 404);
+
+    createEmployeeUser(db, {
+      phone: '+998901000085',
+      displayName: 'Без правки',
+      adminLogin: 'no-edit',
+      password: 'secret-secret',
+      rights: { open_admin_dashboard: 1, finances_read: 1, finances_create: 1 },
+    });
+    const noEditCookie = await login('no-edit', 'secret-secret');
+    const denied = await request(server, 'PUT', `/bot-admin/api/finances/payments/${payment.id}`, {
+      headers: { Cookie: noEditCookie },
+      body: { amount: 1 },
+    });
+    assert.equal(denied.statusCode, 403);
   });
 });

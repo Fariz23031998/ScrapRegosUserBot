@@ -188,6 +188,26 @@ describe('report jobs', () => {
     assert.equal(second.job.id, first.job.id);
   });
 
+  it('stores finance location and currency params', () => {
+    const actor = { type: 'user', userId: manager.id };
+    const { job, created } = createOrReuseReportJob(db, {
+      type: 'finance',
+      input: {
+        from_date: period.fromUnix,
+        to_date: period.toUnix,
+        location_id: 12,
+        currency: 'USD',
+      },
+      actor,
+    });
+    assert.equal(created, true);
+    assert.equal(job.params.location_id, 12);
+    assert.equal(job.params.currency, 'USD');
+    const presented = presentReportJob(job);
+    assert.equal(presented.params.location_id, 12);
+    assert.equal(presented.params.currency, 'USD');
+  });
+
   it('isolates jobs by owner', () => {
     const alice = { type: 'user', userId: manager.id };
     const bob = { type: 'user', userId: technician.id };

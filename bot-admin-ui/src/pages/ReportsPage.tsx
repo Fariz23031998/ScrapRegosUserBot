@@ -1,8 +1,9 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { listFinanceLocations } from "../api/finances";
 import { createReportJob, deleteReportJob, listReportJobs, reportJobPath, type ReportJob } from "../api/reports";
 import filterFunnelIcon from "../assets/filter-funnel.png";
 import EntityCards from "../components/EntityCards";
@@ -113,6 +114,13 @@ export default function ReportsPage() {
 
   const filtersActive = filtersHaveAdvancedValues(filters, tab, ticketPeriodDays);
   const showTicketFilters = tab === "technician";
+  const showFinanceFilters = tab === "finance";
+  const locationsQuery = useQuery({
+    queryKey: ["finance-locations"],
+    queryFn: listFinanceLocations,
+    enabled: showFinanceFilters,
+  });
+  const locations = locationsQuery.data?.locations || [];
   const jobs = jobsQuery.items;
   const isCreating = createMutation.isPending;
   const errorMessage =
@@ -159,7 +167,7 @@ export default function ReportsPage() {
   }
 
   return (
-    <section className="card tickets-page">
+    <section className="card tickets-page page--reports">
       {errorMessage ? <p className="message error">{errorMessage}</p> : null}
 
       <div className="tickets-sticky-head" ref={stickyHeadRef}>
@@ -180,6 +188,8 @@ export default function ReportsPage() {
               setFilters={setFilters}
               onOpenPeriod={() => setPeriodOpen(true)}
               showTicketFilters={showTicketFilters}
+              showFinanceFilters={showFinanceFilters}
+              locations={locations}
               showActions
               onRefresh={() => void jobsQuery.refetch()}
               refreshing={isCreating || jobsQuery.isFetching}
@@ -224,6 +234,8 @@ export default function ReportsPage() {
               setFilters={setFilters}
               onOpenPeriod={() => setPeriodOpen(true)}
               showTicketFilters={showTicketFilters}
+              showFinanceFilters={showFinanceFilters}
+              locations={locations}
             />
           </div>
           <div className="ticket-filters-modal__actions">

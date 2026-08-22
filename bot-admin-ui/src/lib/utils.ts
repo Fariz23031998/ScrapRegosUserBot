@@ -67,6 +67,32 @@ export function formatDateTime(value: unknown): string {
   return formatDateObject(date);
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+export function toDatetimeLocalInput(value: unknown): string {
+  if (value == null || value === "") return "";
+  const date =
+    value instanceof Date
+      ? value
+      : new Date(
+          String(value).includes("T")
+            ? String(value)
+            : `${String(value).replace(" ", "T")}${String(value).includes("Z") ? "" : "Z"}`,
+        );
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+
+export function datetimeLocalToIso(value: string): string | undefined {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return undefined;
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
 export function formatAmount(amount: unknown): string {
   if (amount == null) return "—";
   return `${Number(amount).toLocaleString("ru-RU")} сум`;

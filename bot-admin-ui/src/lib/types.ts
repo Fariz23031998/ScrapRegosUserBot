@@ -1,3 +1,5 @@
+import type { WeekSchedule } from "./employee-schedule";
+
 export type Permissions = Record<string, boolean>;
 
 export type SessionActor = {
@@ -50,6 +52,7 @@ export type BotUser = {
   role?: string;
   job_title?: string | null;
   description?: string | null;
+  schedule?: WeekSchedule | null;
 };
 
 export type AiGroupTopic = {
@@ -263,6 +266,7 @@ export type KnowledgeArticle = {
   updated_by?: number | null;
   created_at?: string;
   updated_at?: string;
+  images?: Array<{ id: number; url: string; original_name?: string; mime?: string }>;
 };
 
 export type AgentChatFile = {
@@ -863,6 +867,7 @@ export type TaskEmployee = {
   display_name?: string | null;
   phone?: string | null;
   job_title?: string | null;
+  schedule?: WeekSchedule | null;
 };
 
 export type TaskClient = {
@@ -1053,6 +1058,8 @@ export type FieldTask = {
   technician_user_id?: number | null;
   technician?: { id: number; name: string } | null;
   currency?: "UZS" | "USD" | null;
+  planned_start_at?: string | null;
+  planned_finish_at?: string | null;
   devices: TaskDeviceLine[];
   services?: TaskServiceLine[];
   totals?: TaskMoneyTotals;

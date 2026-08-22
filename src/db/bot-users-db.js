@@ -2,6 +2,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { usersPhonesPath } = require('../paths');
 const { logOrderEvent } = require('./order-logs');
+const { parseSchedule, serializeSchedule } = require('../lib/employee-schedule');
 
 const ADMIN_PASSWORD_HASH_PREFIX = 'scrypt';
 const ADMIN_PASSWORD_KEYLEN = 64;
@@ -47,6 +48,7 @@ const DEFAULT_RIGHTS = {
   settings_edit: 0,
   finances_read: 0,
   finances_create: 0,
+  finances_edit: 0,
   finances_delete: 0,
   knowledge_read: 0,
   knowledge_edit: 0,
@@ -107,6 +109,7 @@ const ADMIN_RIGHTS_COLUMNS = [
   'settings_edit',
   'finances_read',
   'finances_create',
+  'finances_edit',
   'finances_delete',
   'knowledge_read',
   'knowledge_edit',
@@ -285,6 +288,14 @@ function ensureEmployeeProfileColumns(db) {
   if (!columnExists(db, 'bot_users', 'description')) {
     db.exec('ALTER TABLE bot_users ADD COLUMN description TEXT');
   }
+  if (!columnExists(db, 'bot_users', 'schedule')) {
+    db.exec('ALTER TABLE bot_users ADD COLUMN schedule TEXT');
+  }
+}
+
+function presentBotUser(user) {
+  if (!user) return user;
+  return { ...user, schedule: parseSchedule(user.schedule) };
 }
 
 function finishBotUsersMigration(db) {
@@ -670,7 +681,7 @@ function applyEmployeeAdminCredentials(db, userId, { adminLogin, password } = {}
   );
 }
 
-function createEmployeeUser(db, { phone, displayName, jobTitle, description, rights = {}, adminLogin, password } = {}) {
+function createEmployeeUser(db, { phone, displayName, jobTitle, description, schedule, rights = {}, adminLogin, password } = {}) {
   ensureEmployeeProfileColumns(db);
   const normalized = normalizeStoredPhone(phone);
   const existing = findUserByPhone(db, normalized);
@@ -685,17 +696,19 @@ function createEmployeeUser(db, { phone, displayName, jobTitle, description, rig
   if (!login && password !== undefined && String(password) !== '') {
     throw new Error('LOGIN_REQUIRED');
   }
+  const storedSchedule = serializeSchedule(schedule);
 
   const result = db
     .prepare(
-      `INSERT INTO bot_users (phone, role, display_name, job_title, description, admin_login, password_hash)
-       VALUES (?, 'employee', ?, ?, ?, ?, ?)`
+      `INSERT INTO bot_users (phone, role, display_name, job_title, description, schedule, admin_login, password_hash)
+       VALUES (?, 'employee', ?, ?, ?, ?, ?, ?)`
     )
     .run(
       normalized,
       displayName?.trim() || null,
       jobTitle?.trim() || null,
       description?.trim() || null,
+      storedSchedule,
       login,
       login ? hashAdminPassword(password) : null
     );
@@ -704,7 +717,7 @@ function createEmployeeUser(db, { phone, displayName, jobTitle, description, rig
   return getEmployeeWithRights(db, userId);
 }
 
-function updateEmployeeUser(db, userId, { phone, displayName, jobTitle, description, rights, adminLogin, password } = {}) {
+function updateEmployeeUser(db, userId, { phone, displayName, jobTitle, description, schedule, rights, adminLogin, password } = {}) {
   ensureEmployeeProfileColumns(db);
   const user = getBotUserById(db, userId);
   if (!user || user.role !== 'employee') {
@@ -731,6 +744,10 @@ function updateEmployeeUser(db, userId, { phone, displayName, jobTitle, descript
     db.prepare('UPDATE bot_users SET description = ? WHERE id = ?').run(description?.trim() || null, userId);
   }
 
+  if (schedule !== undefined) {
+    db.prepare('UPDATE bot_users SET schedule = ? WHERE id = ?').run(serializeSchedule(schedule), userId);
+  }
+
   applyEmployeeAdminCredentials(db, userId, { adminLogin, password });
 
   if (rights) {
@@ -740,7 +757,7 @@ function updateEmployeeUser(db, userId, { phone, displayName, jobTitle, descript
   return getEmployeeWithRights(db, userId);
 }
 
-function convertCustomerToEmployee(db, userId, { displayName, jobTitle, description, rights = {}, adminLogin, password } = {}) {
+function convertCustomerToEmployee(db, userId, { displayName, jobTitle, description, schedule, rights = {}, adminLogin, password } = {}) {
   ensureEmployeeProfileColumns(db);
   const user = getBotUserById(db, userId);
   if (!user) {
@@ -756,8 +773,14 @@ function convertCustomerToEmployee(db, userId, { displayName, jobTitle, descript
       : [user.first_name, user.last_name].filter(Boolean).join(' ').trim() || null;
 
   db.prepare(
-    "UPDATE bot_users SET role = 'employee', display_name = ?, job_title = ?, description = ? WHERE id = ?"
-  ).run(name, jobTitle?.trim() || null, description?.trim() || null, userId);
+    "UPDATE bot_users SET role = 'employee', display_name = ?, job_title = ?, description = ?, schedule = ? WHERE id = ?"
+  ).run(
+    name,
+    jobTitle?.trim() || null,
+    description?.trim() || null,
+    serializeSchedule(schedule),
+    userId
+  );
   applyEmployeeAdminCredentials(db, userId, { adminLogin, password }, { requirePair: true });
   upsertUserRights(db, userId, { ...DEFAULT_RIGHTS, ...rights });
   return getEmployeeWithRights(db, userId);
@@ -845,11 +868,11 @@ function setBotUserRegosClientId(db, userId, regosClientId) {
 function getEmployeeWithRights(db, userId) {
   const user = getBotUserById(db, userId);
   if (!user) return null;
-  return {
+  return presentBotUser({
     ...user,
     rights: getUserRights(db, userId),
     is_linked: user.telegram_id != null,
-  };
+  });
 }
 
 function userMatchesQuery(user, query) {
@@ -903,11 +926,13 @@ function listBotUsers(db, { role, query, offset = 0, limit } = {}) {
   const pageUsers = users.slice(safeOffset, safeOffset + safeLimit);
 
   return {
-    users: pageUsers.map((user) => ({
-      ...user,
-      rights: user.role === 'employee' ? getUserRights(db, user.id) : null,
-      is_linked: user.telegram_id != null,
-    })),
+    users: pageUsers.map((user) =>
+      presentBotUser({
+        ...user,
+        rights: user.role === 'employee' ? getUserRights(db, user.id) : null,
+        is_linked: user.telegram_id != null,
+      })
+    ),
     total,
   };
 }

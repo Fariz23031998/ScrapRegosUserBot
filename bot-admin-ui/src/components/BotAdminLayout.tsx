@@ -84,6 +84,7 @@ export default function BotAdminLayout() {
   const hideCompactNavButton =
     /^\/tickets(\/|$)/.test(location.pathname) ||
     /^\/tasks(\/|$)/.test(location.pathname) ||
+    /^\/knowledge\/\d+/.test(location.pathname) ||
     /^\/(devices|services|repair-returns)\/?$/.test(location.pathname);
   const toggleNav = useCallback(() => setNavVisible((value) => !value), []);
   const shellContext = useMemo<AdminShellContextValue>(

@@ -94,6 +94,7 @@ describe('knowledge MCP HTTP', () => {
   let db;
   let server;
   let previousEnv;
+  let imagesDir;
 
   before(() => {
     previousEnv = {
@@ -101,9 +102,12 @@ describe('knowledge MCP HTTP', () => {
       MCP_KNOWLEDGE_READONLY: process.env.MCP_KNOWLEDGE_READONLY,
       BOT_ADMIN_LOGIN: process.env.BOT_ADMIN_LOGIN,
       BOT_ADMIN_PASSWORD: process.env.BOT_ADMIN_PASSWORD,
+      KNOWLEDGE_IMAGES_DIR: process.env.KNOWLEDGE_IMAGES_DIR,
     };
     process.env.BOT_ADMIN_LOGIN = 'admin';
     process.env.BOT_ADMIN_PASSWORD = 'test-password';
+    imagesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrapregos-knowledge-mcp-images-'));
+    process.env.KNOWLEDGE_IMAGES_DIR = imagesDir;
   });
 
   after(() => {
@@ -111,6 +115,7 @@ describe('knowledge MCP HTTP', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    if (imagesDir) fs.rmSync(imagesDir, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
@@ -217,6 +222,8 @@ describe('knowledge MCP HTTP', () => {
       'knowledge_create',
       'knowledge_update',
       'knowledge_delete',
+      'knowledge_add_screenshot',
+      'knowledge_delete_screenshot',
       'knowledge_create_category',
       'knowledge_update_category',
       'knowledge_delete_category',
@@ -280,6 +287,7 @@ describe('knowledge MCP HTTP', () => {
     assert.equal(gotPayload.isError, false);
     assert.equal(gotPayload.data.article.id, created.data.article.id);
     assert.match(gotPayload.data.article.body, /MCP HTTP endpoint/);
+    assert.deepEqual(gotPayload.data.article.images, []);
 
     const roundTripSearch = await callMcp(
       mcpRpc(4, 'tools/call', {
@@ -406,6 +414,73 @@ describe('knowledge MCP HTTP', () => {
     assert.equal(updatedPayload.isError, false);
     assert.equal(updatedPayload.data.article.category_id, null);
     assert.equal(updatedPayload.data.article.category, null);
+  });
+
+  it('adds and deletes screenshots', async () => {
+    const create = await callMcp(
+      mcpRpc(1, 'tools/call', {
+        name: 'knowledge_create',
+        arguments: {
+          title: 'Article with screenshot',
+          body: 'UI steps.',
+          tags: 'screenshot',
+        },
+      })
+    );
+    const created = parseToolPayload(create);
+    assert.equal(created.isError, false);
+    const articleId = created.data.article.id;
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+    const missing = await callMcp(
+      mcpRpc(2, 'tools/call', {
+        name: 'knowledge_add_screenshot',
+        arguments: { article_id: articleId },
+      })
+    );
+    const missingPayload = parseToolPayload(missing);
+    assert.equal(missingPayload.isError, true);
+
+    const localhost = await callMcp(
+      mcpRpc(3, 'tools/call', {
+        name: 'knowledge_add_screenshot',
+        arguments: { article_id: articleId, url: 'http://127.0.0.1/secret.png' },
+      })
+    );
+    const localhostPayload = parseToolPayload(localhost);
+    assert.equal(localhostPayload.isError, true);
+    assert.equal(localhostPayload.data.code, 'INVALID_IMAGE_URL');
+
+    const added = await callMcp(
+      mcpRpc(4, 'tools/call', {
+        name: 'knowledge_add_screenshot',
+        arguments: {
+          article_id: articleId,
+          data_base64: png,
+          filename: 'ui.png',
+          alt: 'Главный экран',
+        },
+      })
+    );
+    const addedPayload = parseToolPayload(added);
+    assert.equal(addedPayload.isError, false);
+    assert.ok(addedPayload.data.image.id);
+    assert.match(addedPayload.data.markdown, /!\[Главный экран\]\(/);
+    assert.match(addedPayload.data.article.body, /!\[Главный экран\]\(/);
+    assert.equal(addedPayload.data.article.images.length, 1);
+
+    const imageId = addedPayload.data.image.id;
+    const removed = await callMcp(
+      mcpRpc(5, 'tools/call', {
+        name: 'knowledge_delete_screenshot',
+        arguments: { article_id: articleId, image_id: imageId },
+      })
+    );
+    const removedPayload = parseToolPayload(removed);
+    assert.equal(removedPayload.isError, false);
+    assert.equal(removedPayload.data.article.images.length, 0);
+    assert.doesNotMatch(removedPayload.data.article.body, /Главный экран/);
   });
 
   it('rejects update and delete of locked articles', async () => {

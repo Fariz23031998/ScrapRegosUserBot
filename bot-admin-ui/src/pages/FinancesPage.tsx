@@ -2,7 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import {
   createFinanceCategory,
   createFinancePayment,
@@ -13,6 +13,7 @@ import {
   listFinanceLocations,
   listFinancePayments,
   updateFinanceCategory,
+  updateFinancePayment,
 } from "../api/finances";
 import CatalogCategoryManager from "../components/CatalogCategoryManager";
 import EntityCards from "../components/EntityCards";
@@ -31,15 +32,18 @@ import type {
   PaymentAccount,
   TaskLocation,
 } from "../lib/types";
-import { formatDateTime, matchesSearch } from "../lib/utils";
+import { datetimeLocalToIso, formatDateTime, matchesSearch, toDatetimeLocalInput } from "../lib/utils";
 
 type PaymentEditor = {
+  id?: number;
   account_id: string;
+  direction: AccountPaymentDirection;
   amount: string;
   currency: MoneyCurrency;
   note: string;
   category_id: string;
   location_id: string;
+  created_at: string;
 };
 
 function directionLabel(direction: AccountPaymentDirection): string {
@@ -142,6 +146,7 @@ export default function FinancesPage() {
   const queryClient = useQueryClient();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const canCreate = hasPermission("finances_create");
+  const canEdit = hasPermission("finances_edit");
   const canDelete = hasPermission("finances_delete");
   const [search, setSearch] = useState("");
   const [accountId, setAccountId] = useState("");
@@ -154,15 +159,7 @@ export default function FinancesPage() {
   const [appliedLocationId, setAppliedLocationId] = useState("");
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
-  const [createDirection, setCreateDirection] = useState<AccountPaymentDirection | null>(null);
-  const [editor, setEditor] = useState<PaymentEditor>({
-    account_id: "",
-    amount: "",
-    currency: "UZS",
-    note: "",
-    category_id: "",
-    location_id: "",
-  });
+  const [editor, setEditor] = useState<PaymentEditor | null>(null);
   const [formError, setFormError] = useState("");
   const [listError, setListError] = useState("");
 
@@ -193,21 +190,37 @@ export default function FinancesPage() {
   const categories = categoriesQuery.data?.categories || [];
   const locations = locationsQuery.data?.locations || [];
   const payments = paymentsQuery.data?.payments || [];
-  const selectedAccount = accounts.find((item) => String(item.id) === editor.account_id);
+  const selectedAccount = accounts.find((item) => String(item.id) === editor?.account_id);
 
   function openCreate(nextDirection: AccountPaymentDirection) {
     const presetId = appliedAccountId || (accounts[0] ? String(accounts[0].id) : "");
     const account = accounts.find((item) => String(item.id) === presetId) || accounts[0] || null;
     setEditor({
       account_id: account ? String(account.id) : "",
+      direction: nextDirection,
       amount: "",
       currency: accountCurrency(account),
       note: "",
       category_id: appliedCategoryId && appliedCategoryId !== "none" ? appliedCategoryId : "",
       location_id: appliedLocationId && appliedLocationId !== "none" ? appliedLocationId : "",
+      created_at: toDatetimeLocalInput(new Date()),
     });
     setFormError("");
-    setCreateDirection(nextDirection);
+  }
+
+  function openEdit(payment: AccountPayment) {
+    setEditor({
+      id: payment.id,
+      account_id: String(payment.account_id),
+      direction: payment.direction,
+      amount: String(payment.amount),
+      currency: parseDisplayCurrency(payment.currency) || "UZS",
+      note: payment.note || "",
+      category_id: payment.category_id ? String(payment.category_id) : "",
+      location_id: payment.location_id ? String(payment.location_id) : "",
+      created_at: toDatetimeLocalInput(payment.created_at) || toDatetimeLocalInput(new Date()),
+    });
+    setFormError("");
   }
 
   function invalidateFinances() {
@@ -218,18 +231,23 @@ export default function FinancesPage() {
   }
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      createFinancePayment({
+    mutationFn: () => {
+      if (!editor) return Promise.reject(new Error("Форма не открыта."));
+      const payload = {
         account_id: Number(editor.account_id),
-        direction: createDirection || "in",
+        direction: editor.direction,
         amount: Number(editor.amount),
         currency: editor.currency,
         note: editor.note.trim() || undefined,
         category_id: editor.category_id ? Number(editor.category_id) : null,
         location_id: editor.location_id ? Number(editor.location_id) : null,
-      }),
+        created_at: datetimeLocalToIso(editor.created_at),
+      };
+      if (editor.id) return updateFinancePayment(editor.id, payload);
+      return createFinancePayment(payload);
+    },
     onSuccess: () => {
-      setCreateDirection(null);
+      setEditor(null);
       invalidateFinances();
     },
     onError: (error: Error) => setFormError(error.message),
@@ -266,18 +284,31 @@ export default function FinancesPage() {
   }
 
   function paymentActions(payment: AccountPayment): ReactNode {
-    if (!canDelete) return null;
+    if (!canEdit && !canDelete) return null;
     return (
       <div className="cell-actions">
-        <button
-          type="button"
-          className="btn-danger btn-icon btn-sm"
-          aria-label="Удалить"
-          title="Удалить"
-          onClick={() => void handleDelete(payment)}
-        >
-          <Trash2 size={15} aria-hidden="true" />
-        </button>
+        {canEdit ? (
+          <button
+            type="button"
+            className="btn-secondary btn-icon btn-sm"
+            aria-label="Изменить"
+            title="Изменить"
+            onClick={() => openEdit(payment)}
+          >
+            <Pencil size={15} aria-hidden="true" />
+          </button>
+        ) : null}
+        {canDelete ? (
+          <button
+            type="button"
+            className="btn-danger btn-icon btn-sm"
+            aria-label="Удалить"
+            title="Удалить"
+            onClick={() => void handleDelete(payment)}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -352,7 +383,7 @@ export default function FinancesPage() {
         cell: ({ row }) => paymentActions(row.original),
       },
     ],
-    [canDelete, dateTimeFormat],
+    [canEdit, canDelete, dateTimeFormat],
   );
 
   function applyFilters() {
@@ -522,15 +553,23 @@ export default function FinancesPage() {
       </div>
 
       <Modal
-        open={createDirection != null}
-        title={createDirection === "out" ? "Расход" : "Приход"}
-        onClose={() => setCreateDirection(null)}
+        open={editor != null}
+        title={
+          editor?.id
+            ? editor.direction === "out"
+              ? "Изменить расход"
+              : "Изменить приход"
+            : editor?.direction === "out"
+              ? "Расход"
+              : "Приход"
+        }
+        onClose={() => setEditor(null)}
       >
         {!accounts.length ? (
           <p className="empty-state">
             Счетов нет. Добавьте их в <Link to="/settings">настройках</Link>.
           </p>
-        ) : (
+        ) : editor ? (
           <form
             className="stack-form"
             onSubmit={(event) => {
@@ -544,10 +583,29 @@ export default function FinancesPage() {
                 setFormError("Укажите сумму больше 0.");
                 return;
               }
+              if (!editor.created_at || !datetimeLocalToIso(editor.created_at)) {
+                setFormError("Укажите корректную дату платежа.");
+                return;
+              }
               setFormError("");
               saveMutation.mutate();
             }}
           >
+            <label>
+              Тип
+              <select
+                required
+                value={editor.direction}
+                onChange={(event) =>
+                  setEditor((prev) =>
+                    prev ? { ...prev, direction: event.target.value as AccountPaymentDirection } : prev,
+                  )
+                }
+              >
+                <option value="in">Приход</option>
+                <option value="out">Расход</option>
+              </select>
+            </label>
             <label>
               Счёт
               <select
@@ -555,11 +613,15 @@ export default function FinancesPage() {
                 value={editor.account_id}
                 onChange={(event) => {
                   const next = accounts.find((item) => String(item.id) === event.target.value);
-                  setEditor((prev) => ({
-                    ...prev,
-                    account_id: event.target.value,
-                    currency: accountCurrency(next),
-                  }));
+                  setEditor((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          account_id: event.target.value,
+                          currency: accountCurrency(next),
+                        }
+                      : prev,
+                  );
                 }}
               >
                 <option value="">Выберите счёт</option>
@@ -574,7 +636,9 @@ export default function FinancesPage() {
               Категория
               <select
                 value={editor.category_id}
-                onChange={(event) => setEditor((prev) => ({ ...prev, category_id: event.target.value }))}
+                onChange={(event) =>
+                  setEditor((prev) => (prev ? { ...prev, category_id: event.target.value } : prev))
+                }
               >
                 <option value="">Без категории</option>
                 {categories.map((category) => (
@@ -588,7 +652,9 @@ export default function FinancesPage() {
               Филиал
               <select
                 value={editor.location_id}
-                onChange={(event) => setEditor((prev) => ({ ...prev, location_id: event.target.value }))}
+                onChange={(event) =>
+                  setEditor((prev) => (prev ? { ...prev, location_id: event.target.value } : prev))
+                }
               >
                 <option value="">Без филиала</option>
                 {locations.map((location) => (
@@ -607,7 +673,9 @@ export default function FinancesPage() {
                 step="any"
                 disabled={!editor.account_id}
                 value={editor.amount}
-                onChange={(event) => setEditor((prev) => ({ ...prev, amount: event.target.value }))}
+                onChange={(event) =>
+                  setEditor((prev) => (prev ? { ...prev, amount: event.target.value } : prev))
+                }
               />
             </label>
             <label>
@@ -616,10 +684,14 @@ export default function FinancesPage() {
                 value={editor.currency}
                 disabled={!editor.account_id}
                 onChange={(event) =>
-                  setEditor((prev) => ({
-                    ...prev,
-                    currency: parseDisplayCurrency(event.target.value) || "UZS",
-                  }))
+                  setEditor((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          currency: parseDisplayCurrency(event.target.value) || "UZS",
+                        }
+                      : prev,
+                  )
                 }
               >
                 <option value="UZS">UZS</option>
@@ -627,24 +699,40 @@ export default function FinancesPage() {
               </select>
             </label>
             <label>
+              Дата
+              <input
+                required
+                type="datetime-local"
+                step={1}
+                value={editor.created_at}
+                onChange={(event) =>
+                  setEditor((prev) => (prev ? { ...prev, created_at: event.target.value } : prev))
+                }
+              />
+            </label>
+            <label>
               Комментарий
               <input
                 maxLength={500}
                 value={editor.note}
-                onChange={(event) => setEditor((prev) => ({ ...prev, note: event.target.value }))}
+                onChange={(event) => setEditor((prev) => (prev ? { ...prev, note: event.target.value } : prev))}
               />
             </label>
             {formError ? <p className="message error">{formError}</p> : null}
             <div className="form-actions">
-              <button type="button" className="btn-secondary" onClick={() => setCreateDirection(null)}>
+              <button type="button" className="btn-secondary" onClick={() => setEditor(null)}>
                 Отмена
               </button>
               <button type="submit" className="btn-primary" disabled={saveMutation.isPending}>
-                {createDirection === "out" ? "Провести расход" : "Провести приход"}
+                {editor.id
+                  ? "Сохранить"
+                  : editor.direction === "out"
+                    ? "Провести расход"
+                    : "Провести приход"}
               </button>
             </div>
           </form>
-        )}
+        ) : null}
       </Modal>
 
       <CatalogCategoryManager

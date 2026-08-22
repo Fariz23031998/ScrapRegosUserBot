@@ -149,6 +149,10 @@ const RIGHTS = {
     column: 'finances_create',
     label: 'Админ: финансы — создание',
   },
+  finances_edit: {
+    column: 'finances_edit',
+    label: 'Админ: финансы — изменение',
+  },
   finances_delete: {
     column: 'finances_delete',
     label: 'Админ: финансы — удаление',
@@ -296,6 +300,7 @@ const ADMIN_PERMISSION_KEYS = [
   'settings_edit',
   'finances_read',
   'finances_create',
+  'finances_edit',
   'finances_delete',
   'knowledge_read',
   'knowledge_edit',
