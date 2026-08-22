@@ -981,7 +981,7 @@ export default function TaskDetailPage() {
     const currentQty = inTaskQty.get(productKey(product)) || 0;
     if (currentQty >= MAX_LINE_QUANTITY) return;
     if (product.kind === "device") {
-      const action = task?.action || "install";
+      const action = task?.action === "repair" || task?.action === "sale" ? task.action : "install";
       setAddingKey(productKey(product));
       addDeviceMutation.mutate({ device_id: product.id, action });
       return;

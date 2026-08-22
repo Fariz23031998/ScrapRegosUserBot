@@ -178,7 +178,7 @@ export function filtersFromParams(params: StoredReportParams | undefined, period
     withoutDuplicates: Boolean(params?.without_duplicates),
     duplicateInterval:
       params?.duplicate_interval_minutes != null ? String(params.duplicate_interval_minutes) : base.duplicateInterval,
-    locationId: params?.location_id == null || params.location_id === "" ? "" : String(params.location_id),
+    locationId: params?.location_id == null ? "" : String(params.location_id),
     currency: parseDisplayCurrency(params?.currency) || "",
   };
 }
