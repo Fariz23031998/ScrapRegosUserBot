@@ -14,6 +14,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   confirmKnowledgeArticle,
   deleteKnowledgeArticle,
+  deleteKnowledgeImage,
   getKnowledgeArticle,
   listKnowledgeCategories,
   lockKnowledgeArticle,
@@ -23,6 +24,7 @@ import {
   uploadKnowledgeImages,
 } from "../api/ai";
 import KnowledgeArticleEditor from "../components/KnowledgeArticleEditor";
+import KnowledgeImageList from "../components/KnowledgeImageList";
 import LoadingState from "../components/LoadingState";
 import MarkdownPreview from "../components/MarkdownPreview";
 import Modal from "../components/Modal";
@@ -70,6 +72,7 @@ export default function KnowledgeArticlePage() {
   const [editorPreview, setEditorPreview] = useState(false);
   const [formError, setFormError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [deletingImage, setDeletingImage] = useState(false);
 
   const articleQuery = useQuery({
     queryKey: ["knowledge-article", articleId],
@@ -153,6 +156,28 @@ export default function KnowledgeArticlePage() {
       setFormError((error as Error).message);
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleDeleteImage(imageId: number) {
+    if (!editor?.id || editor.locked) return;
+    const ok = await confirm({
+      message: "Удалить скриншот из статьи?",
+      variant: "danger",
+      confirmLabel: "Удалить",
+    });
+    if (!ok) return;
+    setFormError("");
+    setDeletingImage(true);
+    try {
+      const data = await deleteKnowledgeImage(editor.id, imageId);
+      setEditor(data.article);
+      queryClient.setQueryData(["knowledge-article", articleId], data);
+      invalidateArticle();
+    } catch (error) {
+      setFormError((error as Error).message);
+    } finally {
+      setDeletingImage(false);
     }
   }
 
@@ -278,6 +303,11 @@ export default function KnowledgeArticlePage() {
       <div className="card knowledge-article-body">
         <MarkdownPreview source={article.body} className="markdown-preview--article" />
       </div>
+      {article.images?.length ? (
+        <div className="card knowledge-article-images">
+          <KnowledgeImageList images={article.images} canEdit={false} />
+        </div>
+      ) : null}
 
       <Modal
         open={editor != null}
@@ -295,12 +325,14 @@ export default function KnowledgeArticlePage() {
             formError={formError}
             saving={saveArticle.isPending}
             uploading={uploading}
+            deletingImage={deletingImage}
             pendingFiles={[]}
             editorPreview={editorPreview}
             onChange={(updater) => setEditor((prev) => (prev ? updater(prev) : prev))}
             onPreviewToggle={() => setEditorPreview((prev) => !prev)}
             onPendingFilesChange={() => undefined}
             onUpload={(files) => void handleUpload(files)}
+            onDeleteImage={(imageId) => void handleDeleteImage(imageId)}
             onClose={() => {
               setEditor(null);
               setEditorPreview(false);

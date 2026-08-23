@@ -473,6 +473,7 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId,
       )
       .all(...filter.params, safeLimit, safeOffset)
       .map(mapArticle);
+    attachKnowledgeImages(db, articles);
     return { articles, total };
   }
 
@@ -500,7 +501,9 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId,
             const article = mapArticle(row);
             return { article, score: scoreArticleAgainstTokens(article, scoreTokens) };
           });
-          return pageScoredArticles(scored, { limit: safeLimit, offset: safeOffset });
+          const paged = pageScoredArticles(scored, { limit: safeLimit, offset: safeOffset });
+          attachKnowledgeImages(db, paged.articles);
+          return paged;
         }
       }
       // Empty FTS hit — fall through to tokenized scoring (never return empty solely on FTS AND/OR miss).
@@ -509,13 +512,15 @@ function listKnowledgeArticles(db, { query, limit = 100, offset = 0, categoryId,
     }
   }
 
-  return searchArticlesByTokens(db, {
+  const searched = searchArticlesByTokens(db, {
     queryTokens: queryTokens.length ? queryTokens : matchTokens,
     limit: safeLimit,
     offset: safeOffset,
     categoryId,
     confirmedOnly,
   });
+  attachKnowledgeImages(db, searched.articles);
+  return searched;
 }
 
 function getKnowledgeArticle(db, id, { confirmedOnly = false } = {}) {

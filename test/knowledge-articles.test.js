@@ -29,6 +29,12 @@ const {
   updateKnowledgeArticle,
   updateKnowledgeCategory,
 } = require('../src/db/knowledge-articles');
+const { addKnowledgeImage } = require('../src/db/knowledge-images');
+
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64'
+);
 
 function makeTempDbPath() {
   return path.join(
@@ -208,6 +214,36 @@ describe('knowledge article lock', () => {
     assert.equal(updated.title, 'Changed');
     assert.equal(deleteKnowledgeArticle(db, created.id), true);
     assert.equal(getKnowledgeArticle(db, created.id), null);
+  });
+
+  it('includes images on listed articles after upload', () => {
+    const previousImagesDir = process.env.KNOWLEDGE_IMAGES_DIR;
+    const imagesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrapregos-kb-list-images-'));
+    process.env.KNOWLEDGE_IMAGES_DIR = imagesDir;
+    try {
+      const article = createKnowledgeArticle(db, {
+        title: 'Listed with image',
+        body: 'Has a screenshot',
+        tags: 'img,list',
+      });
+      const image = addKnowledgeImage(db, article.id, { buffer: PNG_1X1, originalName: 'ui.png' });
+      const listed = listKnowledgeArticles(db, { query: 'Listed with image', limit: 10 });
+      const found = listed.articles.find((row) => row.id === article.id);
+      assert.ok(found);
+      assert.ok(Array.isArray(found.images));
+      assert.equal(found.images.length, 1);
+      assert.equal(found.images[0].id, image.id);
+      assert.equal(found.images[0].url, `/bot-admin/api/knowledge/articles/${article.id}/images/${image.id}`);
+
+      const recent = listKnowledgeArticles(db, { limit: 50 });
+      const recentFound = recent.articles.find((row) => row.id === article.id);
+      assert.ok(recentFound);
+      assert.equal(recentFound.images.length, 1);
+    } finally {
+      if (previousImagesDir == null) delete process.env.KNOWLEDGE_IMAGES_DIR;
+      else process.env.KNOWLEDGE_IMAGES_DIR = previousImagesDir;
+      fs.rmSync(imagesDir, { recursive: true, force: true });
+    }
   });
 
   it('deletes knowledge chat messages and keeps the session', () => {

@@ -1,7 +1,9 @@
 import { Eye, ImagePlus, Pencil, type LucideIcon } from "lucide-react";
 import { useRef, type ChangeEvent } from "react";
-import MarkdownPreview from "./MarkdownPreview";
+import { insertMarkdownAtCaret } from "../lib/knowledge-image";
 import type { KnowledgeArticle, KnowledgeCategory } from "../lib/types";
+import KnowledgeImageList from "./KnowledgeImageList";
+import MarkdownPreview from "./MarkdownPreview";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 
@@ -38,12 +40,14 @@ type KnowledgeArticleEditorProps = {
   formError: string;
   saving: boolean;
   uploading?: boolean;
+  deletingImage?: boolean;
   pendingFiles: File[];
   editorPreview: boolean;
   onChange: (updater: (prev: Partial<KnowledgeArticle>) => Partial<KnowledgeArticle>) => void;
   onPreviewToggle: () => void;
   onPendingFilesChange: (files: File[]) => void;
   onUpload: (files: File[]) => void;
+  onDeleteImage?: (imageId: number) => void;
   onClose: () => void;
   onSubmit: () => void;
 };
@@ -54,18 +58,22 @@ export default function KnowledgeArticleEditor({
   formError,
   saving,
   uploading = false,
+  deletingImage = false,
   pendingFiles,
   editorPreview,
   onChange,
   onPreviewToggle,
   onPendingFilesChange,
   onUpload,
+  onDeleteImage,
   onClose,
   onSubmit,
 }: KnowledgeArticleEditorProps) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const locked = Boolean(editor.locked);
-  const busy = saving || uploading;
+  const busy = saving || uploading || deletingImage;
+  const images = editor.images || [];
 
   function handleFiles(list: FileList | File[]) {
     const files = [...list].filter(isImageFile);
@@ -77,6 +85,20 @@ export default function KnowledgeArticleEditor({
   function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
     handleFiles(event.target.files || []);
     event.target.value = "";
+  }
+
+  function handleInsertMarkdown(markdown: string) {
+    const node = bodyRef.current;
+    const body = editor.body || "";
+    const start = node?.selectionStart ?? body.length;
+    const end = node?.selectionEnd ?? body.length;
+    const next = insertMarkdownAtCaret(body, markdown, start, end);
+    onChange((prev) => ({ ...prev, body: next.body }));
+    requestAnimationFrame(() => {
+      if (!bodyRef.current) return;
+      bodyRef.current.focus();
+      bodyRef.current.setSelectionRange(next.caret, next.caret);
+    });
   }
 
   return (
@@ -144,6 +166,7 @@ export default function KnowledgeArticleEditor({
           </div>
         ) : (
           <textarea
+            ref={bodyRef}
             rows={8}
             value={editor.body || ""}
             onChange={(event) => onChange((prev) => ({ ...prev, body: event.target.value }))}
@@ -151,11 +174,16 @@ export default function KnowledgeArticleEditor({
           />
         )}
       </div>
-      {pendingFiles.length ? (
-        <small>
-          Скриншоты при сохранении: {pendingFiles.map((file) => file.name).join(", ")}
-        </small>
-      ) : null}
+      <KnowledgeImageList
+        images={images}
+        pendingFiles={pendingFiles}
+        canEdit={!locked}
+        deleting={deletingImage}
+        showInsert={!editorPreview && !locked}
+        onInsert={handleInsertMarkdown}
+        onDelete={onDeleteImage}
+        onRemovePending={(index) => onPendingFilesChange(pendingFiles.filter((_, i) => i !== index))}
+      />
       <label>
         Теги
         <input

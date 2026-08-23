@@ -17,7 +17,9 @@ import {
   createKnowledgeCategory,
   deleteKnowledgeArticle,
   deleteKnowledgeCategory,
+  deleteKnowledgeImage,
   getKbSession,
+  getKnowledgeArticle,
   listKnowledgeArticles,
   listKnowledgeCategories,
   lockKnowledgeArticle,
@@ -30,6 +32,7 @@ import {
   uploadKnowledgeImages,
 } from "../api/ai";
 import AgentChatMessages from "../components/AgentChatMessages";
+import { CatalogThumb } from "../components/CatalogImageGallery";
 import ChatCompose, { type ChatComposeHandle } from "../components/ChatCompose";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import KnowledgeArticleEditor from "../components/KnowledgeArticleEditor";
@@ -97,6 +100,7 @@ export default function KnowledgePage() {
   const [editorPreview, setEditorPreview] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [deletingImage, setDeletingImage] = useState(false);
   const [formError, setFormError] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categoryEditor, setCategoryEditor] = useState<Partial<KnowledgeCategory> | null>(null);
@@ -262,11 +266,17 @@ export default function KnowledgePage() {
     });
   }
 
-  function openEditor(article: KnowledgeArticle) {
+  async function openEditor(article: KnowledgeArticle) {
     setFormError("");
     setEditorPreview(false);
     setPendingFiles([]);
     setEditor(article);
+    try {
+      const data = await getKnowledgeArticle(article.id);
+      setEditor(data.article);
+    } catch {
+      /* list row is enough to start editing */
+    }
   }
 
   async function handleEditorUpload(files: File[]) {
@@ -281,6 +291,27 @@ export default function KnowledgePage() {
       setFormError((error as Error).message);
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleEditorDeleteImage(imageId: number) {
+    if (!editor?.id || editor.locked) return;
+    const ok = await confirm({
+      message: "Удалить скриншот из статьи?",
+      variant: "danger",
+      confirmLabel: "Удалить",
+    });
+    if (!ok) return;
+    setFormError("");
+    setDeletingImage(true);
+    try {
+      const data = await deleteKnowledgeImage(editor.id, imageId);
+      setEditor(data.article);
+      invalidateKnowledge();
+    } catch (error) {
+      setFormError((error as Error).message);
+    } finally {
+      setDeletingImage(false);
     }
   }
 
@@ -466,28 +497,33 @@ export default function KnowledgePage() {
                 const confirmed = Boolean(article.is_confirmed);
                 return (
                   <li key={article.id} className="knowledge-list__item">
-                    <div className="knowledge-list__title">
-                      <button
-                        type="button"
-                        className="knowledge-list__open"
-                        onClick={() => navigate(`/knowledge/${article.id}`)}
-                      >
-                        <strong>{article.title}</strong>
-                      </button>
-                      {article.category?.name ? <span className="badge badge--muted">{article.category.name}</span> : null}
-                      {locked ? <span className="badge badge--warn">Заблокирована</span> : null}
-                      {confirmed ? null : <span className="badge badge--warn">Не подтверждена</span>}
+                    <div className="knowledge-list__row">
+                      <CatalogThumb images={article.images} alt={article.title} />
+                      <div className="knowledge-list__main">
+                        <div className="knowledge-list__title">
+                          <button
+                            type="button"
+                            className="knowledge-list__open"
+                            onClick={() => navigate(`/knowledge/${article.id}`)}
+                          >
+                            <strong>{article.title}</strong>
+                          </button>
+                          {article.category?.name ? <span className="badge badge--muted">{article.category.name}</span> : null}
+                          {locked ? <span className="badge badge--warn">Заблокирована</span> : null}
+                          {confirmed ? null : <span className="badge badge--warn">Не подтверждена</span>}
+                        </div>
+                        {article.tags ? <small>{article.tags}</small> : null}
+                        {article.creator ? <small>Создал: {article.creator}</small> : null}
+                        <p>
+                          {article.body.slice(0, 180)}
+                          {article.body.length > 180 ? "…" : ""}
+                        </p>
+                      </div>
                     </div>
-                    {article.tags ? <small>{article.tags}</small> : null}
-                    {article.creator ? <small>Создал: {article.creator}</small> : null}
-                    <p>
-                      {article.body.slice(0, 180)}
-                      {article.body.length > 180 ? "…" : ""}
-                    </p>
                     <div className="cell-actions">
                       <IconAction label="Просмотр" icon={Eye} onClick={() => navigate(`/knowledge/${article.id}`)} />
                       {canEdit && !locked ? (
-                        <IconAction label="Изменить" icon={Pencil} onClick={() => openEditor(article)} />
+                        <IconAction label="Изменить" icon={Pencil} onClick={() => void openEditor(article)} />
                       ) : null}
                       {canConfirm && !confirmed ? (
                         <IconAction
@@ -605,12 +641,14 @@ export default function KnowledgePage() {
             formError={formError}
             saving={saveArticle.isPending}
             uploading={uploading}
+            deletingImage={deletingImage}
             pendingFiles={pendingFiles}
             editorPreview={editorPreview}
             onChange={(updater) => setEditor((prev) => (prev ? updater(prev) : prev))}
             onPreviewToggle={() => setEditorPreview((prev) => !prev)}
             onPendingFilesChange={setPendingFiles}
             onUpload={(files) => void handleEditorUpload(files)}
+            onDeleteImage={(imageId) => void handleEditorDeleteImage(imageId)}
             onClose={closeEditor}
             onSubmit={() => {
               setFormError("");

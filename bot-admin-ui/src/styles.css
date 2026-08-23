@@ -361,6 +361,30 @@ label {
   overflow: auto;
 }
 
+.knowledge-article-images {
+  flex-shrink: 0;
+}
+
+.knowledge-list__row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.knowledge-list__main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.knowledge-list__row .catalog-thumb {
+  flex-shrink: 0;
+  width: 3.25rem;
+  height: 3.25rem;
+}
+
 .knowledge-view-header {
   display: flex;
   align-items: center;
@@ -1720,6 +1744,104 @@ body.is-column-resizing * {
   min-height: 0;
   height: auto;
   resize: none;
+}
+
+.knowledge-images {
+  display: grid;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  max-height: 14rem;
+  overflow: auto;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+}
+
+.knowledge-images__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.knowledge-images__head small {
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.knowledge-images__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.knowledge-images__item {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.knowledge-images__item .ticket-chat__image-link {
+  flex-shrink: 0;
+  display: block;
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  padding: 0;
+  background: var(--surface);
+}
+
+.knowledge-images__thumb,
+.knowledge-images__item .ticket-chat__image,
+.knowledge-images__item .knowledge-images__thumb {
+  display: block;
+  width: 4.5rem;
+  height: 4.5rem;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.knowledge-images__thumb--empty {
+  display: grid;
+  place-items: center;
+  color: var(--ink-soft);
+  border: 1px dashed var(--border);
+  background: var(--surface);
+}
+
+.knowledge-images__meta {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.knowledge-images__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+
+.knowledge-images__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.knowledge-images__actions .btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .markdown-preview {
