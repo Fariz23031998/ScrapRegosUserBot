@@ -189,6 +189,28 @@ label {
   display: none;
 }
 
+.admin-sidebar--collapsed .admin-sidebar__head {
+  justify-content: center;
+  padding: 0.75rem 0.35rem;
+}
+
+.admin-sidebar--collapsed .admin-sidebar__nav {
+  padding: 0.5rem 0.25rem;
+  align-items: center;
+  scrollbar-width: thin;
+}
+
+.admin-sidebar--collapsed .admin-sidebar__nav::-webkit-scrollbar {
+  width: 6px;
+}
+
+.admin-sidebar--collapsed .admin-sidebar__link {
+  justify-content: center;
+  gap: 0;
+  padding: 0.55rem 0;
+  width: 100%;
+}
+
 .admin-sidebar__head {
   display: flex;
   align-items: center;
@@ -255,6 +277,12 @@ label {
 .admin-sidebar__link--active {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--primary);
+}
+
+.admin-sidebar__link svg {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
 }
 
 .admin-main {
@@ -6215,6 +6243,22 @@ body.is-column-resizing * {
   .admin-sidebar--collapsed .admin-sidebar__brand,
   .admin-sidebar--collapsed .admin-sidebar__link span {
     display: inline;
+  }
+
+  .admin-sidebar--collapsed .admin-sidebar__head {
+    justify-content: space-between;
+    padding: 1rem;
+  }
+
+  .admin-sidebar--collapsed .admin-sidebar__nav {
+    padding: 0.75rem;
+    align-items: stretch;
+  }
+
+  .admin-sidebar--collapsed .admin-sidebar__link {
+    justify-content: flex-start;
+    gap: 0.65rem;
+    padding: 0.55rem 0.75rem;
   }
 
   .ticket-filters__row--desktop {
