@@ -155,11 +155,14 @@ describe('task device returns', () => {
 
   it('persists the require-serials setting off by default', () => {
     assert.equal(getRepairReturnSettingsPublic(db).require_serials, false);
-    saveRepairReturnSettings(db, { require_serials: true });
+    assert.equal(getRepairReturnSettingsPublic(db).score_per_km, 0);
+    saveRepairReturnSettings(db, { require_serials: true, score_per_km: 1.5 });
     assert.equal(isRepairReturnRequireSerials(db), true);
     assert.equal(getRepairReturnSettingsPublic(db).require_serials, true);
+    assert.equal(getRepairReturnSettingsPublic(db).score_per_km, 1.5);
     saveRepairReturnSettings(db, { require_serials: false });
     assert.equal(isRepairReturnRequireSerials(db), false);
+    assert.equal(getRepairReturnSettingsPublic(db).score_per_km, 1.5);
   });
 
   it('requires serials when the setting is on and consumes the requested codes', () => {

@@ -26,6 +26,7 @@ import TicketParticipantsPicker from "./TicketParticipantsPicker";
 type LocationEditor = {
   id?: number;
   name: string;
+  address: string;
   allowed_user_ids: number[];
 };
 
@@ -51,13 +52,14 @@ function emptyPaymentEditor(): PaymentEditor {
 }
 
 function emptyLocationEditor(): LocationEditor {
-  return { name: "", allowed_user_ids: [] };
+  return { name: "", address: "", allowed_user_ids: [] };
 }
 
 function locationEditorFrom(location: SettingsLocation): LocationEditor {
   return {
     id: location.id,
     name: location.name,
+    address: location.address || "",
     allowed_user_ids: location.allowed_user_ids || location.allowed_users.map((user) => user.id),
   };
 }
@@ -98,7 +100,7 @@ export default function SettingsLocationsTab({ canEdit }: { canEdit: boolean }) 
   });
   const employeesQuery = useQuery({
     queryKey: ["task-employees"],
-    queryFn: listTaskEmployees,
+    queryFn: () => listTaskEmployees(),
     enabled: canEdit,
   });
 
@@ -121,6 +123,7 @@ export default function SettingsLocationsTab({ canEdit }: { canEdit: boolean }) 
     mutationFn: (payload: LocationEditor) => {
       const body = {
         name: payload.name.trim(),
+        address: payload.address.trim(),
         allowed_user_ids: payload.allowed_user_ids,
       };
       if (payload.id) return updateSettingsLocation(payload.id, body);
@@ -421,6 +424,17 @@ export default function SettingsLocationsTab({ canEdit }: { canEdit: boolean }) 
               value={locationEditor?.name || ""}
               onChange={(event) =>
                 setLocationEditor((prev) => (prev ? { ...prev, name: event.target.value } : prev))
+              }
+            />
+          </label>
+          <label>
+            Адрес / ссылка на карту
+            <input
+              maxLength={2000}
+              placeholder="https://yandex.uz/maps/… или Google Maps"
+              value={locationEditor?.address || ""}
+              onChange={(event) =>
+                setLocationEditor((prev) => (prev ? { ...prev, address: event.target.value } : prev))
               }
             />
           </label>

@@ -1,6 +1,7 @@
 const { getBotUserById, getBotUserByTelegramId } = require('./bot-users-db');
 
 const MAX_LOCATION_NAME = 100;
+const MAX_LOCATION_ADDRESS = 2000;
 
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
@@ -55,6 +56,7 @@ function ensureLocationTables(db) {
     CREATE INDEX IF NOT EXISTS idx_location_allowed_users_user_id
       ON location_allowed_users(user_id);
   `);
+  ensureColumn(db, 'locations', 'address', 'TEXT');
   if (ensureColumn(db, 'tasks', 'location_id', 'INTEGER')) {
     db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_location_id ON tasks(location_id)');
   } else if (tableExists(db, 'tasks')) {
@@ -66,6 +68,13 @@ function normalizeLocationName(value) {
   const name = String(value || '').trim();
   if (!name || name.length > MAX_LOCATION_NAME) throw new Error('INVALID_LOCATION_NAME');
   return name;
+}
+
+function normalizeLocationAddress(value) {
+  if (value == null) return null;
+  const address = String(value).trim();
+  if (address.length > MAX_LOCATION_ADDRESS) throw new Error('INVALID_LOCATION_ADDRESS');
+  return address || null;
 }
 
 function normalizeAllowedUserIds(db, value) {
@@ -115,6 +124,7 @@ function mapLocation(db, row) {
   return {
     id: row.id,
     name: row.name,
+    address: row.address || '',
     allowed_user_ids: allowedUsers.map((user) => user.id),
     allowed_users: allowedUsers,
     created_at: row.created_at,
@@ -127,6 +137,7 @@ function mapLocationSummary(row) {
   return {
     id: row.id,
     name: row.name,
+    allowed_user_ids: Array.isArray(row.allowed_user_ids) ? row.allowed_user_ids : [],
   };
 }
 
@@ -135,7 +146,7 @@ function getLocation(db, id) {
   const locationId = Number(id);
   if (!Number.isFinite(locationId) || locationId <= 0) return null;
   const row = db
-    .prepare('SELECT id, name, created_at, updated_at FROM locations WHERE id = ?')
+    .prepare('SELECT id, name, address, created_at, updated_at FROM locations WHERE id = ?')
     .get(locationId);
   return mapLocation(db, row);
 }
@@ -144,7 +155,7 @@ function listLocations(db) {
   ensureLocationTables(db);
   return db
     .prepare(
-      `SELECT id, name, created_at, updated_at
+      `SELECT id, name, address, created_at, updated_at
        FROM locations
        ORDER BY name COLLATE NOCASE ASC, id ASC`
     )
@@ -155,15 +166,16 @@ function listLocations(db) {
 function createLocation(db, input = {}) {
   ensureLocationTables(db);
   const name = normalizeLocationName(input.name);
+  const address = normalizeLocationAddress(input.address);
   const allowedUserIds = normalizeAllowedUserIds(db, input.allowed_user_ids);
   db.exec('BEGIN');
   try {
     const result = db
       .prepare(
-        `INSERT INTO locations (name, created_at, updated_at)
-         VALUES (?, datetime('now'), datetime('now'))`
+        `INSERT INTO locations (name, address, created_at, updated_at)
+         VALUES (?, ?, datetime('now'), datetime('now'))`
       )
-      .run(name);
+      .run(name, address);
     const locationId = Number(result.lastInsertRowid);
     replaceAllowedUsers(db, locationId, allowedUserIds);
     db.exec('COMMIT');
@@ -179,16 +191,17 @@ function updateLocation(db, id, input = {}) {
   const current = getLocation(db, id);
   if (!current) throw new Error('NOT_FOUND');
   const name = normalizeLocationName(input.name != null ? input.name : current.name);
+  const address =
+    input.address !== undefined ? normalizeLocationAddress(input.address) : current.address || null;
   const allowedUserIds =
     input.allowed_user_ids !== undefined
       ? normalizeAllowedUserIds(db, input.allowed_user_ids)
       : current.allowed_user_ids;
   db.exec('BEGIN');
   try {
-    db.prepare(`UPDATE locations SET name = ?, updated_at = datetime('now') WHERE id = ?`).run(
-      name,
-      current.id
-    );
+    db.prepare(
+      `UPDATE locations SET name = ?, address = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(name, address, current.id);
     replaceAllowedUsers(db, current.id, allowedUserIds);
     db.exec('COMMIT');
     return getLocation(db, current.id);
@@ -291,6 +304,7 @@ function appendLocationChoiceFilter(where, params, locationId, alias = 't') {
 
 module.exports = {
   MAX_LOCATION_NAME,
+  MAX_LOCATION_ADDRESS,
   ensureLocationTables,
   listLocations,
   listLocationsForViewer,
@@ -298,6 +312,7 @@ module.exports = {
   createLocation,
   updateLocation,
   deleteLocation,
+  listAllowedUsers,
   userCanAccessLocation,
   getLocationViewer,
   canViewerAccessLocation,

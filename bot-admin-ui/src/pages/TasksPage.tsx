@@ -227,7 +227,7 @@ export default function TasksPage() {
     const nextStatus = nextTaskStatus(task.status);
     return (
       <>
-        {hasPermission("tasks_edit") && !task.posted && nextStatus ? (
+        {hasPermission("tasks_edit") && nextStatus ? (
           <button
             type="button"
             className="btn-secondary btn-icon btn-sm"

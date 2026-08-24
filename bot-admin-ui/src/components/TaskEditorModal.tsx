@@ -1,12 +1,13 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createTask,
   createTaskClient,
   listTaskCategories,
   listTaskEmployees,
   listTaskLocations,
+  previewTaskDistance,
   searchTaskClients,
   updateTask,
   type TaskPayload,
@@ -14,7 +15,7 @@ import {
 import Modal from "./Modal";
 import { useAuth } from "../hooks/useAuth";
 import { useConfirm } from "../contexts/ConfirmContext";
-import type { FieldTask, TaskCategory, TaskClient } from "../lib/types";
+import type { FieldTask, TaskCategory, TaskClient, TaskEmployee, TaskLocation } from "../lib/types";
 import { technicianFinishWarning } from "../lib/employee-schedule";
 import { parseDisplayCurrency, type MoneyCurrency } from "../lib/money";
 import {
@@ -59,6 +60,8 @@ type TaskEditor = {
   duration_minutes: string;
   client: TaskClient | null;
   clientQuery: string;
+  distance_score: string;
+  distance_km: number | null;
 };
 
 function emptyEditor(): TaskEditor {
@@ -79,7 +82,23 @@ function emptyEditor(): TaskEditor {
     duration_minutes: "",
     client: null,
     clientQuery: "",
+    distance_score: "",
+    distance_km: null,
   };
+}
+
+function employeesForLocation(
+  employees: TaskEmployee[],
+  locationId: string,
+  locations: TaskLocation[],
+): TaskEmployee[] {
+  if (!locationId) return [];
+  const location = locations.find((item) => String(item.id) === String(locationId));
+  if (!location) return [];
+  const allowedIds = location.allowed_user_ids;
+  if (!Array.isArray(allowedIds)) return employees;
+  const allowed = new Set(allowedIds.map(Number));
+  return employees.filter((employee) => allowed.has(Number(employee.id)));
 }
 
 function editorFromTask(task: FieldTask): TaskEditor {
@@ -110,7 +129,25 @@ function editorFromTask(task: FieldTask): TaskEditor {
         }
       : null,
     clientQuery: "",
+    distance_score: task.distance_score == null ? "" : String(task.distance_score),
+    distance_km: task.distance_km ?? null,
   };
+}
+
+function distanceKey(address: string, locationId: string) {
+  return `${address.trim()}|${locationId}`;
+}
+
+function formatDistanceHint(km: number | null | undefined) {
+  if (km == null || !Number.isFinite(Number(km))) return "";
+  return `${Number(km)} км`;
+}
+
+function parseOptionalScore(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const amount = Number(trimmed.replace(",", "."));
+  return Number.isFinite(amount) ? amount : null;
 }
 
 function durationFromRange(start: string, finish: string): { hours: string; minutes: string } {
@@ -315,18 +352,25 @@ export default function TaskEditorModal({
   const [editor, setEditor] = useState<TaskEditor>(() => (task ? editorFromTask(task) : emptyEditor()));
   const [formError, setFormError] = useState("");
   const [createClientOpen, setCreateClientOpen] = useState(false);
+  const [distanceHint, setDistanceHint] = useState("");
+  const distanceScoreDirtyRef = useRef(false);
+  const distanceBaselineRef = useRef("");
 
   useEffect(() => {
     if (!open) return;
-    setEditor(task ? editorFromTask(task) : emptyEditor());
+    const next = task ? editorFromTask(task) : emptyEditor();
+    setEditor(next);
     setFormError("");
     setCreateClientOpen(false);
+    distanceScoreDirtyRef.current = false;
+    distanceBaselineRef.current = distanceKey(next.address, next.location_id);
+    setDistanceHint(formatDistanceHint(next.distance_km));
   }, [open, task?.id]);
 
   const employeesQuery = useQuery({
-    queryKey: ["task-employees"],
-    queryFn: listTaskEmployees,
-    enabled: open,
+    queryKey: ["task-location-employees", editor.location_id],
+    queryFn: () => listTaskEmployees(editor.location_id),
+    enabled: open && Boolean(editor.location_id),
   });
   const clientQueryValue = editor.clientQuery || "";
   const clientsQuery = useQuery({
@@ -340,16 +384,66 @@ export default function TaskEditorModal({
     enabled: open && !categories.length,
   });
   const locationsQuery = useQuery({
-    queryKey: ["task-locations"],
+    queryKey: ["task-locations", "with-staff"],
     queryFn: listTaskLocations,
     enabled: open,
   });
 
-  const employees = employeesQuery.data?.employees || [];
   const clients = clientsQuery.data?.clients || [];
   const categoryOptions = categories.length ? categories : categoriesQuery.data?.categories || [];
   const locations = locationsQuery.data?.locations || [];
+  const soleCreateLocationId = !task && locations.length === 1 ? String(locations[0].id) : "";
+  const employees = employeesForLocation(
+    employeesQuery.data?.employees || [],
+    editor.location_id,
+    locations,
+  );
+
+  useEffect(() => {
+    if (!open || !soleCreateLocationId) return;
+    setEditor((prev) => {
+      if (prev.id || prev.location_id) return prev;
+      return { ...prev, location_id: soleCreateLocationId };
+    });
+  }, [open, soleCreateLocationId]);
+
   const technician = employees.find((employee) => String(employee.id) === editor.technician_user_id);
+  const posted = Boolean(task?.posted);
+
+  useEffect(() => {
+    if (!open || posted) return;
+    const address = editor.address;
+    const locationId = editor.location_id;
+    const key = distanceKey(address, locationId);
+    const timer = window.setTimeout(() => {
+      void previewTaskDistance({
+        address,
+        location_id: locationId ? Number(locationId) : null,
+      })
+        .then((data) => {
+          setEditor((prev) => {
+            if (distanceKey(prev.address, prev.location_id) !== key) return prev;
+            const next = { ...prev, distance_km: data.distance_km };
+            const isBaseline = key === distanceBaselineRef.current;
+            if (!distanceScoreDirtyRef.current && !isBaseline) {
+              next.distance_score = data.suggested_score == null ? "" : String(data.suggested_score);
+            }
+            return next;
+          });
+          if (data.distance_km != null) {
+            setDistanceHint(formatDistanceHint(data.distance_km));
+          } else if (!data.has_origin || !data.has_destination) {
+            setDistanceHint("Нет координат в адресе или у филиала");
+          } else {
+            setDistanceHint("");
+          }
+        })
+        .catch(() => {
+          setDistanceHint("Не удалось рассчитать дистанцию");
+        });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [open, posted, editor.address, editor.location_id]);
   const scheduleWarning =
     editor.action !== "sale" && editor.technician_user_id && editor.planned_finish_at
       ? technicianFinishWarning(
@@ -382,6 +476,8 @@ export default function TaskEditorModal({
       regos_client_id: current.client?.id ?? null,
       client_name: current.client?.name || "",
       client_phone: current.client?.phone || "",
+      distance_km: current.distance_km,
+      distance_score: parseOptionalScore(current.distance_score),
     };
     if (canChangeStatus) payload.status = current.status;
     if (canChangeManager) {
@@ -524,7 +620,16 @@ export default function TaskEditorModal({
             <select
               required
               value={editor.location_id}
-              onChange={(event) => setEditor((prev) => ({ ...prev, location_id: event.target.value }))}
+              onChange={(event) => {
+                distanceScoreDirtyRef.current = false;
+                const locationId = event.target.value;
+                setEditor((prev) => ({
+                  ...prev,
+                  location_id: locationId,
+                  manager_user_id: "",
+                  technician_user_id: "",
+                }));
+              }}
             >
               <option value="">Выберите филиал</option>
               {locations.map((location) => (
@@ -596,11 +701,28 @@ export default function TaskEditorModal({
         <label>
           Адрес
           <input
-            maxLength={500}
+            maxLength={2000}
             value={editor.address}
-            onChange={(event) => setEditor((prev) => ({ ...prev, address: event.target.value }))}
+            onChange={(event) => {
+              distanceScoreDirtyRef.current = false;
+              setEditor((prev) => ({ ...prev, address: event.target.value }));
+            }}
           />
         </label>
+        <label>
+          Баллы за дистанции
+          <input
+            type="number"
+            min={0}
+            step="any"
+            value={editor.distance_score}
+            onChange={(event) => {
+              distanceScoreDirtyRef.current = true;
+              setEditor((prev) => ({ ...prev, distance_score: event.target.value }));
+            }}
+          />
+        </label>
+        {distanceHint ? <p className="field-hint">{distanceHint}</p> : null}
         <label>
           Заметки
           <textarea
@@ -668,7 +790,7 @@ export default function TaskEditorModal({
             Менеджер
             <select
               value={editor.manager_user_id}
-              disabled={!canChangeManager}
+              disabled={!canChangeManager || !editor.location_id}
               onChange={(event) => setEditor((prev) => ({ ...prev, manager_user_id: event.target.value }))}
             >
               <option value="">Не назначен</option>
@@ -684,7 +806,7 @@ export default function TaskEditorModal({
               Техник
               <select
                 value={editor.technician_user_id}
-                disabled={!canChangeTechnician}
+                disabled={!canChangeTechnician || !editor.location_id}
                 onChange={(event) => setEditor((prev) => ({ ...prev, technician_user_id: event.target.value }))}
               >
                 <option value="">Не назначен</option>

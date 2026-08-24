@@ -341,7 +341,7 @@ const AGENT_TOOL_CATALOG = [
   {
     name: 'list_task_employees',
     title: 'Сотрудники задач',
-    description: 'Сотрудники для назначения менеджером или техником.',
+    description: 'Сотрудники филиала для назначения менеджером или техником. Сначала выбери филиал и передай location_id.',
     agents: ['ops'],
   },
   {
@@ -365,7 +365,7 @@ const AGENT_TOOL_CATALOG = [
   {
     name: 'advance_task_status',
     title: 'Следующий статус',
-    description: 'Сдвинуть статус: Новая → В работе → Выполнена.',
+    description: 'Сдвинуть статус: Новая → В работе → Выполнена. Можно после проведения.',
     agents: ['ops'],
   },
   {

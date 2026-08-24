@@ -110,6 +110,7 @@ describe('staff reports', () => {
     assert.ok(technicianRow);
     assert.equal(technicianRow.technician_task_count, 1);
     assert.equal(technicianRow.technician_task_score, 7);
+    assert.equal(technicianRow.distance_score, 0);
     assert.equal(technicianRow.ticket_count, 0);
     assert.equal(technicianRow.commission_uzs, undefined);
     assert.equal(scores.rows.find((row) => row.user_id === manager.id), undefined);
@@ -236,6 +237,28 @@ describe('staff reports', () => {
     assert.equal(managerRow.commission_uzs, (managerBefore?.commission_uzs || 0) + 10000);
     assert.equal(technicianRow.technician_task_count, (technicianBefore?.technician_task_count || 0) + 1);
     assert.equal(technicianRow.technician_task_score, (technicianBefore?.technician_task_score || 0) + 5);
+  });
+
+  it('adds stored distance score separately from catalog technician score', () => {
+    const scoresBefore = buildTechnicianReport(db, currentPeriod());
+    const technicianBefore = scoresBefore.rows.find((row) => row.user_id === technician.id);
+    const task = createTask(db, {
+      title: 'Выезд с дистанцией',
+      status: 'done',
+      manager_user_id: manager.id,
+      technician_user_id: technician.id,
+      devices: [{ device_id: device.id, quantity: 1 }],
+      distance_km: 12.4,
+      distance_score: 3,
+    });
+    assert.equal(task.distance_km, 12.4);
+    assert.equal(task.distance_score, 3);
+    postTask(db, task.id);
+
+    const scores = buildTechnicianReport(db, currentPeriod());
+    const technicianRow = scores.rows.find((row) => row.user_id === technician.id);
+    assert.equal(technicianRow.technician_task_score, (technicianBefore?.technician_task_score || 0) + 2);
+    assert.equal(technicianRow.distance_score, (technicianBefore?.distance_score || 0) + 3);
   });
 });
 

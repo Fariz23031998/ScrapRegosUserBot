@@ -67,17 +67,21 @@ describe('locations, payment types, and task visibility', () => {
   it('creates and updates a location with an employee allowlist', () => {
     const created = createLocation(db, {
       name: 'Офис Чиланзар',
+      address: 'https://yandex.uz/maps/?ll=69.24,41.31',
       allowed_user_ids: [alice.id],
     });
     assert.equal(created.name, 'Офис Чиланзар');
+    assert.equal(created.address, 'https://yandex.uz/maps/?ll=69.24,41.31');
     assert.deepEqual(created.allowed_user_ids, [alice.id]);
     assert.equal(created.allowed_users[0].name, 'Алиса');
 
     const updated = updateLocation(db, created.id, {
       name: 'Офис Юнусабад',
+      address: 'https://www.google.com/maps/@41.32,69.25,14z',
       allowed_user_ids: [alice.id, bob.id],
     });
     assert.equal(updated.name, 'Офис Юнусабад');
+    assert.equal(updated.address, 'https://www.google.com/maps/@41.32,69.25,14z');
     assert.deepEqual(updated.allowed_user_ids.sort(), [alice.id, bob.id].sort());
     assert.equal(listLocations(db).some((item) => item.id === created.id), true);
   });
@@ -89,6 +93,10 @@ describe('locations, payment types, and task visibility', () => {
       /INVALID_LOCATION_USERS/
     );
     assert.throws(() => createLocation(db, { name: '  ' }), /INVALID_LOCATION_NAME/);
+    assert.throws(
+      () => createLocation(db, { name: 'Длинный', address: 'x'.repeat(2001), allowed_user_ids: [alice.id] }),
+      /INVALID_LOCATION_ADDRESS/
+    );
   });
 
   it('creates, updates, and deletes custom payment types linked to an account', () => {

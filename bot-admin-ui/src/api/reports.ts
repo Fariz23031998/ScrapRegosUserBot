@@ -26,12 +26,14 @@ export type TechnicianReportRow = {
   name: string;
   technician_task_count: number;
   technician_task_score: number;
+  distance_score: number;
   ticket_count: number;
 };
 
 export type TechnicianReportTotals = {
   technician_task_count: number;
   technician_task_score: number;
+  distance_score: number;
   ticket_count: number;
 };
 

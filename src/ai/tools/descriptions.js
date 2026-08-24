@@ -86,15 +86,17 @@ const DEFAULT_TOOL_DESCRIPTIONS = {
   delete_task_service: 'Remove a service line from a task by line_id. Posted tasks are locked.',
   list_task_categories: 'List task categories (id, name).',
   list_task_locations: 'List branches the current viewer may use. Pass location_id from here when creating a task.',
-  list_task_employees: 'List employees for manager_user_id / technician_user_id.',
+  list_task_employees:
+    'List employees for manager_user_id / technician_user_id. Pass location_id from list_task_locations to only list staff allowed on that branch.',
   search_task_clients:
     'Search REGOS CRM clients to attach to a task (query at least 2 characters). Returns id, name, phone.',
   create_task_client:
     'Create a REGOS CRM client to attach to a task. Pass name and/or phone (at least one required). Optional email, description, external_id. Search first with search_task_clients; create only if none match. Returns id, name, phone. Then pass regos_client_id to create_task or update_task.',
   list_payment_types: 'List payment types (id, name, currency) before create_task_payment.',
   advance_task_status:
-    'Move task status forward only: new → in_progress → done. For install/repair, the actor may become technician.',
-  post_task: 'Post a task (posted=1). This locks the cart. Confirm with the user before posting.',
+    'Move task status forward only: new → in_progress → done. Works on posted tasks. For install/repair, the actor may become technician.',
+  post_task:
+    'Post a task (posted=1). This locks the cart; status can still be advanced with advance_task_status. Confirm with the user before posting.',
   unpost_task:
     'Unpost a task. If refunds or device returns exist, pass delete_refunds and/or delete_returns. Confirm first.',
   create_task_payment:

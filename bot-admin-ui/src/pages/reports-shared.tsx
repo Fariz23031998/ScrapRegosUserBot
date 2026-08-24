@@ -466,7 +466,7 @@ export function technicianDisplayRows(
     return {
       ...row,
       ticket_score: ticketScore,
-      total_score: row.technician_task_score + ticketScore,
+      total_score: row.technician_task_score + (row.distance_score || 0) + ticketScore,
     };
   });
 }
@@ -503,6 +503,11 @@ export function ReportResultTables({
       id: "technician_task_score",
       header: "Баллы с задач",
       accessorFn: (row) => formatTechnicianScore(row.technician_task_score),
+    },
+    {
+      id: "distance_score",
+      header: "Баллы за дистанции",
+      accessorFn: (row) => formatTechnicianScore(row.distance_score || 0),
     },
     { id: "ticket_count", header: "Тикетов", accessorKey: "ticket_count" },
     {
@@ -599,6 +604,7 @@ export function ReportResultTables({
         getFields={(row) => [
           { label: "Задач", value: row.technician_task_count },
           { label: "Баллы с задач", value: formatTechnicianScore(row.technician_task_score) },
+          { label: "Баллы за дистанции", value: formatTechnicianScore(row.distance_score || 0) },
           { label: "Тикетов", value: row.ticket_count },
           { label: "Баллы с тикетов", value: formatTechnicianScore(row.ticket_score) },
           { label: "Всего баллов", value: formatTechnicianScore(row.total_score) },
@@ -687,7 +693,10 @@ export function reportSummaryItems(job: ReportJob, scorePerTicket: number, displ
   const technicianTotals = technicianReport?.totals;
   const unassignedTicketCount = technicianReport?.unassigned_ticket_count || 0;
   const totalTicketScore = (technicianTotals?.ticket_count || 0) * scorePerTicket;
-  const totalScore = (technicianTotals?.technician_task_score || 0) + totalTicketScore;
+  const totalScore =
+    (technicianTotals?.technician_task_score || 0) +
+    (technicianTotals?.distance_score || 0) +
+    totalTicketScore;
 
   if (tab === "technician") {
     return [

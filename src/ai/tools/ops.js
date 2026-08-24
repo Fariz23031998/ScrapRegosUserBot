@@ -33,9 +33,10 @@ const {
   unpostTask,
   advanceTaskStatus,
 } = require('../../db/tasks');
+const { scheduleTaskAssignmentNotify } = require('../../bot/task-assignment-notify');
 const { createTaskPayment, deleteTaskPayment, getTaskPayment } = require('../../db/task-payments');
 const { listPaymentTypes } = require('../../db/payment-types');
-const { listLocationsForViewer } = require('../../db/locations');
+const { getLocation, listLocationsForViewer } = require('../../db/locations');
 const { listEmployeeUsers } = require('../../db/bot-users-db');
 const { isRepairReturnRequireSerials } = require('../../db/repair-return-settings');
 const {
@@ -669,11 +670,17 @@ function createOpsTools({
       runSafe(() => {
         const input = applyStaffPermissions(args, permissions);
         if (!hasAnyRight(permissions, 'tasks_status')) delete input.status;
-        return createTask(db, input, {
+        const task = createTask(db, input, {
           requireLocation: true,
           viewer,
           actorUserId: userId,
         });
+        scheduleTaskAssignmentNotify(db, {
+          before: null,
+          after: task,
+          actorUserId: userId,
+        });
+        return task;
       }),
   });
 
@@ -712,7 +719,13 @@ function createOpsTools({
           throw new Error('FORBIDDEN');
         }
         if (!hasAnyRight(permissions, 'tasks_status')) delete input.status;
-        return updateTask(db, current.id, input, { viewer, actorUserId: userId });
+        const task = updateTask(db, current.id, input, { viewer, actorUserId: userId });
+        scheduleTaskAssignmentNotify(db, {
+          before: current,
+          after: task,
+          actorUserId: userId,
+        });
+        return task;
       }),
   });
 
@@ -864,12 +877,28 @@ function createOpsTools({
   add({
     name: 'list_task_employees',
     description: factoryToolDescription('list_task_employees'),
-    parameters: { type: 'object', properties: {} },
-    execute: async () => {
-      const employees = listEmployeeUsers(db).map(mapEmployee);
-      employees.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-      return { employees };
+    parameters: {
+      type: 'object',
+      properties: {
+        location_id: {
+          type: 'number',
+          description: 'Branch id from list_task_locations. When set, only employees allowed on that branch.',
+        },
+      },
     },
+    execute: async ({ location_id } = {}) =>
+      runSafe(async () => {
+        let users = listEmployeeUsers(db);
+        if (location_id != null && location_id !== '') {
+          const location = getLocation(db, location_id);
+          if (!location) throw new Error('INVALID_TASK_LOCATION');
+          const allowedIds = new Set(location.allowed_user_ids);
+          users = users.filter((user) => allowedIds.has(user.id));
+        }
+        const employees = users.map(mapEmployee);
+        employees.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+        return { employees };
+      }),
   });
 
   add({
@@ -958,7 +987,13 @@ function createOpsTools({
     execute: async ({ id } = {}) =>
       runSafe(async () => {
         const current = await requireVisibleTask(db, id, viewer);
-        return advanceTaskStatus(db, current.id, viewer, { actorUserId: userId });
+        const task = advanceTaskStatus(db, current.id, viewer, { actorUserId: userId });
+        scheduleTaskAssignmentNotify(db, {
+          before: current,
+          after: task,
+          actorUserId: userId,
+        });
+        return task;
       }),
   });
 

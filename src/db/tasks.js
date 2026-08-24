@@ -2,7 +2,7 @@ const { ensureDeviceTables, getDevice } = require('./devices');
 const { ensureServiceTables, getService } = require('./services');
 const { attachCatalogImages } = require('./catalog-images');
 const { getBotUserById } = require('./bot-users-db');
-const { CURRENCIES, getUsdUzsRate, presentTaskLineMoney, snapshotMoney, emptyLineMoneySnapshot, sumMoneyTotals, emptyMoneyTotals, normalizeDiscountInput, emptyDiscount } = require('./money');
+const { CURRENCIES, getUsdUzsRate, presentTaskLineMoney, snapshotMoney, emptyLineMoneySnapshot, sumMoneyTotals, emptyMoneyTotals, normalizeDiscountInput, emptyDiscount, roundMoney } = require('./money');
 const {
   ensureTaskPaymentTables,
   emptyTaskPaymentTotals,
@@ -14,11 +14,12 @@ const {
   canViewerAccessLocation,
   ensureLocationTables,
   getLocation,
+  userCanAccessLocation,
 } = require('./locations');
 
 const MAX_TITLE = 200;
 const MAX_NOTES = 5000;
-const MAX_ADDRESS = 500;
+const MAX_ADDRESS = 2000;
 const MAX_CATEGORY_NAME = 100;
 const MAX_CLIENT_NAME = 200;
 const MAX_CLIENT_PHONE = 40;
@@ -39,10 +40,11 @@ const TASK_ACTION_LABELS = {
 };
 
 const TASK_SELECT = `
-  t.id, t.title, t.status, t.posted, t.action, t.notes, t.address, t.category_id, t.location_id,
+  t.id, t.title, t.status, t.posted, t.action, t.notes, t.address, t.distance_km, t.distance_score,
+  t.category_id, t.location_id,
   t.regos_client_id, t.client_name, t.client_phone,
   t.manager_user_id, t.technician_user_id, t.currency,
-  t.planned_start_at, t.planned_finish_at,
+  t.planned_start_at, t.planned_finish_at, t.technician_reminder_sent_at,
   t.created_at, t.updated_at,
   c.name AS category_name,
   loc.name AS location_name,
@@ -160,6 +162,9 @@ function ensureTaskTables(db) {
   ensureColumn(db, 'tasks', 'posted', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'tasks', 'planned_start_at', 'TEXT');
   ensureColumn(db, 'tasks', 'planned_finish_at', 'TEXT');
+  ensureColumn(db, 'tasks', 'technician_reminder_sent_at', 'TEXT');
+  ensureColumn(db, 'tasks', 'distance_km', 'REAL');
+  ensureColumn(db, 'tasks', 'distance_score', 'REAL');
   if (ensureColumn(db, 'tasks', 'action', "TEXT NOT NULL DEFAULT 'install'")) {
     db.exec(`
       UPDATE tasks
@@ -261,6 +266,8 @@ function mapTask(row, devices = [], services = [], totals = null, payments = nul
     action_label: TASK_ACTION_LABELS[row.action] || TASK_ACTION_LABELS.install,
     notes: row.notes || '',
     address: row.address || '',
+    distance_km: row.distance_km == null || row.distance_km === '' ? null : Number(row.distance_km),
+    distance_score: row.distance_score == null || row.distance_score === '' ? null : Number(row.distance_score),
     category_id: row.category_id ?? null,
     category: row.category_id
       ? { id: row.category_id, name: row.category_name || '' }
@@ -279,6 +286,7 @@ function mapTask(row, devices = [], services = [], totals = null, payments = nul
     currency: row.currency === 'USD' ? 'USD' : row.currency === 'UZS' ? 'UZS' : null,
     planned_start_at: row.planned_start_at || null,
     planned_finish_at: row.planned_finish_at || null,
+    technician_reminder_sent_at: row.technician_reminder_sent_at || null,
     devices,
     services,
     totals: totals || emptyMoneyTotals(),
@@ -366,6 +374,14 @@ function normalizeOptionalText(value, max, errorCode) {
   return text || null;
 }
 
+function normalizeOptionalNonNegative(value, errorCode) {
+  if (value === undefined) return undefined;
+  if (value == null || value === '') return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error(errorCode);
+  return roundMoney(amount);
+}
+
 function normalizeOptionalId(value) {
   if (value == null || value === '' || value === 0 || value === '0') return null;
   const id = Number(value);
@@ -426,6 +442,32 @@ function shouldAssignTechnicianOnStatus(action, status) {
   return isTechnicianAssignableAction(action) && (status === 'in_progress' || status === 'done');
 }
 
+function sameStaffId(left, right) {
+  const a = left == null || left === '' ? null : Number(left);
+  const b = right == null || right === '' ? null : Number(right);
+  if (a == null && b == null) return true;
+  return a === b;
+}
+
+function shouldResetTechnicianReminder(current, next) {
+  if (!current) return false;
+  return (
+    !sameStaffId(current.technician_user_id, next.technician_user_id) ||
+    String(current.planned_start_at || '') !== String(next.planned_start_at || '')
+  );
+}
+
+function staffAllowedOnLocation(db, locationId, userId) {
+  if (locationId == null || locationId === '') return true;
+  if (userId == null) return true;
+  return userCanAccessLocation(db, locationId, userId);
+}
+
+function assertStaffOnLocation(db, locationId, userId, errorCode) {
+  if (locationId == null || userId == null) return;
+  if (!userCanAccessLocation(db, locationId, userId)) throw new Error(errorCode);
+}
+
 function applyCreateStaffAssignment(db, input, actorUserId) {
   const next = { ...input };
   const action = next.action != null && next.action !== '' ? String(next.action).trim() : 'install';
@@ -433,7 +475,9 @@ function applyCreateStaffAssignment(db, input, actorUserId) {
   const hasManager = next.manager_user_id != null && next.manager_user_id !== '';
   if (hasManager) return next;
   const employeeId = resolveEmployeeId(db, actorUserId);
-  if (employeeId) next.manager_user_id = employeeId;
+  if (employeeId && staffAllowedOnLocation(db, next.location_id, employeeId)) {
+    next.manager_user_id = employeeId;
+  }
   return next;
 }
 
@@ -572,6 +616,12 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null, r
     MAX_ADDRESS,
     'INVALID_TASK_ADDRESS'
   );
+  const distanceKm = input.distance_km !== undefined
+    ? normalizeOptionalNonNegative(input.distance_km, 'INVALID_TASK_DISTANCE')
+    : current?.distance_km ?? null;
+  const distanceScore = input.distance_score !== undefined
+    ? normalizeOptionalNonNegative(input.distance_score, 'INVALID_TASK_DISTANCE_SCORE')
+    : current?.distance_score ?? null;
   const clientName = normalizeOptionalText(
     input.client_name != null ? input.client_name : current?.client_name,
     MAX_CLIENT_NAME,
@@ -617,21 +667,28 @@ function normalizeTaskInput(db, input = {}, { partial = false, current = null, r
     throw new Error('INVALID_TASK_LOCATION');
   }
 
+  const nextManagerUserId = managerUserId === undefined ? current?.manager_user_id ?? null : managerUserId;
+  const nextTechnicianUserId = action === 'sale'
+    ? null
+    : (technicianUserId === undefined ? current?.technician_user_id ?? null : technicianUserId);
+  assertStaffOnLocation(db, nextLocationId, nextManagerUserId, 'INVALID_TASK_MANAGER');
+  assertStaffOnLocation(db, nextLocationId, nextTechnicianUserId, 'INVALID_TASK_TECHNICIAN');
+
   return {
     title: title || current?.title,
     status,
     action,
     notes,
     address,
+    distance_km: distanceKm,
+    distance_score: distanceScore,
     client_name: clientName,
     client_phone: clientPhone,
     regos_client_id: regosClientId,
     category_id: categoryId === undefined ? current?.category_id ?? null : categoryId,
     location_id: nextLocationId,
-    manager_user_id: managerUserId === undefined ? current?.manager_user_id ?? null : managerUserId,
-    technician_user_id: action === 'sale'
-      ? null
-      : (technicianUserId === undefined ? current?.technician_user_id ?? null : technicianUserId),
+    manager_user_id: nextManagerUserId,
+    technician_user_id: nextTechnicianUserId,
     currency,
     planned_start_at: plannedStartAt,
     planned_finish_at: plannedFinishAt,
@@ -772,11 +829,11 @@ function createTask(db, input, options = {}) {
     const result = db
       .prepare(
         `INSERT INTO tasks (
-           title, status, action, notes, address, category_id, location_id,
+           title, status, action, notes, address, distance_km, distance_score, category_id, location_id,
            regos_client_id, client_name, client_phone,
            manager_user_id, technician_user_id, currency,
            planned_start_at, planned_finish_at, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
       )
       .run(
         task.title,
@@ -784,6 +841,8 @@ function createTask(db, input, options = {}) {
         task.action,
         task.notes,
         task.address,
+        task.distance_km,
+        task.distance_score,
         task.category_id,
         task.location_id,
         task.regos_client_id,
@@ -817,12 +876,17 @@ function updateTask(db, id, input = {}, options = {}) {
   const devices = input.devices != null ? normalizeTaskDevices(db, input.devices, task.action) : null;
   db.exec('BEGIN');
   try {
+    const reminderSentAt = shouldResetTechnicianReminder(current, task)
+      ? null
+      : current.technician_reminder_sent_at || null;
     db.prepare(
       `UPDATE tasks
-       SET title = ?, status = ?, action = ?, notes = ?, address = ?, category_id = ?, location_id = ?,
+       SET title = ?, status = ?, action = ?, notes = ?, address = ?, distance_km = ?, distance_score = ?,
+           category_id = ?, location_id = ?,
            regos_client_id = ?, client_name = ?, client_phone = ?,
            manager_user_id = ?, technician_user_id = ?, currency = ?,
-           planned_start_at = ?, planned_finish_at = ?, updated_at = datetime('now')
+           planned_start_at = ?, planned_finish_at = ?, technician_reminder_sent_at = ?,
+           updated_at = datetime('now')
        WHERE id = ?`
     ).run(
       task.title,
@@ -830,6 +894,8 @@ function updateTask(db, id, input = {}, options = {}) {
       task.action,
       task.notes,
       task.address,
+      task.distance_km,
+      task.distance_score,
       task.category_id,
       task.location_id,
       task.regos_client_id,
@@ -840,6 +906,7 @@ function updateTask(db, id, input = {}, options = {}) {
       task.currency,
       task.planned_start_at,
       task.planned_finish_at,
+      reminderSentAt,
       current.id
     );
     if (devices) replaceTaskDevices(db, current.id, devices);
@@ -1261,16 +1328,23 @@ function advanceTaskStatus(db, id, viewer, options = {}) {
   ensureTaskTables(db);
   const current = getTask(db, id, viewer);
   if (!current) throw new Error('NOT_FOUND');
-  assertTaskCartEditable(current);
   const next = nextTaskStatus(current.status);
   if (!next) throw new Error('INVALID_TASK_STATUS_TRANSITION');
-  const technicianUserId = shouldAssignTechnicianOnStatus(current.action, next)
+  let technicianUserId = shouldAssignTechnicianOnStatus(current.action, next)
     ? resolveEmployeeId(db, options.actorUserId)
     : null;
+  if (technicianUserId && !staffAllowedOnLocation(db, current.location_id, technicianUserId)) {
+    technicianUserId = null;
+  }
   if (technicianUserId) {
+    const reminderSentAt = sameStaffId(current.technician_user_id, technicianUserId)
+      ? current.technician_reminder_sent_at || null
+      : null;
     db.prepare(
-      `UPDATE tasks SET status = ?, technician_user_id = ?, updated_at = datetime('now') WHERE id = ?`
-    ).run(next, technicianUserId, current.id);
+      `UPDATE tasks
+       SET status = ?, technician_user_id = ?, technician_reminder_sent_at = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(next, technicianUserId, reminderSentAt, current.id);
   } else {
     db.prepare(`UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(next, current.id);
   }

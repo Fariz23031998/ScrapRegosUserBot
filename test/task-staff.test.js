@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const { createEmployeeUser } = require('../src/db/bot-users-db');
+const { createLocation } = require('../src/db/locations');
 const { openDb } = require('../src/db/partners-db');
 const { advanceTaskStatus, createTask, updateTask } = require('../src/db/tasks');
 
@@ -113,5 +114,82 @@ describe('task staff assignment', () => {
     const updated = updateTask(db, task.id, { status: 'in_progress' });
     assert.equal(updated.status, 'in_progress');
     assert.equal(updated.technician_user_id, null);
+  });
+
+  it('rejects manager and technician who are not on the task location', () => {
+    const office = createLocation(db, { name: 'Офис сотрудников', allowed_user_ids: [creator.id] });
+    assert.throws(
+      () =>
+        createTask(db, {
+          title: 'Чужой менеджер',
+          action: 'install',
+          location_id: office.id,
+          manager_user_id: other.id,
+        }),
+      /INVALID_TASK_MANAGER/
+    );
+    assert.throws(
+      () =>
+        createTask(db, {
+          title: 'Чужой техник',
+          action: 'install',
+          location_id: office.id,
+          technician_user_id: other.id,
+        }),
+      /INVALID_TASK_TECHNICIAN/
+    );
+
+    const task = createTask(db, {
+      title: 'Свои сотрудники',
+      action: 'install',
+      location_id: office.id,
+      manager_user_id: creator.id,
+      technician_user_id: creator.id,
+    });
+    assert.equal(task.manager_user_id, creator.id);
+    assert.equal(task.technician_user_id, creator.id);
+
+    assert.throws(
+      () => updateTask(db, task.id, { manager_user_id: other.id }),
+      /INVALID_TASK_MANAGER/
+    );
+    assert.throws(
+      () => updateTask(db, task.id, { technician_user_id: other.id }),
+      /INVALID_TASK_TECHNICIAN/
+    );
+  });
+
+  it('skips auto-manager on create when the actor is not on the location', () => {
+    const office = createLocation(db, { name: 'Офис без автора', allowed_user_ids: [other.id] });
+    const task = createTask(
+      db,
+      { title: 'Автор не из филиала', action: 'install', location_id: office.id },
+      { actorUserId: creator.id }
+    );
+    assert.equal(task.manager_user_id, null);
+
+    const assigned = createTask(
+      db,
+      { title: 'Автор из филиала', action: 'install', location_id: office.id },
+      { actorUserId: other.id }
+    );
+    assert.equal(assigned.manager_user_id, other.id);
+  });
+
+  it('skips auto-technician on status advance when the actor is not on the location', () => {
+    const office = createLocation(db, { name: 'Офис техника', allowed_user_ids: [other.id] });
+    const task = createTask(db, {
+      title: 'Статус чужой филиал',
+      action: 'install',
+      location_id: office.id,
+      manager_user_id: other.id,
+    });
+    const inProgress = advanceTaskStatus(db, task.id, undefined, { actorUserId: creator.id });
+    assert.equal(inProgress.status, 'in_progress');
+    assert.equal(inProgress.technician_user_id, null);
+
+    const assigned = advanceTaskStatus(db, task.id, undefined, { actorUserId: other.id });
+    assert.equal(assigned.status, 'done');
+    assert.equal(assigned.technician_user_id, other.id);
   });
 });

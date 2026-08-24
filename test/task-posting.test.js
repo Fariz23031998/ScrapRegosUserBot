@@ -116,8 +116,10 @@ describe('task posting and status', () => {
     assert.throws(() => addTaskService(db, created.id, { service_id: service.id }), /TASK_CART_LOCKED/);
     assert.throws(() => updateTaskService(db, created.id, lineId, { quantity: 2 }), /TASK_CART_LOCKED/);
     assert.throws(() => updateTask(db, created.id, { title: 'Нельзя' }), /TASK_CART_LOCKED/);
-    assert.throws(() => advanceTaskStatus(db, created.id), /TASK_CART_LOCKED/);
     assert.throws(() => deleteTask(db, created.id), /TASK_CART_LOCKED/);
+    const advanced = advanceTaskStatus(db, created.id);
+    assert.equal(advanced.status, 'in_progress');
+    assert.equal(advanced.posted, true);
     unpostTask(db, created.id);
     const updated = updateTaskService(db, created.id, lineId, { quantity: 2 });
     assert.equal(updated.services[0].quantity, 2);

@@ -24,6 +24,8 @@ export type TaskPayload = {
   action?: string;
   notes?: string;
   address?: string;
+  distance_km?: number | null;
+  distance_score?: number | null;
   category_id?: number | null;
   location_id?: number | null;
   regos_client_id?: number | null;
@@ -65,6 +67,20 @@ export function createTask(payload: TaskPayload) {
 export function updateTask(id: number, payload: TaskPayload) {
   return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${id}`, {
     method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export type TaskDistancePreview = {
+  distance_km: number | null;
+  suggested_score: number | null;
+  has_origin: boolean;
+  has_destination: boolean;
+};
+
+export function previewTaskDistance(payload: { address?: string; location_id?: number | null }) {
+  return apiFetch<TaskDistancePreview>("/bot-admin/api/tasks/distance-preview", {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }
@@ -117,8 +133,12 @@ export function listTaskLocations() {
   return apiFetch<{ locations: TaskLocation[] }>("/bot-admin/api/tasks/locations");
 }
 
-export function listTaskEmployees() {
-  return apiFetch<{ employees: TaskEmployee[] }>("/bot-admin/api/tasks/employees");
+export function listTaskEmployees(locationId?: string | number | null) {
+  const query =
+    locationId != null && String(locationId).trim()
+      ? `?location_id=${encodeURIComponent(String(locationId).trim())}`
+      : "";
+  return apiFetch<{ employees: TaskEmployee[] }>(`/bot-admin/api/tasks/employees${query}`);
 }
 
 export function searchTaskClients(q: string) {

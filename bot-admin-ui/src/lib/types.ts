@@ -754,6 +754,7 @@ export type CatalogService = {
 export type TaskLocation = {
   id: number;
   name: string;
+  allowed_user_ids?: number[];
 };
 
 export type SettingsLocationUser = {
@@ -764,6 +765,7 @@ export type SettingsLocationUser = {
 export type SettingsLocation = {
   id: number;
   name: string;
+  address?: string;
   allowed_user_ids: number[];
   allowed_users: SettingsLocationUser[];
   created_at?: string;
@@ -1046,6 +1048,8 @@ export type FieldTask = {
   action_label?: string;
   notes?: string;
   address?: string;
+  distance_km?: number | null;
+  distance_score?: number | null;
   category_id?: number | null;
   category?: { id: number; name: string } | null;
   location_id?: number | null;

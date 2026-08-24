@@ -9,6 +9,7 @@ const { openDb, getOrderById, createPayment, markOrderPaid } = require('../../sr
 const { verifyClickSignature, isClickPaymentEnabled } = require('../../src/payments/click');
 const { syncPaymeReceiptStatus } = require('../../src/payments/payme-receipts');
 const { startPaymeReceiptReconciler } = require('../../src/payments/payme-reconcile');
+const { startTaskReminderWorker } = require('../../src/bot/task-reminder');
 const { getPaymentOptionsForOrder, getPublicDir, isOrderId } = require('../../src/payments/payments-api');
 const { createBotAdminRouter } = require('../../src/admin/bot-admin');
 const { attachSmsGateway } = require('../../src/sms/sms-gateway-ws');
@@ -213,6 +214,7 @@ attachSmsGateway(server, { db });
 attachPrintGateway(server, { db });
 
 const paymeReconciler = startPaymeReceiptReconciler(db);
+const taskReminderWorker = startTaskReminderWorker(db);
 
 server.listen(port, () => {
   const adminConfigured = Boolean(
@@ -236,12 +238,14 @@ server.listen(port, () => {
 
 process.on('SIGINT', () => {
   paymeReconciler.stop();
+  taskReminderWorker.stop();
   db.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   paymeReconciler.stop();
+  taskReminderWorker.stop();
   db.close();
   process.exit(0);
 });

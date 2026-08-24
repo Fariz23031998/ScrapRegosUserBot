@@ -110,7 +110,7 @@ export default function SettingsPage() {
   const [groupTestOpen, setGroupTestOpen] = useState(false);
   const [telegramDraft, setTelegramDraft] = useState<TelegramTicketSettings | null>(null);
   const [rateDraft, setRateDraft] = useState("");
-  const [tasksDraft, setTasksDraft] = useState<{ require_serials: boolean } | null>(null);
+  const [tasksDraft, setTasksDraft] = useState<{ require_serials: boolean; score_per_km: number } | null>(null);
   const [fallbackClientQuery, setFallbackClientQuery] = useState("");
   const [fallbackClients, setFallbackClients] = useState<
     Array<{ id: number; name?: string | null; phone?: string | null; email?: string | null }>
@@ -188,7 +188,10 @@ export default function SettingsPage() {
     queryKey: ["repair-return-settings"],
     queryFn: async () => {
       const data = await getRepairReturnSettings();
-      setTasksDraft(data);
+      setTasksDraft({
+        require_serials: Boolean(data.require_serials),
+        score_per_km: Number(data.score_per_km) || 0,
+      });
       return data;
     },
     enabled: tab === "tasks" || Boolean(tasksDraft),
@@ -333,7 +336,10 @@ export default function SettingsPage() {
 
   const saveTasksMutation = useMutation({
     mutationFn: () =>
-      saveRepairReturnSettings({ require_serials: Boolean(tasksDraft?.require_serials) }),
+      saveRepairReturnSettings({
+        require_serials: Boolean(tasksDraft?.require_serials),
+        score_per_km: Number(tasksDraft?.score_per_km) || 0,
+      }),
     onSuccess: (data) => {
       setTasksDraft(data);
       setMessage({ text: "Настройки задач сохранены.", type: "success" });
@@ -1319,6 +1325,26 @@ export default function SettingsPage() {
               <p className="muted-copy">
                 Если включено, при возврате нужно выбрать или отсканировать серийные номера. Если
                 выключено, устройства возвращаются по количеству.
+              </p>
+              <label>
+                Балл за километр
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  disabled={!canEdit}
+                  value={tasksDraft.score_per_km}
+                  onChange={(event) =>
+                    setTasksDraft({
+                      ...tasksDraft,
+                      score_per_km: event.target.value === "" ? 0 : Number(event.target.value),
+                    })
+                  }
+                />
+              </label>
+              <p className="muted-copy">
+                Баллы за километр пути от филиала до адреса задачи. Используются для автозаполнения
+                поля «Баллы за дистанции».
               </p>
             </form>
           )

@@ -16,7 +16,11 @@ export function listSettingsLocations() {
   return apiFetch<{ locations: SettingsLocation[] }>("/bot-admin/api/settings/locations");
 }
 
-export function createSettingsLocation(payload: { name: string; allowed_user_ids: number[] }) {
+export function createSettingsLocation(payload: {
+  name: string;
+  address?: string;
+  allowed_user_ids: number[];
+}) {
   return apiFetch<{ location: SettingsLocation }>("/bot-admin/api/settings/locations", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -25,7 +29,7 @@ export function createSettingsLocation(payload: { name: string; allowed_user_ids
 
 export function updateSettingsLocation(
   id: number,
-  payload: { name: string; allowed_user_ids: number[] },
+  payload: { name: string; address?: string; allowed_user_ids: number[] },
 ) {
   return apiFetch<{ location: SettingsLocation }>(`/bot-admin/api/settings/locations/${id}`, {
     method: "PUT",
@@ -83,6 +87,7 @@ export function deletePaymentType(id: number) {
 
 export type RepairReturnSettings = {
   require_serials: boolean;
+  score_per_km: number;
 };
 
 export function getRepairReturnSettings() {

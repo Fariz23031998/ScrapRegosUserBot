@@ -6,6 +6,7 @@ const {
   listLocations,
   listLocationsForViewer,
   getLocation,
+  listAllowedUsers,
   createLocation,
   updateLocation,
   deleteLocation,
@@ -79,6 +80,7 @@ const {
   unpostTask,
   advanceTaskStatus,
 } = require('../db/tasks');
+const { scheduleTaskAssignmentNotify } = require('../bot/task-assignment-notify');
 const {
   createTaskPayment,
   deleteTaskPayment,
@@ -101,6 +103,7 @@ const {
   isRepairReturnRequireSerials,
   saveRepairReturnSettings,
 } = require('../db/repair-return-settings');
+const { previewTaskDistance } = require('../db/task-distance');
 
 function parsePaginationQuery(req) {
   const allowedLimits = [10, 25, 50, 100];
@@ -215,6 +218,7 @@ function categoryWriteErrorMessage(code) {
 function locationWriteErrorMessage(code) {
   if (code === 'INVALID_LOCATION_NAME') return 'Укажите название филиала.';
   if (code === 'INVALID_LOCATION_USERS') return 'Выберите хотя бы одного сотрудника с доступом к филиалу.';
+  if (code === 'INVALID_LOCATION_ADDRESS') return 'Слишком длинный адрес филиала.';
   return null;
 }
 
@@ -237,12 +241,15 @@ function taskWriteErrorMessage(code) {
     INVALID_TASK_TITLE: 'Укажите название задачи.',
     INVALID_TASK_NOTES: 'Слишком длинные заметки задачи.',
     INVALID_TASK_ADDRESS: 'Слишком длинный адрес.',
+    INVALID_TASK_DISTANCE: 'Некорректная дистанция.',
+    INVALID_TASK_DISTANCE_SCORE: 'Баллы за дистанции: число не меньше 0.',
+    INVALID_SCORE_PER_KM: 'Балл за километр: число не меньше 0.',
     INVALID_TASK_CLIENT: 'Некорректные данные клиента.',
     INVALID_TASK_STATUS: 'Некорректный статус задачи.',
     INVALID_TASK_CATEGORY: 'Некорректная категория задачи.',
     INVALID_TASK_LOCATION: 'Выберите филиал, к которому у вас есть доступ.',
-    INVALID_TASK_MANAGER: 'Некорректный менеджер.',
-    INVALID_TASK_TECHNICIAN: 'Некорректный техник.',
+    INVALID_TASK_MANAGER: 'Менеджер должен быть сотрудником выбранного филиала.',
+    INVALID_TASK_TECHNICIAN: 'Техник должен быть сотрудником выбранного филиала.',
     INVALID_TASK_PLAN: 'Некорректные дата и время начала или окончания задачи.',
     INVALID_TASK_PLAN_RANGE: 'Ориентировочное окончание не может быть раньше начала.',
     INVALID_TASK_DEVICES: 'Некорректный список устройств.',
@@ -452,6 +459,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     try {
       const location = createLocation(db, {
         name: req.body?.name,
+        address: req.body?.address,
         allowed_user_ids: req.body?.allowed_user_ids,
       });
       auditAdminChange(db, req, {
@@ -472,6 +480,7 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       const before = getLocation(db, req.params.id);
       const location = updateLocation(db, req.params.id, {
         name: req.body?.name,
+        address: req.body?.address,
         allowed_user_ids: req.body?.allowed_user_ids,
       });
       auditAdminChange(db, req, {
@@ -1147,9 +1156,19 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
     }
   });
 
-  router.get('/api/tasks/employees', requireAnyRight(db, ['tasks_read', 'settings_read']), (_req, res) => {
+  router.get('/api/tasks/employees', requireAnyRight(db, ['tasks_read', 'settings_read']), (req, res) => {
     try {
-      const employees = listEmployeeUsers(db).map(mapEmployee);
+      const locationIdRaw = String(req.query.location_id || '').trim();
+      let users = listEmployeeUsers(db);
+      if (locationIdRaw) {
+        const location = getLocation(db, locationIdRaw);
+        if (!location) {
+          return res.status(400).json({ message: taskWriteErrorMessage('INVALID_TASK_LOCATION') });
+        }
+        const allowedIds = new Set(listAllowedUsers(db, location.id).map((user) => Number(user.id)));
+        users = users.filter((user) => allowedIds.has(Number(user.id)));
+      }
+      const employees = users.map(mapEmployee);
       employees.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
       return res.json({ employees });
     } catch (error) {
@@ -1166,6 +1185,24 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       return res.status(500).json({ message: 'Не удалось загрузить филиалы.' });
     }
   });
+
+  router.post(
+    '/api/tasks/distance-preview',
+    requireAnyRight(db, ['tasks_create', 'tasks_edit']),
+    express.json(),
+    async (req, res) => {
+      try {
+        const preview = await previewTaskDistance(db, {
+          address: req.body?.address,
+          location_id: req.body?.location_id,
+        });
+        return res.json(preview);
+      } catch (error) {
+        console.error('Task distance preview error:', error);
+        return res.status(500).json({ message: 'Не удалось рассчитать дистанцию.' });
+      }
+    }
+  );
 
   // Registered before '/api/tasks/:id' so Express does not treat it as a task id.
   router.get('/api/tasks/payment-types', requireRight(db, 'tasks_read'), (_req, res) => {
@@ -1445,6 +1482,11 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
       const before = requireVisibleTask(req, res);
       if (!before) return;
       const task = advanceTaskStatus(db, before.id, taskViewer(req), {
+        actorUserId: sessionUserId(req),
+      });
+      scheduleTaskAssignmentNotify(db, {
+        before,
+        after: task,
         actorUserId: sessionUserId(req),
       });
       auditAdminChange(db, req, {
@@ -1772,6 +1814,11 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
         viewer: taskViewer(req),
         actorUserId: sessionUserId(req),
       });
+      scheduleTaskAssignmentNotify(db, {
+        before: null,
+        after: task,
+        actorUserId: sessionUserId(req),
+      });
       auditAdminChange(db, req, {
         entityType: 'task',
         entityId: task.id,
@@ -1805,6 +1852,11 @@ function registerTaskRoutes(router, db, { auditAdminChange, buildAuditDetails })
         requireLocation: true,
         viewer: taskViewer(req),
         allowAnyStatus: statusChanging && canChangeStatus,
+      });
+      scheduleTaskAssignmentNotify(db, {
+        before,
+        after: task,
+        actorUserId: sessionUserId(req),
       });
       auditAdminChange(db, req, {
         entityType: 'task',

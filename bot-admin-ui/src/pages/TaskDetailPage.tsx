@@ -144,6 +144,13 @@ function taskFullMetaRows(
     { label: "Адрес", value: textOrDash(task.address) },
     { label: "Менеджер", value: task.manager?.name || "—" },
   ];
+  if (task.distance_score != null || task.distance_km != null) {
+    const parts = [
+      task.distance_score != null ? String(task.distance_score) : null,
+      task.distance_km != null ? `${task.distance_km} км` : null,
+    ].filter(Boolean);
+    rows.push({ label: "Баллы за дистанции", value: parts.join(" · ") || "—" });
+  }
   if (task.action !== "sale") {
     rows.push({ label: "Техник", value: task.technician?.name || "—" });
   }
@@ -1125,7 +1132,7 @@ export default function TaskDetailPage() {
                   <span className="ticket-detail-header__edit-label">Изменить</span>
                 </button>
               ) : null}
-              {canEdit && !task.posted && nextStatus ? (
+              {canEdit && nextStatus ? (
                 <button
                   type="button"
                   className="btn-success btn-sm ticket-detail-header__edit"

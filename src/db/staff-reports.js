@@ -67,7 +67,7 @@ function loadPostedTasks(db, { from = null, to = null, viewer = null, locationId
 
   return db
     .prepare(
-      `SELECT t.id, t.manager_user_id, t.technician_user_id, t.location_id, t.action
+      `SELECT t.id, t.manager_user_id, t.technician_user_id, t.location_id, t.action, t.distance_score
        FROM tasks t
        WHERE ${where.join(' AND ')}`
     )
@@ -157,6 +157,7 @@ function emptyTechnicianRow(userId, name) {
     name: name || `Сотрудник #${userId}`,
     technician_task_count: 0,
     technician_task_score: 0,
+    distance_score: 0,
     ticket_count: 0,
   };
 }
@@ -202,6 +203,7 @@ function presentTechnicianRow(row) {
     name: row.name,
     technician_task_count: Number(row.technician_task_count) || 0,
     technician_task_score: roundStaffMoney(row.technician_task_score),
+    distance_score: roundStaffMoney(row.distance_score),
     ticket_count: Number(row.ticket_count) || 0,
   };
 }
@@ -221,7 +223,8 @@ function isTechnicianRowEmpty(row) {
     !row ||
     (Number(row.technician_task_count) === 0 &&
       Number(row.ticket_count) === 0 &&
-      Number(row.technician_task_score) === 0)
+      Number(row.technician_task_score) === 0 &&
+      Number(row.distance_score) === 0)
   );
 }
 
@@ -238,6 +241,7 @@ function emptyTechnicianTotals() {
   return {
     technician_task_count: 0,
     technician_task_score: 0,
+    distance_score: 0,
     ticket_count: 0,
   };
 }
@@ -256,6 +260,9 @@ function sumTechnicianTotals(rows) {
     totals.technician_task_count += Number(row.technician_task_count) || 0;
     totals.technician_task_score = roundStaffMoney(
       totals.technician_task_score + (Number(row.technician_task_score) || 0)
+    );
+    totals.distance_score = roundStaffMoney(
+      totals.distance_score + (Number(row.distance_score) || 0)
     );
     totals.ticket_count += Number(row.ticket_count) || 0;
   }
@@ -299,7 +306,13 @@ function buildTechnicianReport(
     const named = nameOf(task.technician_user_id);
     if (!named) continue;
     const row = ensureMapRow(byUser, named.user_id, (id) => emptyTechnicianRow(id, named.name));
-    if (row) row.technician_task_count += 1;
+    if (row) {
+      row.technician_task_count += 1;
+      const distanceScore = Number(task.distance_score) || 0;
+      if (distanceScore > 0) {
+        row.distance_score = roundStaffMoney(row.distance_score + distanceScore);
+      }
+    }
   }
 
   for (const line of lines) {
