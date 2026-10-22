@@ -29,6 +29,7 @@ const KnowledgePage = lazy(() => import("./pages/KnowledgePage"));
 const KnowledgeArticlePage = lazy(() => import("./pages/KnowledgeArticlePage"));
 const TestAgentsPage = lazy(() => import("./pages/TestAgentsPage"));
 const PromptsPage = lazy(() => import("./pages/PromptsPage"));
+const FirmsPage = lazy(() => import("./pages/FirmsPage"));
 
 function SuspensePage({ children }: { children: React.ReactNode }) {
   return (
@@ -58,6 +59,16 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<BotAdminLayout />}>
           <Route index element={<HomeRedirect />} />
+          <Route element={<ProtectedRoute permission="open_admin_dashboard" />}>
+            <Route
+              path="firms"
+              element={
+                <SuspensePage>
+                  <FirmsPage />
+                </SuspensePage>
+              }
+            />
+          </Route>
           <Route element={<ProtectedRoute permission="users_read" />}>
             <Route
               path="users"

@@ -3934,7 +3934,7 @@ function createBotAdminRouter(db) {
 
   router.get(
     '/api/firm-search',
-    requireAnyRight(db, ['tickets_read', 'clients_link_firm']),
+    requireAnyRight(db, ['tickets_read', 'clients_link_firm', 'open_admin_dashboard']),
     async (req, res) => {
       const q = String(req.query.q || '').trim();
       if (!q) {

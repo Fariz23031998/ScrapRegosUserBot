@@ -6,7 +6,14 @@ export type NavItem = {
   permission: keyof Permissions | string;
 };
 
+const FIRMS_NAV: NavItem = {
+  to: "/firms",
+  label: "Проверка фирм",
+  permission: "open_admin_dashboard",
+};
+
 export const NAV_ITEMS: NavItem[] = [
+  FIRMS_NAV,
   { to: "/tickets", label: "Тикеты", permission: "tickets_read" },
   { to: "/tasks", label: "Задачи", permission: "tasks_read" },
   { to: "/finances", label: "Финансы", permission: "finances_read" },
@@ -26,7 +33,10 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/settings", label: "Настройки", permission: "settings_read" },
 ];
 
-export const LANDING_REDIRECTS: NavItem[] = NAV_ITEMS;
+export const LANDING_REDIRECTS: NavItem[] = [
+  ...NAV_ITEMS.filter((item) => item.to !== FIRMS_NAV.to),
+  FIRMS_NAV,
+];
 
 const SIDEBAR_HIDDEN = new Set(["/logs"]);
 

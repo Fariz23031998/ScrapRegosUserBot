@@ -3512,6 +3512,43 @@ body.is-column-resizing * {
   color: #1e40af;
 }
 
+.firm-check-page h1 {
+  margin: 0.6rem 0 1rem;
+}
+
+.firm-check-results {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.firm-check-card {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.firm-check-card__title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.firm-check-card__phone {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.firm-check-card__body {
+  margin-top: 0.45rem;
+}
+
+.firm-check-card__body p {
+  margin: 0.15rem 0;
+}
+
 .firm-search-row {
   display: flex;
   align-items: stretch;

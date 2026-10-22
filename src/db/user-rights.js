@@ -269,6 +269,7 @@ const RIGHTS = {
 
 /** Admin UI section permission keys returned by /api/session. */
 const ADMIN_PERMISSION_KEYS = [
+  'open_admin_dashboard',
   'users_read',
   'users_create',
   'users_edit',
