@@ -1,3 +1,4 @@
+const fs = require('fs');
 const {
   authStatePathForAccount,
   rposAuthStatePath,
@@ -12,6 +13,9 @@ const regosLocks = new Map();
 const rposLocks = new Map();
 const regosStates = new Map();
 const rposStates = new Map();
+
+const REFRESH_REUSE_MS = 20_000;
+const REFRESH_FAILURE_COOLDOWN_MS = 60_000;
 
 function withLock(map, key, fn) {
   const prev = map.get(key) || Promise.resolve();
@@ -32,48 +36,100 @@ function looksLikeLoginHtml(text, url) {
   return false;
 }
 
-function getRegosState(accountLabel) {
-  if (!regosStates.has(accountLabel)) {
-    const loaded = loadStorageState(authStatePathForAccount(accountLabel));
-    regosStates.set(accountLabel, {
-      cookies: loaded.cookies,
-      origins: loaded.origins,
-    });
+function readAuthMtime(filePath) {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
   }
-  return regosStates.get(accountLabel);
+}
+
+function loadAuthState(map, accountLabel, filePath) {
+  const mtimeMs = readAuthMtime(filePath);
+  const current = map.get(accountLabel);
+  if (current && mtimeMs <= (current.loadedMtimeMs || 0)) {
+    return current;
+  }
+
+  const loaded = loadStorageState(filePath);
+  const replaced = Boolean(current);
+  const next = {
+    cookies: loaded.cookies,
+    origins: loaded.origins,
+    loadedMtimeMs: mtimeMs,
+    refreshedAt: replaced ? Date.now() : current?.refreshedAt,
+    refreshFailedAt: replaced ? undefined : current?.refreshFailedAt,
+    refreshError: replaced ? undefined : current?.refreshError,
+  };
+  map.set(accountLabel, next);
+  return next;
+}
+
+function getRegosState(accountLabel) {
+  return loadAuthState(regosStates, accountLabel, authStatePathForAccount(accountLabel));
 }
 
 function getRposState(accountLabel) {
-  if (!rposStates.has(accountLabel)) {
-    const loaded = loadStorageState(rposAuthStatePath(accountLabel));
-    rposStates.set(accountLabel, {
-      cookies: loaded.cookies,
-      origins: loaded.origins,
-    });
-  }
-  return rposStates.get(accountLabel);
+  return loadAuthState(rposStates, accountLabel, rposAuthStatePath(accountLabel));
 }
 
 function persistRegos(accountLabel) {
   const state = getRegosState(accountLabel);
-  saveStorageState(authStatePathForAccount(accountLabel), state);
+  const filePath = authStatePathForAccount(accountLabel);
+  saveStorageState(filePath, state);
+  state.loadedMtimeMs = readAuthMtime(filePath);
 }
 
 function persistRpos(accountLabel) {
   const state = getRposState(accountLabel);
-  saveStorageState(rposAuthStatePath(accountLabel), state);
+  const filePath = rposAuthStatePath(accountLabel);
+  saveStorageState(filePath, state);
+  state.loadedMtimeMs = readAuthMtime(filePath);
 }
 
-async function refreshRegosSession(accountLabel) {
+async function refreshRegosSession(accountLabel, options = {}) {
   return withLock(regosLocks, accountLabel, async () => {
-    const { storageState } = await bootstrapRegosSession(accountLabel, {
-      headless: process.env.HEADLESS !== '0',
-    });
-    regosStates.set(accountLabel, {
-      cookies: storageState.cookies || [],
-      origins: storageState.origins || [],
-    });
-    return getRegosState(accountLabel);
+    const current = regosStates.get(accountLabel);
+    const now = Date.now();
+    if (
+      current?.cookies?.length &&
+      current.refreshedAt &&
+      now - current.refreshedAt < REFRESH_REUSE_MS
+    ) {
+      return current;
+    }
+    // The scheduler must not immediately launch another browser after a failed
+    // login. A person searching still gets one attempt; the lock above keeps
+    // that attempt from running beside a login that is already in progress.
+    if (
+      options.scheduled &&
+      current?.refreshFailedAt &&
+      now - current.refreshFailedAt < REFRESH_FAILURE_COOLDOWN_MS
+    ) {
+      throw new Error(
+        current.refreshError || `Regos session refresh for ${accountLabel} failed recently`
+      );
+    }
+
+    try {
+      const { storageState } = await bootstrapRegosSession(accountLabel, {
+        headless: process.env.HEADLESS !== '0',
+      });
+      const filePath = authStatePathForAccount(accountLabel);
+      const next = {
+        cookies: storageState.cookies || [],
+        origins: storageState.origins || [],
+        refreshedAt: Date.now(),
+        loadedMtimeMs: readAuthMtime(filePath),
+      };
+      regosStates.set(accountLabel, next);
+      return next;
+    } catch (err) {
+      const state = getRegosState(accountLabel);
+      state.refreshFailedAt = Date.now();
+      state.refreshError = String(err?.message || err).split('\n')[0];
+      throw err;
+    }
   });
 }
 
@@ -172,6 +228,8 @@ function assertJsonOrThrow(response, label) {
 module.exports = {
   ensureRegosRequest,
   ensureRposRequest,
+  getRegosState,
+  getRposState,
   withRegosSession,
   withRposSession,
   refreshRegosSession,

@@ -51,6 +51,11 @@ async function saveLoginErrorScreenshot(page, accountLabel) {
   }
 }
 
+function isRegosAuthUrl(url) {
+  const href = typeof url === 'string' ? url : url.toString();
+  return href.toLowerCase().includes('auth.regos.uz');
+}
+
 function isAuthenticatedAppUrl(url) {
   const href = typeof url === 'string' ? url : url.toString();
   let hostname;
@@ -59,8 +64,46 @@ function isAuthenticatedAppUrl(url) {
   } catch {
     return false;
   }
-  if (isLoginUrl(href)) return false;
+  if (isLoginUrl(href) || isRegosAuthUrl(href)) return false;
   return /regos\.uz|easytrade\.uz/i.test(hostname);
+}
+
+async function acceptRegosOAuthConsent(page) {
+  const allow = page.getByRole('button', { name: /разрешить доступ/i });
+  if (!(await allow.count())) return false;
+  await allow.first().click();
+  return true;
+}
+
+/**
+ * Password sign-in often stops on auth.regos.uz/oauth/authorize (“Разрешить доступ”).
+ * That page is still auth.regos.uz, so waiting to leave the host never finishes
+ * unless the consent button is clicked.
+ */
+async function waitUntilLeftRegosAuth(page, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isRegosAuthUrl(page.url())) return;
+    await acceptRegosOAuthConsent(page).catch(() => {});
+    const remaining = Math.max(1, deadline - Date.now());
+    await page
+      .waitForURL((url) => !isRegosAuthUrl(url), { timeout: Math.min(2000, remaining) })
+      .catch(() => {});
+  }
+
+  if (!isRegosAuthUrl(page.url())) return;
+
+  let location = 'auth.regos.uz';
+  try {
+    const parsed = new URL(page.url());
+    location = `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    // keep the short fallback
+  }
+  const screenshot = await saveLoginErrorScreenshot(page, 'regos-auth');
+  throw new Error(
+    `Regos ID did not finish sign-in (${location})${screenshot ? ` (screenshot: ${screenshot})` : ''}`
+  );
 }
 
 async function performRegosIdLogin(page, { phone, password, accountLabel = 'account' }) {
@@ -92,15 +135,7 @@ async function performRegosIdLogin(page, { phone, password, accountLabel = 'acco
   await page.locator('#PhoneNumber').fill(phone);
   await page.locator('#Password').fill(password);
   await page.getByRole('button', { name: /^войти$/i }).click();
-
-  await page
-    .waitForURL((url) => !url.hostname.includes('auth.regos.uz'), { timeout: 120000 })
-    .catch(async () => {
-      await page.waitForFunction(
-        () => !window.location.hostname.includes('auth.regos.uz'),
-        { timeout: 120000 }
-      );
-    });
+  await waitUntilLeftRegosAuth(page);
 
   if (isLoginUrl(page.url())) {
     const screenshot = await saveLoginErrorScreenshot(page, accountLabel);
@@ -162,19 +197,30 @@ async function ensurePartnerAccountsIndex(page, accountLabel) {
  * Does not log out. Callers should persist the context after a successful sync.
  */
 async function ensureEasyTradeSession(page) {
-  await page.goto(`${ET_BASE_URL}/Licenses/Index`, { waitUntil: 'networkidle', timeout: 60000 });
+  const indexUrl = `${ET_BASE_URL}/Licenses/Index`;
+  await page.goto(indexUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-  if (!isLoginUrl(page.url())) {
+  if (isRegosAuthUrl(page.url())) {
+    await waitUntilLeftRegosAuth(page);
+    if (!page.url().includes('easytrade.uz')) {
+      await page.goto(indexUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
+  }
+
+  if (!isLoginUrl(page.url()) && !isRegosAuthUrl(page.url())) {
     return { reused: true };
   }
 
   const loginLink = page.getByRole('link', { name: /войти через regos/i });
   if (await loginLink.count()) {
     await loginLink.click();
-    await page.waitForLoadState('networkidle', { timeout: 120000 }).catch(() => {});
+    await waitUntilLeftRegosAuth(page);
+    if (!page.url().includes('easytrade.uz')) {
+      await page.goto(indexUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
   }
 
-  if (isLoginUrl(page.url())) {
+  if (isLoginUrl(page.url()) || isRegosAuthUrl(page.url())) {
     throw new Error('EasyTrade session not available');
   }
 
@@ -183,20 +229,24 @@ async function ensureEasyTradeSession(page) {
 
 async function ensureVcr1IndexPage(page, indexPath, accountLabel = 'account') {
   const url = `${VCR1_BASE_URL}${indexPath}`;
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-  if (isLoginUrl(page.url())) {
-    const loginLink = page.getByRole('link', { name: /войти через regos/i });
-    if (!(await loginLink.count())) {
-      const screenshot = await saveLoginErrorScreenshot(page, `vcr1-${accountLabel}`);
-      throw new Error(
-        `vcr1 Regos ID login link not found on ${indexPath}${screenshot ? ` (screenshot: ${screenshot})` : ''}`
-      );
+  if (isLoginUrl(page.url()) || isRegosAuthUrl(page.url())) {
+    if (isLoginUrl(page.url())) {
+      const loginLink = page.getByRole('link', { name: /войти через regos/i });
+      if (!(await loginLink.count())) {
+        const screenshot = await saveLoginErrorScreenshot(page, `vcr1-${accountLabel}`);
+        throw new Error(
+          `vcr1 Regos ID login link not found on ${indexPath}${screenshot ? ` (screenshot: ${screenshot})` : ''}`
+        );
+      }
+      await loginLink.click();
     }
 
-    await loginLink.click();
-    await page.waitForLoadState('networkidle', { timeout: 120000 }).catch(() => {});
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+    await waitUntilLeftRegosAuth(page);
+    if (!page.url().includes(indexPath)) {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
   }
 
   if (isLoginUrl(page.url())) {

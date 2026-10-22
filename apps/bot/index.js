@@ -41,6 +41,7 @@ const {
 const { formatUnpaidOrdersBlock } = require('../../src/bot/bot-format');
 const { enrichOrderParties } = require('../../src/bot/order-parties');
 const { sendChatActionSafe } = require('../../src/bot/telegram-safe');
+const { startSessionKeepalive } = require('../../src/live/session-keepalive');
 const { withHtml } = require('../../src/bot/telegram-html');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -450,6 +451,8 @@ async function handleIncomingMessage(msg) {
 
 console.log('Telegram bot is running.');
 
+const sessionKeepalive = startSessionKeepalive();
+
 bot
   .setMyCommands(buildDefaultBotCommands())
   .catch((error) => {
@@ -471,11 +474,13 @@ process.on('unhandledRejection', (reason) => {
 });
 
 process.on('SIGINT', () => {
+  sessionKeepalive.stop();
   db.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
+  sessionKeepalive.stop();
   db.close();
   process.exit(0);
 });
