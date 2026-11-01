@@ -4533,6 +4533,10 @@ body.is-column-resizing * {
   gap: 0.45rem;
 }
 
+.ticket-chat__compose-tools {
+  display: contents;
+}
+
 .ticket-chat__compose-field {
   flex: 1;
   min-width: 0;
@@ -5264,6 +5268,25 @@ body.is-column-resizing * {
 
   .ticket-chat__compose-row {
     gap: 0.4rem;
+  }
+
+  .page--ticket-detail .ticket-chat__compose-row {
+    flex-wrap: wrap;
+  }
+
+  .page--ticket-detail .ticket-chat__compose-field {
+    flex: 1 0 100%;
+  }
+
+  .page--ticket-detail .ticket-chat__compose-tools {
+    display: flex;
+    flex: 1 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    min-width: 100%;
   }
 
   .ticket-chat__compose textarea {

@@ -452,80 +452,82 @@ export default function ChatCompose({
             }}
           />
         </label>
-        {allowFiles ? (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="visually-hidden"
-              multiple
-              disabled={!enabled || recording}
-              onChange={(event) => {
-                addFiles(event.target.files);
-                event.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="btn-secondary btn-icon ticket-chat__action-btn"
-              disabled={!enabled || recording}
-              aria-label="Файл"
-              title="Файл"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip size={18} aria-hidden="true" />
-            </button>
-          </>
-        ) : null}
-        {extraActions}
-        {canRecord ? (
-          <>
-            {recording ? (
-              <>
-                <span className="ticket-chat__record-timer" aria-live="polite">
-                  {formatRecordTimer(recordSeconds)}
-                </span>
-                <button
-                  type="button"
-                  className="btn-secondary btn-icon ticket-chat__action-btn"
-                  aria-label="Отменить запись"
-                  title="Отменить запись"
-                  onClick={() => finishRecording(true)}
-                >
-                  ×
-                </button>
-              </>
-            ) : null}
-            <button
-              type="button"
-              className={`btn-icon ticket-chat__action-btn${
-                recording ? " btn-danger ticket-chat__action-btn--recording" : " btn-secondary"
-              }`}
-              disabled={!enabled && !recording}
-              aria-label={recording ? "Остановить запись" : "Записать голосовое"}
-              title={recording ? "Остановить запись" : "Записать голосовое"}
-              onClick={() => {
-                if (recording) finishRecording(false);
-                else void startRecording();
-              }}
-            >
-              {recording ? <Square size={18} aria-hidden="true" /> : <Mic size={18} aria-hidden="true" />}
-            </button>
-          </>
-        ) : null}
-        <button
-          type="submit"
-          className="btn-primary btn-icon ticket-chat__action-btn"
-          disabled={!enabled || recording}
-          aria-label="Отправить"
-          title="Отправить"
-        >
-          {busy ? (
-            <span className="process-spinner process-spinner--inline" aria-hidden="true" />
-          ) : (
-            <Send size={18} aria-hidden="true" />
-          )}
-        </button>
+        <div className="ticket-chat__compose-tools">
+          {allowFiles ? (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="visually-hidden"
+                multiple
+                disabled={!enabled || recording}
+                onChange={(event) => {
+                  addFiles(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="btn-secondary btn-icon ticket-chat__action-btn"
+                disabled={!enabled || recording}
+                aria-label="Файл"
+                title="Файл"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Paperclip size={18} aria-hidden="true" />
+              </button>
+            </>
+          ) : null}
+          {extraActions}
+          {canRecord ? (
+            <>
+              {recording ? (
+                <>
+                  <span className="ticket-chat__record-timer" aria-live="polite">
+                    {formatRecordTimer(recordSeconds)}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-icon ticket-chat__action-btn"
+                    aria-label="Отменить запись"
+                    title="Отменить запись"
+                    onClick={() => finishRecording(true)}
+                  >
+                    ×
+                  </button>
+                </>
+              ) : null}
+              <button
+                type="button"
+                className={`btn-icon ticket-chat__action-btn${
+                  recording ? " btn-danger ticket-chat__action-btn--recording" : " btn-secondary"
+                }`}
+                disabled={!enabled && !recording}
+                aria-label={recording ? "Остановить запись" : "Записать голосовое"}
+                title={recording ? "Остановить запись" : "Записать голосовое"}
+                onClick={() => {
+                  if (recording) finishRecording(false);
+                  else void startRecording();
+                }}
+              >
+                {recording ? <Square size={18} aria-hidden="true" /> : <Mic size={18} aria-hidden="true" />}
+              </button>
+            </>
+          ) : null}
+          <button
+            type="submit"
+            className="btn-primary btn-icon ticket-chat__action-btn"
+            disabled={!enabled || recording}
+            aria-label="Отправить"
+            title="Отправить"
+          >
+            {busy ? (
+              <span className="process-spinner process-spinner--inline" aria-hidden="true" />
+            ) : (
+              <Send size={18} aria-hidden="true" />
+            )}
+          </button>
+        </div>
       </div>
       {fileError && !onFileError ? <p className="message error">{fileError}</p> : null}
       {footer}
