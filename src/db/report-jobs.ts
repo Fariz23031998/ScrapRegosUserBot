@@ -1,0 +1,348 @@
+import type { Unchecked } from '../types/unchecked';
+import type { Db } from '../types/db';
+import { getBotUserById, getBotUserByTelegramId } from './bot-users-db';
+import { resolveListOrderBy } from './list-sort';
+
+const REPORT_JOB_TYPES = Object.freeze(['technician', 'commission', 'finance']);
+const IN_FLIGHT_STATUSES = Object.freeze(['pending', 'running']);
+const LIST_JOB_COLUMNS = `id, type, status, params_json, error_message,
+      created_by_type, created_by_telegram_id, created_by_user_id, created_at, updated_at`;
+
+function nowUnix() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function ensureReportJobTables(db: Db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS report_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      params_json TEXT NOT NULL,
+      result_json TEXT,
+      error_message TEXT,
+      created_by_type TEXT NOT NULL,
+      created_by_telegram_id INTEGER,
+      created_by_user_id INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_report_jobs_status ON report_jobs(status, created_at)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_report_jobs_actor ON report_jobs(created_by_type, created_by_telegram_id, created_by_user_id, type, status)'
+  );
+}
+
+function parseJson(raw?: any, fallback?: any) {
+  if (raw == null || raw === '') return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function mapReportJobRow(row?: any) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    type: row.type,
+    status: row.status,
+    params: parseJson(row.params_json, {}),
+    params_json: row.params_json,
+    result: row.status === 'ready' ? parseJson(row.result_json, null) : null,
+    error_message: row.error_message || null,
+    created_by_type: row.created_by_type,
+    created_by_telegram_id: row.created_by_telegram_id == null ? null : Number(row.created_by_telegram_id),
+    created_by_user_id: row.created_by_user_id == null ? null : Number(row.created_by_user_id),
+    created_at: Number(row.created_at) || 0,
+    updated_at: Number(row.updated_at) || 0,
+  };
+}
+
+function publicReportParams(params?: any) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return {};
+  const { viewer, ...rest } = params;
+  return rest;
+}
+
+function presentReportJob(job: any, { includeResult = true }: Unchecked = {}) {
+  if (!job) return null;
+  const presented: Unchecked = {
+    id: job.id,
+    type: job.type,
+    status: job.status,
+    params: publicReportParams(job.params),
+    error_message: job.error_message,
+    created_at: job.created_at,
+    updated_at: job.updated_at,
+  };
+  if (includeResult) presented.result = job.result;
+  return presented;
+}
+
+function snapshotActor(db: Db, actor?: any) {
+  if (!actor || actor.type === 'password') {
+    return { type: 'password', telegramId: null, userId: null };
+  }
+  if (actor.type === 'telegram') {
+    const telegramId = Number(actor.telegramId);
+    const user = Number.isFinite(telegramId) ? getBotUserByTelegramId(db, telegramId) : null;
+    return {
+      type: 'telegram',
+      telegramId: Number.isFinite(telegramId) ? telegramId : null,
+      userId: user?.id == null ? null : Number(user.id),
+    };
+  }
+  if (actor.type === 'user') {
+    const userId = Number(actor.userId);
+    const user = Number.isFinite(userId) ? getBotUserById(db, userId) : null;
+    const telegramId = Number(user?.telegram_id);
+    return {
+      type: 'user',
+      telegramId: Number.isFinite(telegramId) ? telegramId : null,
+      userId: Number.isFinite(userId) ? userId : null,
+    };
+  }
+  return { type: String(actor.type || 'password'), telegramId: null, userId: null };
+}
+
+function actorKey(actor?: any) {
+  if (!actor || actor.type === 'password') return 'password';
+  if (actor.type === 'telegram') return `telegram:${actor.telegramId}`;
+  if (actor.type === 'user') return `user:${actor.userId}`;
+  return 'unknown';
+}
+
+function actorKeyFromJob(job?: any) {
+  if (!job) return 'unknown';
+  if (job.created_by_type === 'telegram' && job.created_by_telegram_id != null) {
+    return `telegram:${job.created_by_telegram_id}`;
+  }
+  if (job.created_by_type === 'user' && job.created_by_user_id != null) {
+    return `user:${job.created_by_user_id}`;
+  }
+  return 'password';
+}
+
+function positiveId(value?: any) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return null;
+  return n;
+}
+
+function actorOwnsReportJob(db: Db, job?: any, actor?: any) {
+  if (!job || !actor) return false;
+  if (actor.type === 'password') return job.created_by_type === 'password';
+  if (actor.type === 'telegram') {
+    const telegramId = positiveId(actor.telegramId);
+    return telegramId != null && positiveId(job.created_by_telegram_id) === telegramId;
+  }
+  if (actor.type === 'user') {
+    const userId = positiveId(actor.userId);
+    if (userId != null && positiveId(job.created_by_user_id) === userId) return true;
+    const user = userId != null ? getBotUserById(db, userId) : null;
+    const telegramId = positiveId(user?.telegram_id);
+    return telegramId != null && positiveId(job.created_by_telegram_id) === telegramId;
+  }
+  return false;
+}
+
+function actorOwnershipFilter(db: Db, actor?: any) {
+  if (!actor || actor.type === 'password') {
+    return { where: "created_by_type = 'password'", params: [] };
+  }
+  if (actor.type === 'telegram') {
+    const telegramId = positiveId(actor.telegramId);
+    if (telegramId == null) return { where: '0', params: [] };
+    return { where: 'created_by_telegram_id = ?', params: [telegramId] };
+  }
+  if (actor.type === 'user') {
+    const userId = positiveId(actor.userId);
+    const user = userId != null ? getBotUserById(db, userId) : null;
+    const telegramId = positiveId(user?.telegram_id);
+    const clauses: any[] = [];
+    const params: any[] = [];
+    if (userId != null) {
+      clauses.push('created_by_user_id = ?');
+      params.push(userId);
+    }
+    if (telegramId != null) {
+      clauses.push('created_by_telegram_id = ?');
+      params.push(telegramId);
+    }
+    if (!clauses.length) return { where: '0', params: [] };
+    return { where: `(${clauses.join(' OR ')})`, params };
+  }
+  return { where: '0', params: [] };
+}
+
+function resolveActorTelegramId(job?: any) {
+  return positiveId(job?.created_by_telegram_id);
+}
+
+function getReportJob(db: Db, jobId?: any) {
+  ensureReportJobTables(db);
+  const id = Number(jobId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return mapReportJobRow(db.prepare('SELECT * FROM report_jobs WHERE id = ?').get(id));
+}
+
+function findInFlightReportJob(db: Db, { type, paramsJson, actor }: Unchecked) {
+  ensureReportJobTables(db);
+  const snapshot = snapshotActor(db, actor);
+  return mapReportJobRow(
+    db
+      .prepare(
+        `SELECT * FROM report_jobs
+         WHERE type = ?
+           AND status IN ('pending', 'running')
+           AND params_json = ?
+           AND created_by_type = ?
+           AND IFNULL(created_by_telegram_id, 0) = IFNULL(?, 0)
+           AND IFNULL(created_by_user_id, 0) = IFNULL(?, 0)
+         ORDER BY id DESC
+         LIMIT 1`
+      )
+      .get(type, paramsJson, snapshot.type, snapshot.telegramId, snapshot.userId)
+  );
+}
+
+function listUnfinishedReportJobs(db: Db) {
+  ensureReportJobTables(db);
+  return db
+    .prepare(
+      `SELECT * FROM report_jobs
+       WHERE status IN ('pending', 'running')
+       ORDER BY id ASC`
+    )
+    .all()
+    .map(mapReportJobRow);
+}
+
+function listReportJobsForActor(db: Db, actor: any, { offset = 0, limit = 25, type, sort }: Unchecked = {}) {
+  ensureReportJobTables(db);
+  const ownership = actorOwnershipFilter(db, actor);
+  const clauses = [ownership.where];
+  const params = [...ownership.params];
+  if (REPORT_JOB_TYPES.includes(type)) {
+    clauses.push('type = ?');
+    params.push(type);
+  }
+  const where = clauses.join(' AND ');
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 25));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const totalRow = db.prepare(`SELECT COUNT(*) AS total FROM report_jobs WHERE ${where}`).get(...params);
+  const jobs = db
+    .prepare(
+      `SELECT ${LIST_JOB_COLUMNS}
+       FROM report_jobs
+       WHERE ${where}
+       ${
+         resolveListOrderBy(
+           sort,
+           {
+             id: 'id',
+             period: "CAST(json_extract(params_json, '$.from_date') AS INTEGER)",
+             status: 'status COLLATE NOCASE',
+             created_at: 'created_at',
+           },
+           'id',
+         ) || 'ORDER BY id DESC'
+       }
+       LIMIT ? OFFSET ?`
+    )
+    .all(...params, safeLimit, safeOffset)
+    .map(mapReportJobRow);
+  return {
+    jobs,
+    total: Number(totalRow?.total) || 0,
+  };
+}
+
+function createReportJob(db: Db, { type, paramsJson, actor }: Unchecked) {
+  ensureReportJobTables(db);
+  const snapshot = snapshotActor(db, actor);
+  const now = nowUnix();
+  const result = db
+    .prepare(
+      `INSERT INTO report_jobs (
+         type, status, params_json,
+         created_by_type, created_by_telegram_id, created_by_user_id,
+         created_at, updated_at
+       ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)`
+    )
+    .run(type, paramsJson, snapshot.type, snapshot.telegramId, snapshot.userId, now, now);
+  return getReportJob(db, Number(result.lastInsertRowid));
+}
+
+function markReportJobRunning(db: Db, jobId?: any) {
+  ensureReportJobTables(db);
+  db.prepare(
+    `UPDATE report_jobs
+     SET status = 'running', error_message = NULL, updated_at = ?
+     WHERE id = ? AND status IN ('pending', 'running')`
+  ).run(nowUnix(), jobId);
+  return getReportJob(db, jobId);
+}
+
+function completeReportJob(db: Db, jobId?: any, result?: any) {
+  ensureReportJobTables(db);
+  db.prepare(
+    `UPDATE report_jobs
+     SET status = 'ready', result_json = ?, error_message = NULL, updated_at = ?
+     WHERE id = ?`
+  ).run(JSON.stringify(result ?? null), nowUnix(), jobId);
+  return getReportJob(db, jobId);
+}
+
+function failReportJob(db: Db, jobId?: any, errorMessage?: any) {
+  ensureReportJobTables(db);
+  db.prepare(
+    `UPDATE report_jobs
+     SET status = 'failed', error_message = ?, updated_at = ?
+     WHERE id = ?`
+  ).run(String(errorMessage || 'Не удалось построить отчёт.'), nowUnix(), jobId);
+  return getReportJob(db, jobId);
+}
+
+function resetStuckRunningReportJobs(db: Db) {
+  ensureReportJobTables(db);
+  db.prepare(
+    `UPDATE report_jobs
+     SET status = 'pending', updated_at = ?
+     WHERE status = 'running'`
+  ).run(nowUnix());
+}
+
+function deleteReportJob(db: Db, jobId?: any) {
+  ensureReportJobTables(db);
+  const id = Number(jobId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  const result = db.prepare('DELETE FROM report_jobs WHERE id = ?').run(id);
+  return Number(result.changes) > 0;
+}
+
+export {
+  REPORT_JOB_TYPES,
+  IN_FLIGHT_STATUSES,
+  ensureReportJobTables,
+  snapshotActor,
+  actorKey,
+  actorKeyFromJob,
+  actorOwnsReportJob,
+  resolveActorTelegramId,
+  publicReportParams,
+  presentReportJob,
+  getReportJob,
+  findInFlightReportJob,
+  listUnfinishedReportJobs,
+  listReportJobsForActor,
+  createReportJob,
+  markReportJobRunning,
+  completeReportJob,
+  failReportJob,
+  resetStuckRunningReportJobs,
+  deleteReportJob,
+};

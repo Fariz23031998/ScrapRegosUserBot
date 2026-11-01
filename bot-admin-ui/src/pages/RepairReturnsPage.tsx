@@ -11,6 +11,7 @@ import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -108,8 +109,9 @@ export default function RepairReturnsPage() {
     queryFn: listTaskLocations,
   });
 
+  const { sort, onSortingChange } = useServerTableSort();
   const listQuery = usePagedInfiniteQuery({
-    queryKey: ["repair-returns", search, appliedStatus, appliedLocationId],
+    queryKey: ["repair-returns", search, appliedStatus, appliedLocationId, sort],
     queryFn: (page, pageSize) =>
       listRepairReturns({
         page,
@@ -117,9 +119,11 @@ export default function RepairReturnsPage() {
         q: search || undefined,
         status: appliedStatus as "pending" | "returned",
         location_id: appliedLocationId || undefined,
+        sort: sort || undefined,
       }),
     getItems: (data) => data.items || [],
     getItemId: rowKey,
+    keepPrevious: true,
   });
 
   const locations = locationsQuery.data?.locations || [];
@@ -291,6 +295,7 @@ export default function RepairReturnsPage() {
       {
         id: "quantity",
         header: "Количество",
+        accessorFn: (row) => (row.kind === "returned" ? row.return_quantity || 0 : row.remaining_quantity),
         cell: ({ row }) =>
           showingReturned
             ? `${row.original.return_quantity || 0} из ${row.original.quantity}`
@@ -299,11 +304,13 @@ export default function RepairReturnsPage() {
       {
         id: "serials",
         header: "Серийники",
+        enableSorting: false,
         accessorFn: (row) => (row.serials || []).map((serial) => serial.code).join(", ") || "—",
       },
       {
         id: "task",
         header: "Задача",
+        accessorFn: (row) => row.task.title || "",
         cell: ({ row }) => (
           <Link to={`/tasks/${row.original.task.id}`} onClick={(event) => event.stopPropagation()}>
             {row.original.task.title}
@@ -436,6 +443,9 @@ export default function RepairReturnsPage() {
             data={items}
             columns={columns}
             isLoading={listQuery.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={emptyMessage}
             getRowId={rowKey}

@@ -26,13 +26,14 @@ export function saveTechnicalSupportPrices(prices: Record<string, number>) {
   });
 }
 
-export function listTechnicalSupportSubscriptions(params: { page: number; limit: number; q?: string; status?: string }) {
+export function listTechnicalSupportSubscriptions(params: { page: number; limit: number; q?: string; status?: string; sort?: string }) {
   const search = new URLSearchParams({
     page: String(params.page),
     limit: String(params.limit),
   });
   if (params.q) search.set("q", params.q);
   if (params.status) search.set("status", params.status);
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<{ subscriptions: TechnicalSupportSubscription[]; total: number; page: number; limit: number }>(
     `/bot-admin/api/technical-support/subscriptions?${search}`,
   );

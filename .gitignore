@@ -10,3 +10,6 @@ data/auth/
 .env
 .cursor/mcp.json
 logs/
+public/bot-admin/*.js
+public/js/*.js
+tsconfig.browser.file.json

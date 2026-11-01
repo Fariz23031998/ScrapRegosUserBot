@@ -10,6 +10,7 @@ import EntityCards from "../components/EntityCards";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import Modal from "../components/Modal";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import { TicketPeriodModal } from "../components/TicketPeriodModal";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -51,11 +52,13 @@ export default function ReportsPage() {
     saveFilters(filters);
   }, [filters]);
 
+  const { sort, onSortingChange } = useServerTableSort();
   const jobsQuery = usePagedInfiniteQuery({
-    queryKey: ["report-jobs", tab],
-    queryFn: (page, pageSize) => listReportJobs({ page, limit: pageSize, type: tab }),
+    queryKey: ["report-jobs", tab, sort],
+    queryFn: (page, pageSize) => listReportJobs({ page, limit: pageSize, type: tab, sort: sort || undefined }),
     getItems: (data) => data.jobs || [],
     getItemId: (job) => job.id,
+    keepPrevious: true,
   });
 
   const createMutation = useMutation({
@@ -282,6 +285,9 @@ export default function ReportsPage() {
             data={jobs}
             columns={columns}
             isLoading={jobsQuery.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             emptyMessage="Отчётов пока нет."
             getRowId={(row) => String(row.id)}
             onRowClick={(job) => navigate(reportJobPath(job.id))}

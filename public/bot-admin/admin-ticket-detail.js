@@ -1,1313 +1,96 @@
-const STATUS_LABELS = {
-  Open: 'Открыт',
-  Closed: 'Закрыт',
-  WaitingClient: 'Ожидание клиента',
-  WaitingStaff: 'Ожидание сотрудника',
+"use strict";
+var STATUS_LABELS = {
+    Open: 'Открыт',
+    Closed: 'Закрыт',
+    WaitingClient: 'Ожидание клиента',
+    WaitingStaff: 'Ожидание сотрудника',
 };
-
-const DIRECTION_LABELS = {
-  Inbound: 'Входящий',
-  Outbound: 'Исходящий',
+var DIRECTION_LABELS = {
+    Inbound: 'Входящий',
+    Outbound: 'Исходящий',
 };
-
-const FIRM_TYPE_LABELS = {
-  partner: 'Partner',
-  vcr1_partner: 'VCR',
-  vcr1_license: 'VCR лицензия',
-  license: 'Лицензия',
-  rpos_client: 'RPOS клиент',
-  rpos_account: 'RPOS аккаунт',
+var FIRM_TYPE_LABELS = {
+    partner: 'Partner',
+    vcr1_partner: 'VCR',
+    vcr1_license: 'VCR лицензия',
+    license: 'Лицензия',
+    rpos_client: 'RPOS клиент',
+    rpos_account: 'RPOS аккаунт',
 };
-
-let ticket = null;
-let userNames = {};
-let ticketUsers = [];
-let selectedFirm = null;
-let linkedClientFirms = [];
-let ticketDefaultPhone = '';
-let createOrderBusy = false;
-let chatMessages = [];
-let chatOffset = 0;
-let chatTotal = 0;
-let chatHasOlder = false;
-let chatPollTimer = null;
-let chatRequestId = 0;
-let currentTicketId = null;
-let editTicketBusy = false;
-let canEditTickets = false;
-let canEditClosedTickets = false;
-
-const CHAT_PAGE_LIMIT = 50;
-const CHAT_POLL_MS = 18000;
-const MAX_CHAT_FILES = 5;
-const MAX_CHAT_FILE_BYTES = 10 * 1024 * 1024;
-const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
-const AUDIO_EXTENSIONS = new Set(['mp3', 'ogg', 'wav', 'm4a', 'aac', 'opus', 'oga', 'weba']);
-const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
-
-let pendingChatFiles = [];
-let pendingChatFileSeq = 0;
-
-const ticketTitleEl = document.getElementById('ticket-title');
-const ticketSubtitleEl = document.getElementById('ticket-subtitle');
-const ticketErrorEl = document.getElementById('ticket-error');
-const ticketSuccessEl = document.getElementById('ticket-success');
-const ticketWorkspace = document.getElementById('ticket-workspace');
-const ticketViewTabs = document.getElementById('ticket-view-tabs');
-const ticketDetailCard = document.getElementById('ticket-detail-card');
-const ticketDetailBody = document.getElementById('ticket-detail-body');
-const ticketChatCard = document.getElementById('ticket-chat-card');
-const ticketChatMessagesEl = document.getElementById('ticket-chat-messages');
-const ticketChatStatusEl = document.getElementById('ticket-chat-status');
-const ticketChatRefreshBtn = document.getElementById('ticket-chat-refresh');
-const ticketChatLoadOlderWrap = document.getElementById('ticket-chat-load-older-wrap');
-const ticketChatLoadOlderBtn = document.getElementById('ticket-chat-load-older');
-const ticketChatCompose = document.getElementById('ticket-chat-compose');
-const ticketChatPendingEl = document.getElementById('ticket-chat-pending');
-const ticketChatInput = document.getElementById('ticket-chat-input');
-const ticketChatFileInput = document.getElementById('ticket-chat-file');
-const ticketChatAttachBtn = document.getElementById('ticket-chat-attach');
-const ticketChatSendBtn = document.getElementById('ticket-chat-send');
-const createOrderModal = document.getElementById('create-order-modal');
-const createOrderForm = document.getElementById('create-order-form');
-const createOrderToggle = document.getElementById('create-order-toggle');
-const createOrderCancel = document.getElementById('create-order-cancel');
-const createOrderClose = document.getElementById('create-order-close');
-const createOrderErrorEl = document.getElementById('create-order-error');
-const orderAmountInput = document.getElementById('order-amount');
-const orderClientPhoneInput = document.getElementById('order-client-phone');
-const orderAdditionalPhoneInput = document.getElementById('order-additional-phone');
-const createOrderSubmit = document.getElementById('create-order-submit');
-const createOrderProgress = document.getElementById('create-order-progress');
-const firmSearchInput = document.getElementById('firm-search-input');
-const firmSearchBtn = document.getElementById('firm-search-btn');
-const firmSearchStatus = document.getElementById('firm-search-status');
-const firmSearchResults = document.getElementById('firm-search-results');
-const firmSelectedEl = document.getElementById('firm-selected');
-const editTicketToggle = document.getElementById('edit-ticket-toggle');
-const editTicketModal = document.getElementById('edit-ticket-modal');
-const editTicketForm = document.getElementById('edit-ticket-form');
-const editTicketClose = document.getElementById('edit-ticket-close');
-const editTicketCancel = document.getElementById('edit-ticket-cancel');
-const editTicketSubmit = document.getElementById('edit-ticket-submit');
-const editTicketError = document.getElementById('edit-ticket-error');
-const editTicketSubject = document.getElementById('edit-ticket-subject');
-const editTicketDirection = document.getElementById('edit-ticket-direction');
-const editTicketStatus = document.getElementById('edit-ticket-status');
-const editTicketResponsible = document.getElementById('edit-ticket-responsible');
-const editTicketDescription = document.getElementById('edit-ticket-description');
-
-function setTicketView(view) {
-  const nextView = view === 'detail' ? 'detail' : 'chat';
-  ticketWorkspace.dataset.activeView = nextView;
-  ticketViewTabs.querySelectorAll('.role-tab').forEach((tab) => {
-    const isActive = tab.dataset.view === nextView;
-    tab.classList.toggle('role-tab--active', isActive);
-    tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
-  });
-}
-
-function showTicketWorkspace() {
-  ticketWorkspace.hidden = false;
-  ticketViewTabs.hidden = false;
-  ticketDetailCard.hidden = false;
-  ticketChatCard.hidden = false;
-}
-
-function statusLabel(status) {
-  return STATUS_LABELS[status] || status || '—';
-}
-
-function directionLabel(direction) {
-  return DIRECTION_LABELS[direction] || direction || '—';
-}
-
-function firmTypeLabel(type) {
-  return FIRM_TYPE_LABELS[type] || type || '—';
-}
-
-function formatUnix(seconds) {
-  if (seconds == null || seconds === 0) return '—';
-  const date = new Date(Number(seconds) * 1000);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
-
-function userLabel(userId) {
-  if (userId == null) return '—';
-  return userNames[userId] || `Пользователь #${userId}`;
-}
-
-function statusBadgeClass(status) {
-  switch (status) {
-    case 'Open':
-      return 'ticket-status ticket-status--open';
-    case 'Closed':
-      return 'ticket-status ticket-status--closed';
-    case 'WaitingClient':
-      return 'ticket-status ticket-status--waiting-client';
-    case 'WaitingStaff':
-      return 'ticket-status ticket-status--waiting-staff';
-    default:
-      return 'ticket-status';
-  }
-}
-
-function showError(message) {
-  ticketSuccessEl.hidden = true;
-  if (!message) {
-    ticketErrorEl.hidden = true;
-    ticketErrorEl.textContent = '';
-    return;
-  }
-  ticketErrorEl.hidden = false;
-  ticketErrorEl.textContent = message;
-}
-
-function showSuccess(message) {
-  ticketErrorEl.hidden = true;
-  if (!message) {
-    ticketSuccessEl.hidden = true;
-    ticketSuccessEl.textContent = '';
-    return;
-  }
-  ticketSuccessEl.hidden = false;
-  ticketSuccessEl.textContent = message;
-}
-
-function showModalError(message) {
-  if (!message) {
-    createOrderErrorEl.hidden = true;
-    createOrderErrorEl.textContent = '';
-    return;
-  }
-  createOrderErrorEl.hidden = false;
-  createOrderErrorEl.textContent = message;
-}
-
-function detailRow(label, value) {
-  return `
-    <div class="ticket-detail__row">
-      <dt>${escapeHtml(label)}</dt>
-      <dd>${value}</dd>
-    </div>
-  `;
-}
-
-function detailText(value) {
-  if (value == null || value === '') return '—';
-  return escapeHtml(String(value));
-}
-
-function isHttpUrl(value) {
-  return /^https?:\/\//i.test(String(value || '').trim());
-}
-
-function isAudioUrl(value) {
-  const text = String(value || '').trim();
-  if (!isHttpUrl(text)) return false;
-  if (/\.(wav|mp3|ogg|oga|m4a|aac|webm)(?:\?|#|$)/i.test(text)) return true;
-  if (/\/recordings\//i.test(text)) return true;
-  return false;
-}
-
-function isRecordingField(field) {
-  const key = String(field?.key || '').toLowerCase();
-  const name = String(field?.name || '').toLowerCase();
-  return (
-    key.includes('recording') ||
-    name.includes('запись') ||
-    name.includes('recording')
-  );
-}
-
-function formatAudioPlayer(url, ticketId) {
-  const safeUrl = escapeHtml(url);
-  const mediaUrl = `/bot-admin/api/tickets/${encodeURIComponent(ticketId)}/recording`;
-  return `
-    <div class="ticket-audio">
-      <audio class="ticket-audio__player" controls preload="metadata" src="${mediaUrl}">
-        Ваш браузер не поддерживает воспроизведение аудио.
-      </audio>
-      <a class="ticket-audio__link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a>
-    </div>
-  `;
-}
-
-function formatFieldValue(value, field = null, ticketId = null) {
-  if (value == null || value === '') return '—';
-  const text = String(value).trim();
-  if (ticketId != null && (isAudioUrl(text) || (isHttpUrl(text) && isRecordingField(field)))) {
-    return formatAudioPlayer(text, ticketId);
-  }
-  if (isHttpUrl(text)) {
-    return `<a href="${escapeHtml(text)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`;
-  }
-  return escapeHtml(text);
-}
-
-function renderAdditionalFields(fields, ticketId) {
-  if (!Array.isArray(fields) || fields.length === 0) {
-    return detailRow('Нет данных', '—');
-  }
-  return fields
-    .map((field) =>
-      detailRow(field.name || field.key || 'Поле', formatFieldValue(field.value, field, ticketId))
-    )
-    .join('');
-}
-
-function parseTicketIdFromPath() {
-  const match = window.location.pathname.match(/\/bot-admin\/tickets\/(\d+)\/?$/);
-  return match ? Number(match[1]) : null;
-}
-
-function updateEditTicketToggleVisibility() {
-  if (!canEditTickets) {
-    editTicketToggle.hidden = true;
-    return;
-  }
-  const isClosed = ticket && String(ticket.status || '') === 'Closed';
-  editTicketToggle.hidden = Boolean(isClosed && !canEditClosedTickets);
-}
-
-function renderTicket(detail) {
-  ticket = detail;
-  ticketTitleEl.textContent = `Тикет #${detail.id}`;
-  ticketSubtitleEl.textContent = detail.subject || '';
-  ticketDefaultPhone = detail.client?.phone || '';
-  updateEditTicketToggleVisibility();
-
-  const participantIds = Array.isArray(detail.participant_user_ids)
-    ? detail.participant_user_ids
-    : [];
-  const participants =
-    participantIds.length > 0
-      ? participantIds.map((id) => escapeHtml(userLabel(id))).join(', ')
-      : '—';
-
-  const descriptionHtml = detail.description
-    ? `<div class="ticket-detail__description">${escapeHtml(detail.description)}</div>`
-    : '—';
-
-  ticketDetailBody.innerHTML = `
-    <section class="ticket-detail__section">
-      <h4>Основное</h4>
-      <dl class="ticket-detail">
-        ${detailRow('Тема', detailText(detail.subject))}
-        ${detailRow('Статус', `<span class="${statusBadgeClass(detail.status)}">${escapeHtml(statusLabel(detail.status))}</span>`)}
-        ${detailRow('Направление', detailText(directionLabel(detail.direction)))}
-        ${detailRow('Создан', detailText(formatUnix(detail.created_date)))}
-        ${detailRow('Обновлён', detailText(formatUnix(detail.last_update)))}
-        ${detailRow('Описание', descriptionHtml)}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>Клиент</h4>
-      <dl class="ticket-detail">
-        ${detailRow('Имя', detailText(detail.client?.name))}
-        ${detailRow('Телефон', detailText(detail.client?.phone))}
-        ${detailRow('Email', detailText(detail.client?.email))}
-        ${detailRow('ID клиента', detailText(detail.client_id))}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>Ответственные</h4>
-      <dl class="ticket-detail">
-        ${detailRow('Ответственный', detailText(userLabel(detail.responsible_user_id)))}
-        ${detailRow('Участники', participants)}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>SLA</h4>
-      <dl class="ticket-detail">
-        ${detailRow('Нарушен', detail.sla_breached ? 'Да' : 'Нет')}
-        ${detailRow('Дата нарушения', detailText(formatUnix(detail.sla_breached_date)))}
-        ${detailRow('Первый ответ', detailText(formatUnix(detail.first_response_date)))}
-        ${detailRow('Срок первого ответа', detailText(formatUnix(detail.first_response_due_date)))}
-        ${detailRow('Срок решения', detailText(formatUnix(detail.resolve_due_date)))}
-        ${detailRow('Решён', detailText(formatUnix(detail.resolved_date)))}
-        ${detailRow('Пропущен', detail.missed ? 'Да' : 'Нет')}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>Оценка</h4>
-      <dl class="ticket-detail">
-        ${detailRow('Оценка', detailText(detail.rating))}
-        ${detailRow('Комментарий', detailText(detail.rating_comment))}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>Настроение клиента</h4>
-      <dl class="ticket-detail">
-        ${detailRow('Оценка', detailText(detail.client_sentiment_score))}
-        ${detailRow('Комментарий', detailText(detail.client_sentiment_comment))}
-        ${detailRow('Кто оценил', detailText(userLabel(detail.client_sentiment_user_id)))}
-        ${detailRow('Дата', detailText(formatUnix(detail.client_sentiment_date)))}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>Проверка супервайзера</h4>
-      <dl class="ticket-detail">
-        ${detailRow('Оценка', detailText(detail.supervisor_review_score))}
-        ${detailRow('Комментарий', detailText(detail.supervisor_review_comment))}
-        ${detailRow('Кто проверил', detailText(userLabel(detail.supervisor_review_user_id)))}
-        ${detailRow('Дата', detailText(formatUnix(detail.supervisor_review_date)))}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>Ссылки</h4>
-      <dl class="ticket-detail">
-        ${detailRow('chat_id', detailText(detail.chat_id))}
-        ${detailRow('external_dialog_id', detailText(detail.external_dialog_id))}
-        ${detailRow('audio_recording_file_id', detailText(detail.audio_recording_file_id))}
-      </dl>
-    </section>
-
-    <section class="ticket-detail__section">
-      <h4>Дополнительные поля</h4>
-      <dl class="ticket-detail">
-        ${renderAdditionalFields(detail.fields, detail.id)}
-      </dl>
-    </section>
-  `;
-
-  showTicketWorkspace();
-}
-
-function clearFirmSearchUi() {
-  firmSearchInput.value = '';
-  firmSearchStatus.hidden = true;
-  firmSearchStatus.textContent = '';
-  firmSearchResults.hidden = true;
-  firmSearchResults.innerHTML = '';
-}
-
-function renderSelectedFirm() {
-  if (!selectedFirm) {
-    firmSelectedEl.hidden = true;
-    firmSelectedEl.innerHTML = '';
-    return;
-  }
-
-  firmSelectedEl.hidden = false;
-  firmSelectedEl.innerHTML = `
-    <div class="firm-selected__body">
-      <strong>${escapeHtml(selectedFirm.clientName || 'Без названия')}</strong>
-      <span>${escapeHtml(firmTypeLabel(selectedFirm.type))}${
-        selectedFirm.phone ? ` · ${escapeHtml(selectedFirm.phone)}` : ''
-      }</span>
-    </div>
-    <button type="button" class="btn btn-secondary btn-sm" id="firm-clear-btn">Сбросить</button>
-  `;
-  document.getElementById('firm-clear-btn')?.addEventListener('click', clearSelectedFirm);
-}
-
-function clearSelectedFirm() {
-  selectedFirm = null;
-  renderSelectedFirm();
-  orderClientPhoneInput.value = ticketDefaultPhone;
-}
-
-function selectFirm(firm) {
-  selectedFirm = firm;
-  firmSearchResults.hidden = true;
-  firmSearchResults.innerHTML = '';
-  firmSearchStatus.hidden = true;
-  renderSelectedFirm();
-  if (firm.phone) {
-    orderClientPhoneInput.value = firm.phone;
-  } else if (!orderClientPhoneInput.value.trim()) {
-    orderClientPhoneInput.value = ticketDefaultPhone;
-  }
-}
-
-function firmFromLinkedClient(link) {
-  if (!link) return null;
-  return {
-    type: link.firm_type || null,
-    recordId: link.firm_record_id ?? null,
-    clientName: link.firm_name || null,
-    phone: link.firm_phone || null,
-    message: link.firm_message || null,
-  };
-}
-
-function applyDefaultLinkedFirm() {
-  const firm = firmFromLinkedClient(linkedClientFirms[0]);
-  if (!firm) return;
-  selectFirm(firm);
-}
-
-async function loadLinkedClientFirms(clientId) {
-  linkedClientFirms = [];
-  const id = Number(clientId);
-  if (!Number.isInteger(id) || id <= 0) return;
-  try {
-    const data = await api(`/bot-admin/api/clients/${encodeURIComponent(id)}`);
-    linkedClientFirms = Array.isArray(data.firms) ? data.firms : [];
-  } catch {
-    linkedClientFirms = [];
-  }
-}
-
-function renderFirmResults(results) {
-  if (!results.length) {
-    firmSearchResults.hidden = true;
-    firmSearchResults.innerHTML = '';
-    firmSearchStatus.hidden = false;
-    firmSearchStatus.textContent = 'Ничего не найдено.';
-    return;
-  }
-
-  firmSearchStatus.hidden = true;
-  firmSearchResults.hidden = false;
-  firmSearchResults.innerHTML = results
-    .map((firm, index) => {
-      const preview = String(firm.message || '')
-        .split('\n')
-        .slice(0, 2)
-        .join(' · ');
-      return `
-        <button type="button" class="firm-search-result" data-firm-index="${index}">
-          <strong>${escapeHtml(firm.clientName || 'Без названия')}</strong>
-          <span class="firm-search-result__meta">${escapeHtml(firmTypeLabel(firm.type))}${
-            firm.phone ? ` · ${escapeHtml(firm.phone)}` : ''
-          }</span>
-          <span class="firm-search-result__preview">${escapeHtml(preview || '—')}</span>
-        </button>
-      `;
-    })
-    .join('');
-
-  firmSearchResults.querySelectorAll('.firm-search-result').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const index = Number(btn.getAttribute('data-firm-index'));
-      const firm = results[index];
-      if (firm) selectFirm(firm);
-    });
-  });
-}
-
-let firmSearchRequestId = 0;
-
-function clearFirmSearchResults() {
-  firmSearchStatus.hidden = true;
-  firmSearchStatus.textContent = '';
-  firmSearchResults.hidden = true;
-  firmSearchResults.innerHTML = '';
-}
-
-async function runFirmSearch() {
-  const q = firmSearchInput.value.trim();
-  if (!q) {
-    clearFirmSearchResults();
-    return;
-  }
-  const requestId = ++firmSearchRequestId;
-  firmSearchBtn.disabled = true;
-  firmSearchStatus.hidden = false;
-  firmSearchStatus.textContent = 'Поиск…';
-  try {
-    const data = await api(`/bot-admin/api/firm-search?q=${encodeURIComponent(q)}`);
-    if (requestId !== firmSearchRequestId) return;
-    renderFirmResults(data.results || []);
-  } catch (error) {
-    if (requestId !== firmSearchRequestId) return;
-    firmSearchResults.hidden = true;
-    firmSearchStatus.hidden = false;
-    firmSearchStatus.textContent = error.message;
-  } finally {
-    if (requestId === firmSearchRequestId) {
-      firmSearchBtn.disabled = false;
-    }
-  }
-}
-
-function triggerFirmSearchNow() {
-  runFirmSearch().catch((error) => {
-    firmSearchStatus.hidden = false;
-    firmSearchStatus.textContent = error.message;
-  });
-}
-
-function resetCreateOrderForm() {
-  firmSearchRequestId += 1;
-  createOrderForm.reset();
-  selectedFirm = null;
-  clearFirmSearchUi();
-  renderSelectedFirm();
-  orderClientPhoneInput.value = ticketDefaultPhone;
-  showModalError('');
-}
-
-function lockPageScroll() {
-  document.documentElement.classList.add('modal-open');
-  document.body.classList.add('modal-open');
-}
-
-function unlockPageScroll() {
-  document.documentElement.classList.remove('modal-open');
-  document.body.classList.remove('modal-open');
-}
-
-function showEditTicketError(message) {
-  editTicketError.hidden = !message;
-  editTicketError.textContent = message || '';
-}
-
-function setEditTicketBusy(busy) {
-  editTicketBusy = Boolean(busy);
-  editTicketForm.querySelectorAll('input, select, textarea, button').forEach((control) => {
-    control.disabled = editTicketBusy;
-  });
-  setButtonLoading(editTicketSubmit, editTicketBusy);
-  if (!editTicketBusy) {
-    editTicketSubmit.textContent = 'Сохранить';
-  }
-}
-
-function openEditTicketModal() {
-  if (!ticket) return;
-  showEditTicketError('');
-  editTicketSubject.value = ticket.subject || '';
-  editTicketDescription.value = ticket.description || '';
-  editTicketDirection.value = ticket.direction || 'Inbound';
-  editTicketStatus.value = ticket.status || 'Open';
-  editTicketResponsible.innerHTML =
-    '<option value="">Не менять</option>' +
-    ticketUsers
-      .map(
-        (user) =>
-          `<option value="${escapeHtml(user.id)}">${escapeHtml(
-            user.full_name || user.login || `Пользователь #${user.id}`
-          )}</option>`
-      )
-      .join('');
-  editTicketResponsible.value =
-    ticket.responsible_user_id != null ? String(ticket.responsible_user_id) : '';
-  setEditTicketBusy(false);
-  editTicketModal.hidden = false;
-  lockPageScroll();
-  editTicketSubject.focus();
-}
-
-function closeEditTicketModal({ force = false } = {}) {
-  if (editTicketBusy && !force) return;
-  editTicketModal.hidden = true;
-  unlockPageScroll();
-  editTicketToggle.focus();
-}
-
-function openCreateOrderModal() {
-  resetCreateOrderForm();
-  applyDefaultLinkedFirm();
-  showError('');
-  setCreateOrderBusy(false);
-  createOrderModal.hidden = false;
-  lockPageScroll();
-  orderAmountInput.focus();
-}
-
-function closeCreateOrderModal({ force = false } = {}) {
-  if (createOrderBusy && !force) return;
-  setCreateOrderBusy(false);
-  createOrderModal.hidden = true;
-  unlockPageScroll();
-  resetCreateOrderForm();
-}
-
-function setCreateOrderBusy(busy) {
-  createOrderBusy = Boolean(busy);
-  createOrderProgress.hidden = !createOrderBusy;
-  createOrderForm.setAttribute('aria-busy', createOrderBusy ? 'true' : 'false');
-  createOrderSubmit.disabled = createOrderBusy;
-  createOrderCancel.disabled = createOrderBusy;
-  createOrderClose.disabled = createOrderBusy;
-  createOrderSubmit.classList.toggle('is-loading', createOrderBusy);
-  createOrderForm.querySelectorAll('input, button').forEach((el) => {
-    if (el === createOrderSubmit || el === createOrderCancel || el === createOrderClose) return;
-    el.disabled = createOrderBusy;
-  });
-}
-
-async function loadUsers() {
-  try {
-    const data = await api('/bot-admin/api/tickets/users');
-    ticketUsers = data.users || [];
-    userNames = {};
-    for (const user of ticketUsers) {
-      userNames[user.id] = user.full_name || user.login || `Пользователь #${user.id}`;
-    }
-  } catch {
-    userNames = {};
-    ticketUsers = [];
-  }
-}
-
-function setChatStatus(message, { isError = false, loading = false } = {}) {
-  if (!message) {
-    ticketChatStatusEl.hidden = true;
-    ticketChatStatusEl.textContent = '';
-    ticketChatStatusEl.classList.remove('ticket-chat__status--error', 'ticket-chat__status--loading');
-    return;
-  }
-  ticketChatStatusEl.hidden = false;
-  ticketChatStatusEl.classList.toggle('ticket-chat__status--error', Boolean(isError));
-  ticketChatStatusEl.classList.toggle('ticket-chat__status--loading', Boolean(loading) && !isError);
-  if (loading && !isError) {
-    ticketChatStatusEl.innerHTML = `
-      <span class="process-spinner process-spinner--inline" aria-hidden="true"></span>
-      <span>${escapeHtml(message)}</span>
-    `;
-  } else {
-    ticketChatStatusEl.textContent = message;
-  }
-}
-
-function setChatComposerEnabled(enabled) {
-  const canSend = Boolean(enabled);
-  ticketChatCompose.hidden = !canSend;
-  ticketChatInput.disabled = !canSend;
-  ticketChatSendBtn.disabled = !canSend;
-  if (ticketChatFileInput) ticketChatFileInput.disabled = !canSend;
-  if (ticketChatAttachBtn) ticketChatAttachBtn.disabled = !canSend;
-  if (!canSend) {
-    ticketChatInput.value = '';
-    clearPendingChatFiles();
-    setChatDropActive(false);
-  }
-}
-
-function fileExtension(name) {
-  const base = String(name || '').split(/[\\/]/).pop() || '';
-  const dot = base.lastIndexOf('.');
-  if (dot <= 0 || dot === base.length - 1) return '';
-  return base.slice(dot + 1).toLowerCase().slice(0, 10);
-}
-
-function chatFileExtension(file) {
-  return String(file?.extension || fileExtension(file?.name || '')).replace(/^\./, '').toLowerCase();
-}
-
-function chatFileMime(file) {
-  return String(file?.mime_type || file?.type || '').toLowerCase();
-}
-
-function chatFileMediaType(file) {
-  return String(file?.media_type || '').toLowerCase();
-}
-
-function isChatImage(file) {
-  const mediaType = chatFileMediaType(file);
-  if (mediaType === 'image' || mediaType === 'photo' || mediaType === 'picture') return true;
-  const mime = chatFileMime(file);
-  if (mime.startsWith('image/')) return true;
-  return IMAGE_EXTENSIONS.has(chatFileExtension(file));
-}
-
-function isChatAudio(file) {
-  const mediaType = chatFileMediaType(file);
-  if (mediaType === 'audio' || mediaType === 'voice') return true;
-  const mime = chatFileMime(file);
-  if (mime.startsWith('audio/')) return true;
-  return AUDIO_EXTENSIONS.has(chatFileExtension(file));
-}
-
-function isChatVideo(file) {
-  const mediaType = chatFileMediaType(file);
-  if (mediaType === 'video') return true;
-  const mime = chatFileMime(file);
-  if (mime.startsWith('video/')) return true;
-  return VIDEO_EXTENSIONS.has(chatFileExtension(file));
-}
-
-function chatFileMimeType(file) {
-  const mime = chatFileMime(file);
-  if (mime) return mime;
-  const ext = chatFileExtension(file);
-  if (isChatAudio(file)) {
-    if (ext === 'mp3') return 'audio/mpeg';
-    if (ext === 'ogg' || ext === 'oga') return 'audio/ogg';
-    if (ext === 'wav') return 'audio/wav';
-    if (ext === 'm4a') return 'audio/mp4';
-    if (ext === 'aac') return 'audio/aac';
-    if (ext === 'opus') return 'audio/opus';
-    return 'audio/*';
-  }
-  if (isChatVideo(file)) {
-    if (ext === 'mp4' || ext === 'm4v') return 'video/mp4';
-    if (ext === 'webm') return 'video/webm';
-    if (ext === 'mov') return 'video/quicktime';
-    if (ext === 'ogv') return 'video/ogg';
-    return 'video/*';
-  }
-  return '';
-}
-
-function formatFileSize(bytes) {
-  const size = Number(bytes) || 0;
-  if (size < 1024) return `${size} Б`;
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} КБ`;
-  return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || '');
-      const comma = result.indexOf(',');
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать файл.'));
-    reader.readAsDataURL(file);
-  });
-}
-
-function filesFromDataTransfer(dataTransfer) {
-  const files = [];
-  const items = dataTransfer?.items;
-  if (items && items.length) {
-    for (const item of items) {
-      if (item.kind !== 'file') continue;
-      const entry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null;
-      if (entry && entry.isDirectory) continue;
-      const file = item.getAsFile();
-      if (file) files.push(file);
-    }
-    return files;
-  }
-  return [...(dataTransfer?.files || [])];
-}
-
-function clearPendingChatFiles() {
-  for (const item of pendingChatFiles) {
-    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
-  }
-  pendingChatFiles = [];
-  renderPendingChatFiles();
-}
-
-function renderPendingChatFiles() {
-  if (!ticketChatPendingEl) return;
-  if (!pendingChatFiles.length) {
-    ticketChatPendingEl.hidden = true;
-    ticketChatPendingEl.innerHTML = '';
-    return;
-  }
-  ticketChatPendingEl.hidden = false;
-  ticketChatPendingEl.innerHTML = pendingChatFiles
-    .map((item) => {
-      const name = escapeHtml(item.file.name || 'файл');
-      const thumb = item.previewUrl
-        ? `<img class="ticket-chat__pending-thumb" src="${escapeHtml(item.previewUrl)}" alt="">`
-        : '';
-      const size = `<span class="ticket-chat__pending-size">${escapeHtml(formatFileSize(item.file.size))}</span>`;
-      return `<div class="ticket-chat__pending-item">
-        ${thumb}
-        <span class="ticket-chat__pending-name" title="${name}">${name}</span>
-        ${size}
-        <button type="button" class="ticket-chat__pending-remove" data-pending-id="${item.id}" aria-label="Удалить файл">×</button>
-      </div>`;
-    })
-    .join('');
-}
-
-function addPendingChatFiles(fileList) {
-  const incoming = [...(fileList || [])].filter((file) => file && file.size > 0);
-  if (!incoming.length) return;
-
-  const remaining = MAX_CHAT_FILES - pendingChatFiles.length;
-  if (remaining <= 0) {
-    setChatStatus(`Можно прикрепить не больше ${MAX_CHAT_FILES} файлов.`, { isError: true });
-    return;
-  }
-
-  const accepted = [];
-  for (const file of incoming.slice(0, remaining)) {
-    if (file.size > MAX_CHAT_FILE_BYTES) {
-      setChatStatus('Файл слишком большой (максимум 10 МБ).', { isError: true });
-      continue;
-    }
-    if (!fileExtension(file.name)) {
-      setChatStatus('У файла должно быть расширение.', { isError: true });
-      continue;
-    }
-    accepted.push({
-      id: `pending-${++pendingChatFileSeq}`,
-      file,
-      previewUrl: isChatImage(file) ? URL.createObjectURL(file) : '',
-    });
-  }
-
-  if (!accepted.length) return;
-  pendingChatFiles = [...pendingChatFiles, ...accepted];
-  renderPendingChatFiles();
-  if (incoming.length > remaining) {
-    setChatStatus(`Можно прикрепить не больше ${MAX_CHAT_FILES} файлов.`, { isError: true });
-  }
-}
-
-function removePendingChatFile(pendingId) {
-  const next = [];
-  for (const item of pendingChatFiles) {
-    if (String(item.id) === String(pendingId)) {
-      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      continue;
-    }
-    next.push(item);
-  }
-  pendingChatFiles = next;
-  renderPendingChatFiles();
-}
-
-function setChatDropActive(active) {
-  ticketChatCompose?.classList.toggle('ticket-chat__compose--drop', Boolean(active));
-  ticketChatMessagesEl?.classList.toggle('ticket-chat__messages--drop', Boolean(active));
-}
-
-function chatFileProxyUrl(fileId) {
-  return `/bot-admin/api/tickets/${encodeURIComponent(currentTicketId)}/files/${encodeURIComponent(fileId)}`;
-}
-
-function renderChatFiles(message) {
-  const files =
-    Array.isArray(message.files) && message.files.length
-      ? message.files
-      : (Array.isArray(message.file_ids) ? message.file_ids : []).map((id) => ({ id }));
-  if (!files.length) return { html: '', count: 0 };
-
-  const items = files
-    .map((file) => {
-      const id = file?.id;
-      if (id == null || id === '') return '';
-      const name =
-        file.name ||
-        (file.extension ? `файл.${String(file.extension).replace(/^\./, '')}` : `Файл ${id}`);
-      const url = chatFileProxyUrl(id);
-      if (isChatImage(file)) {
-        return `<a class="ticket-chat__image-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">
-          <img class="ticket-chat__image" src="${escapeHtml(url)}" alt="${escapeHtml(name)}" loading="lazy">
-        </a>`;
-      }
-      if (isChatAudio(file)) {
-        return `<div class="ticket-chat__media ticket-chat__media--audio">
-          <audio class="ticket-chat__audio" controls preload="metadata" src="${escapeHtml(url)}">
-            Ваш браузер не поддерживает воспроизведение аудио.
-          </audio>
-          <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-            name
-          )}</a>
-        </div>`;
-      }
-      if (isChatVideo(file)) {
-        return `<div class="ticket-chat__media ticket-chat__media--video">
-          <video class="ticket-chat__video" controls preload="metadata" playsinline src="${escapeHtml(url)}">
-            Ваш браузер не поддерживает воспроизведение видео.
-          </video>
-          <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-            name
-          )}</a>
-        </div>`;
-      }
-      const hasMetadata = Boolean(file.name || file.extension || file.mime_type || file.media_type);
-      if (!hasMetadata) {
-        return `<div class="ticket-chat__media ticket-chat__media--probe" data-url="${escapeHtml(url)}" data-name="${escapeHtml(name)}">
-          <img class="ticket-chat__image ticket-chat__media-probe" src="${escapeHtml(url)}" alt="${escapeHtml(name)}" loading="lazy">
-        </div>`;
-      }
-      return `<a class="ticket-chat__file-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-        name
-      )}</a>`;
-    })
-    .filter(Boolean);
-
-  return {
-    html: items.length ? `<div class="ticket-chat__files">${items.join('')}</div>` : '',
-    count: items.length,
-  };
-}
-
-function chatAuthorBadge(message) {
-  const messageType = String(message.message_type || '');
-  if (messageType === 'System') {
-    return { label: 'Система', className: 'ticket-chat__badge ticket-chat__badge--system' };
-  }
-  if (messageType === 'Private') {
-    return { label: 'Приват', className: 'ticket-chat__badge ticket-chat__badge--private' };
-  }
-  const entityType = String(message.author_entity_type || '');
-  const role = String(message.author_role || '');
-  if (entityType === 'Client' || role === 'Member') {
-    return { label: 'Клиент', className: 'ticket-chat__badge ticket-chat__badge--client' };
-  }
-  if (entityType === 'ChatBot' || role === 'Bot') {
-    return { label: 'Бот', className: 'ticket-chat__badge ticket-chat__badge--bot' };
-  }
-  if (entityType === 'User' || role === 'Staff') {
-    return { label: 'Сотрудник', className: 'ticket-chat__badge ticket-chat__badge--staff' };
-  }
-  return { label: entityType || role || 'Сообщение', className: 'ticket-chat__badge' };
-}
-
-function chatMessageClass(message) {
-  const messageType = String(message.message_type || '');
-  if (messageType === 'System') return 'ticket-chat__msg ticket-chat__msg--system';
-  if (messageType === 'Private') return 'ticket-chat__msg ticket-chat__msg--private';
-  const entityType = String(message.author_entity_type || '');
-  const role = String(message.author_role || '');
-  if (entityType === 'Client' || role === 'Member') {
-    return 'ticket-chat__msg ticket-chat__msg--client';
-  }
-  if (entityType === 'ChatBot' || role === 'Bot') {
-    return 'ticket-chat__msg ticket-chat__msg--bot';
-  }
-  if (entityType === 'User' || role === 'Staff') {
-    return 'ticket-chat__msg ticket-chat__msg--staff';
-  }
-  return 'ticket-chat__msg';
-}
-
-function renderChatMessage(message) {
-  const messageType = String(message.message_type || '');
-  const isSystem = messageType === 'System';
-  const badge = chatAuthorBadge(message);
-  const author =
-    message.author_entity_name ||
-    (message.author_entity_id != null ? `ID ${message.author_entity_id}` : 'Неизвестный');
-  const authorHtml = isSystem
-    ? ''
-    : `<span class="ticket-chat__author">${escapeHtml(author)}</span>`;
-  const replyHtml =
-    message.replay_text || message.reply_id
-      ? `<div class="ticket-chat__reply">${escapeHtml(
-          message.replay_text || `Ответ на ${message.reply_id}`
-        )}</div>`
-      : '';
-  const files = renderChatFiles(message);
-  const bodyText = String(message.display_text || message.text || '').trim();
-  const text = bodyText
-    ? `<p class="ticket-chat__text">${escapeHtml(bodyText)}</p>`
-    : files.count
-      ? ''
-      : isSystem
-        ? ''
-        : `<p class="ticket-chat__text ticket-chat__text--empty">—</p>`;
-
-  return `
-    <article class="${chatMessageClass(message)}" data-message-id="${escapeHtml(String(message.id || ''))}">
-      <div class="ticket-chat__meta${isSystem ? ' ticket-chat__meta--system' : ''}">
-        ${authorHtml}
-        <span class="${badge.className}">${escapeHtml(badge.label)}</span>
-        <time datetime="${escapeHtml(String(message.created_date || ''))}">${escapeHtml(
-          formatUnix(message.created_date)
-        )}</time>
-      </div>
-      ${replyHtml}
-      ${text}
-      ${files.html}
-    </article>
-  `;
-}
-
-function updateLoadOlderVisibility() {
-  ticketChatLoadOlderWrap.hidden = !chatHasOlder;
-}
-
-function upgradeChatMediaProbes() {
-  if (!ticketChatMessagesEl) return;
-  ticketChatMessagesEl.querySelectorAll('.ticket-chat__media--probe').forEach((container) => {
-    if (container.dataset.probeReady === '1') return;
-    container.dataset.probeReady = '1';
-    const url = container.dataset.url || '';
-    const name = container.dataset.name || 'файл';
-    const img = container.querySelector('.ticket-chat__media-probe');
-    if (!img || !url) return;
-
-    img.addEventListener(
-      'error',
-      () => {
-        container.classList.remove('ticket-chat__media--probe');
-        container.classList.add('ticket-chat__media--video');
-        container.innerHTML = `<video class="ticket-chat__video" controls preload="metadata" playsinline src="${escapeHtml(url)}"></video>
-          <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>`;
-        const video = container.querySelector('video');
-        video?.addEventListener(
-          'error',
-          () => {
-            container.classList.remove('ticket-chat__media--video');
-            container.classList.add('ticket-chat__media--audio');
-            container.innerHTML = `<audio class="ticket-chat__audio" controls preload="metadata" src="${escapeHtml(url)}"></audio>
-              <a class="ticket-chat__media-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>`;
-            const audio = container.querySelector('audio');
-            audio?.addEventListener(
-              'error',
-              () => {
-                container.innerHTML = `<a class="ticket-chat__file-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(name)}</a>`;
-              },
-              { once: true }
-            );
-          },
-          { once: true }
-        );
-      },
-      { once: true }
-    );
-  });
-}
-
-function renderChatMessages({ stickToBottom = false } = {}) {
-  const wasNearBottom =
-    ticketChatMessagesEl.scrollHeight - ticketChatMessagesEl.scrollTop - ticketChatMessagesEl.clientHeight <
-    80;
-  const previousHeight = ticketChatMessagesEl.scrollHeight;
-  const previousTop = ticketChatMessagesEl.scrollTop;
-
-  if (!chatMessages.length) {
-    ticketChatMessagesEl.innerHTML = `<p class="ticket-chat__empty">Сообщений пока нет.</p>`;
-  } else {
-    ticketChatMessagesEl.innerHTML = chatMessages.map(renderChatMessage).join('');
-  }
-
-  updateLoadOlderVisibility();
-  upgradeChatMediaProbes();
-
-  if (stickToBottom || wasNearBottom) {
-    ticketChatMessagesEl.scrollTop = ticketChatMessagesEl.scrollHeight;
-  } else if (previousHeight > 0) {
-    ticketChatMessagesEl.scrollTop =
-      ticketChatMessagesEl.scrollHeight - previousHeight + previousTop;
-  }
-}
-
-function mergeMessages(existing, incoming, { prepend = false } = {}) {
-  const byId = new Map();
-  const ordered = prepend ? [...incoming, ...existing] : [...existing, ...incoming];
-  for (const message of ordered) {
-    if (!message?.id) continue;
-    byId.set(String(message.id), message);
-  }
-  return [...byId.values()].sort((a, b) => {
-    const dateA = Number(a.created_date) || 0;
-    const dateB = Number(b.created_date) || 0;
-    if (dateA !== dateB) return dateA - dateB;
-    return String(a.id).localeCompare(String(b.id));
-  });
-}
-
-function stopChatPolling() {
-  if (chatPollTimer != null) {
-    clearInterval(chatPollTimer);
-    chatPollTimer = null;
-  }
-}
-
-function startChatPolling(ticketId) {
-  stopChatPolling();
-  chatPollTimer = setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
-    refreshChatTail(ticketId).catch(() => {});
-  }, CHAT_POLL_MS);
-}
-
-async function fetchChatPage(ticketId, { limit = CHAT_PAGE_LIMIT, offset, fromEnd = false } = {}) {
-  const params = new URLSearchParams();
-  params.set('limit', String(limit));
-  if (fromEnd) {
-    params.set('from_end', '1');
-  } else if (offset != null) {
-    params.set('offset', String(offset));
-  }
-  return api(`/bot-admin/api/tickets/${ticketId}/messages?${params.toString()}`);
-}
-
-async function loadChatMessages(ticketId, { silent = false } = {}) {
-  const requestId = ++chatRequestId;
-  if (!silent) {
-    setChatStatus('Загрузка сообщений…', { loading: true });
-  }
-  showTicketWorkspace();
-  ticketChatRefreshBtn.disabled = true;
-  ticketChatLoadOlderBtn.disabled = true;
-
-  try {
-    const data = await fetchChatPage(ticketId, { fromEnd: true, limit: CHAT_PAGE_LIMIT });
-    if (requestId !== chatRequestId) return;
-
-    if (!data.chat_id) {
-      chatMessages = [];
-      chatOffset = 0;
-      chatTotal = 0;
-      chatHasOlder = false;
-      ticketChatMessagesEl.innerHTML =
-        '<p class="ticket-chat__empty">Чат не привязан к этому тикету.</p>';
-      updateLoadOlderVisibility();
-      setChatComposerEnabled(false);
-      setChatStatus('');
-      stopChatPolling();
-      return;
-    }
-
-    chatMessages = data.messages || [];
-    chatOffset = data.next_offset ?? (data.offset || 0) + chatMessages.length;
-    chatTotal = data.total || chatMessages.length;
-    chatHasOlder = Boolean(data.has_older);
-    setChatComposerEnabled(true);
-    renderChatMessages({ stickToBottom: true });
-    setChatStatus(
-      chatTotal > 0 ? `Сообщений: ${chatMessages.length} из ${chatTotal}` : ''
-    );
-    startChatPolling(ticketId);
-  } catch (error) {
-    if (requestId !== chatRequestId) return;
-    setChatStatus(error.message || 'Не удалось загрузить сообщения.', { isError: true });
-    if (!chatMessages.length) {
-      setChatComposerEnabled(false);
-      ticketChatMessagesEl.innerHTML =
-        '<p class="ticket-chat__empty">Не удалось загрузить сообщения.</p>';
-    }
-  } finally {
-    if (requestId === chatRequestId) {
-      ticketChatRefreshBtn.disabled = false;
-      ticketChatLoadOlderBtn.disabled = false;
-    }
-  }
-}
-
-async function loadOlderChatMessages(ticketId) {
-  if (!chatHasOlder || chatOffset <= 0) return;
-  const requestId = ++chatRequestId;
-  const prevScrollHeight = ticketChatMessagesEl.scrollHeight;
-  const prevScrollTop = ticketChatMessagesEl.scrollTop;
-  ticketChatLoadOlderBtn.disabled = true;
-  setChatStatus('Загрузка предыдущих сообщений…', { loading: true });
-
-  try {
-    const data = await fetchChatPage(ticketId, { limit: CHAT_PAGE_LIMIT, offset: chatOffset });
-    if (requestId !== chatRequestId) return;
-
-    const page = data.messages || [];
-    chatMessages = mergeMessages(chatMessages, page, { prepend: true });
-    chatOffset = data.next_offset ?? chatOffset + page.length;
-    chatTotal = data.total ?? chatTotal;
-    chatHasOlder = Boolean(data.has_older);
-    renderChatMessages();
-    ticketChatMessagesEl.scrollTop =
-      ticketChatMessagesEl.scrollHeight - prevScrollHeight + prevScrollTop;
-    setChatStatus(`Сообщений: ${chatMessages.length} из ${chatTotal}`);
-  } catch (error) {
-    if (requestId !== chatRequestId) return;
-    setChatStatus(error.message || 'Не удалось загрузить сообщения.', { isError: true });
-  } finally {
-    if (requestId === chatRequestId) {
-      ticketChatLoadOlderBtn.disabled = false;
-    }
-  }
-}
-
-async function refreshChatTail(ticketId) {
-  if (!ticket?.chat_id) return;
-  const data = await fetchChatPage(ticketId, { fromEnd: true, limit: CHAT_PAGE_LIMIT });
-  if (!data.chat_id) return;
-
-  const incoming = data.messages || [];
-  const knownIds = new Set(chatMessages.map((m) => String(m.id)));
-  const newCount = incoming.filter((m) => m?.id && !knownIds.has(String(m.id))).length;
-  if (!newCount && incoming.length <= chatMessages.length) {
-    chatTotal = data.total ?? chatTotal;
-    return;
-  }
-
-  // Keep older messages that were already loaded; merge the latest page.
-  chatMessages = mergeMessages(chatMessages, incoming);
-  chatTotal = data.total ?? chatTotal;
-  chatOffset += newCount;
-  chatHasOlder = chatTotal > 0 ? chatOffset < chatTotal : chatHasOlder;
-  renderChatMessages({ stickToBottom: true });
-  setChatStatus(chatTotal > 0 ? `Сообщений: ${chatMessages.length} из ${chatTotal}` : '');
-}
-
-async function sendChatMessage(ticketId) {
-  const text = ticketChatInput.value.trim();
-  if (!text && !pendingChatFiles.length) {
-    setChatStatus('Введите текст сообщения или прикрепите файл.', { isError: true });
-    ticketChatInput.focus();
-    return;
-  }
-  if (!ticket?.chat_id) {
-    setChatStatus('Чат не привязан к этому тикету.', { isError: true });
-    setChatComposerEnabled(false);
-    return;
-  }
-
-  ticketChatSendBtn.disabled = true;
-  ticketChatInput.disabled = true;
-  if (ticketChatAttachBtn) ticketChatAttachBtn.disabled = true;
-  if (ticketChatFileInput) ticketChatFileInput.disabled = true;
-  setButtonLoading(ticketChatSendBtn, true);
-  setChatStatus('Отправка…', { loading: true });
-
-  try {
-    const files = await Promise.all(
-      pendingChatFiles.map(async (item) => ({
-        name: item.file.name,
-        extension: fileExtension(item.file.name),
-        data: await fileToBase64(item.file),
-      }))
-    );
-    await api(`/bot-admin/api/tickets/${ticketId}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({ text, files }),
-    });
-    ticketChatInput.value = '';
-    clearPendingChatFiles();
-    await refreshChatTail(ticketId);
-    setChatStatus(chatTotal > 0 ? `Сообщений: ${chatMessages.length} из ${chatTotal}` : '');
-  } catch (error) {
-    setChatStatus(error.message || 'Не удалось отправить сообщение.', { isError: true });
-  } finally {
-    const canSend = Boolean(ticket?.chat_id);
-    ticketChatInput.disabled = !canSend;
-    if (ticketChatFileInput) ticketChatFileInput.disabled = !canSend;
-    if (ticketChatAttachBtn) ticketChatAttachBtn.disabled = !canSend;
-    setButtonLoading(ticketChatSendBtn, false);
-    ticketChatSendBtn.disabled = !canSend;
-    if (canSend) {
-      ticketChatInput.focus();
-    }
-  }
-}
-
-async function loadTicket(ticketId) {
-  currentTicketId = ticketId;
-  ticketTitleEl.textContent = 'Тикет';
-  ticketDetailBody.innerHTML = renderLoadingState();
-  ticketChatMessagesEl.innerHTML = renderLoadingState('Загрузка сообщений…');
-  showTicketWorkspace();
-  const data = await api(`/bot-admin/api/tickets/${ticketId}`);
-  renderTicket(data.ticket);
-  await Promise.all([
-    loadChatMessages(ticketId),
-    loadLinkedClientFirms(data.ticket?.client_id ?? data.ticket?.client?.id),
-  ]);
-}
-
+var ticket = null;
+var userNames = {};
+var ticketUsers = [];
+var selectedFirm = null;
+var linkedClientFirms = [];
+var ticketDefaultPhone = '';
+var createOrderBusy = false;
+var chatMessages = [];
+var chatOffset = 0;
+var chatTotal = 0;
+var chatHasOlder = false;
+var chatPollTimer = null;
+var chatRequestId = 0;
+var currentTicketId = null;
+var editTicketBusy = false;
+var canEditTickets = false;
+var canEditClosedTickets = false;
+var CHAT_PAGE_LIMIT = 50;
+var CHAT_POLL_MS = 18000;
+var MAX_CHAT_FILES = 5;
+var MAX_CHAT_FILE_BYTES = 10 * 1024 * 1024;
+var IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+var AUDIO_EXTENSIONS = new Set(['mp3', 'ogg', 'wav', 'm4a', 'aac', 'opus', 'oga', 'weba']);
+var VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+var pendingChatFiles = [];
+var pendingChatFileSeq = 0;
+var ticketTitleEl = document.getElementById('ticket-title');
+var ticketSubtitleEl = document.getElementById('ticket-subtitle');
+var ticketErrorEl = document.getElementById('ticket-error');
+var ticketSuccessEl = document.getElementById('ticket-success');
+var ticketWorkspace = document.getElementById('ticket-workspace');
+var ticketViewTabs = document.getElementById('ticket-view-tabs');
+var ticketDetailCard = document.getElementById('ticket-detail-card');
+var ticketDetailBody = document.getElementById('ticket-detail-body');
+var ticketChatCard = document.getElementById('ticket-chat-card');
+var ticketChatMessagesEl = document.getElementById('ticket-chat-messages');
+var ticketChatStatusEl = document.getElementById('ticket-chat-status');
+var ticketChatRefreshBtn = document.getElementById('ticket-chat-refresh');
+var ticketChatLoadOlderWrap = document.getElementById('ticket-chat-load-older-wrap');
+var ticketChatLoadOlderBtn = document.getElementById('ticket-chat-load-older');
+var ticketChatCompose = document.getElementById('ticket-chat-compose');
+var ticketChatPendingEl = document.getElementById('ticket-chat-pending');
+var ticketChatInput = document.getElementById('ticket-chat-input');
+var ticketChatFileInput = document.getElementById('ticket-chat-file');
+var ticketChatAttachBtn = document.getElementById('ticket-chat-attach');
+var ticketChatSendBtn = document.getElementById('ticket-chat-send');
+var createOrderModal = document.getElementById('create-order-modal');
+var createOrderForm = document.getElementById('create-order-form');
+var createOrderToggle = document.getElementById('create-order-toggle');
+var createOrderCancel = document.getElementById('create-order-cancel');
+var createOrderClose = document.getElementById('create-order-close');
+var createOrderErrorEl = document.getElementById('create-order-error');
+var orderAmountInput = document.getElementById('order-amount');
+var orderClientPhoneInput = document.getElementById('order-client-phone');
+var orderAdditionalPhoneInput = document.getElementById('order-additional-phone');
+var createOrderSubmit = document.getElementById('create-order-submit');
+var createOrderProgress = document.getElementById('create-order-progress');
+var firmSearchInput = document.getElementById('firm-search-input');
+var firmSearchBtn = document.getElementById('firm-search-btn');
+var firmSearchStatus = document.getElementById('firm-search-status');
+var firmSearchResults = document.getElementById('firm-search-results');
+var firmSelectedEl = document.getElementById('firm-selected');
+var editTicketToggle = document.getElementById('edit-ticket-toggle');
+var editTicketModal = document.getElementById('edit-ticket-modal');
+var editTicketForm = document.getElementById('edit-ticket-form');
+var editTicketClose = document.getElementById('edit-ticket-close');
+var editTicketCancel = document.getElementById('edit-ticket-cancel');
+var editTicketSubmit = document.getElementById('edit-ticket-submit');
+var editTicketError = document.getElementById('edit-ticket-error');
+var editTicketSubject = document.getElementById('edit-ticket-subject');
+var editTicketDirection = document.getElementById('edit-ticket-direction');
+var editTicketStatus = document.getElementById('edit-ticket-status');
+var editTicketResponsible = document.getElementById('edit-ticket-responsible');
+var editTicketDescription = document.getElementById('edit-ticket-description');
 createOrderToggle.addEventListener('click', openCreateOrderModal);
 editTicketToggle.addEventListener('click', openEditTicketModal);
 editTicketCancel.addEventListener('click', closeEditTicketModal);
@@ -1315,199 +98,208 @@ editTicketClose.addEventListener('click', closeEditTicketModal);
 createOrderCancel.addEventListener('click', closeCreateOrderModal);
 createOrderClose.addEventListener('click', closeCreateOrderModal);
 ticketViewTabs.querySelectorAll('.role-tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    setTicketView(tab.dataset.view);
-  });
+    tab.addEventListener('click', () => {
+        setTicketView(tab.dataset.view);
+    });
 });
 ticketChatRefreshBtn.addEventListener('click', () => {
-  if (currentTicketId == null) return;
-  loadChatMessages(currentTicketId).catch((error) => {
-    setChatStatus(error.message || 'Не удалось обновить чат.', { isError: true });
-  });
+    if (currentTicketId == null)
+        return;
+    loadChatMessages(currentTicketId).catch((error) => {
+        setChatStatus(error.message || 'Не удалось обновить чат.', { isError: true });
+    });
 });
 ticketChatLoadOlderBtn.addEventListener('click', () => {
-  if (currentTicketId == null) return;
-  loadOlderChatMessages(currentTicketId).catch((error) => {
-    setChatStatus(error.message || 'Не удалось загрузить сообщения.', { isError: true });
-  });
+    if (currentTicketId == null)
+        return;
+    loadOlderChatMessages(currentTicketId).catch((error) => {
+        setChatStatus(error.message || 'Не удалось загрузить сообщения.', { isError: true });
+    });
 });
 ticketChatCompose.addEventListener('submit', (event) => {
-  event.preventDefault();
-  if (currentTicketId == null || ticketChatSendBtn.disabled) return;
-  sendChatMessage(currentTicketId).catch((error) => {
-    setChatStatus(error.message || 'Не удалось отправить сообщение.', { isError: true });
-  });
+    event.preventDefault();
+    if (currentTicketId == null || ticketChatSendBtn.disabled)
+        return;
+    sendChatMessage(currentTicketId).catch((error) => {
+        setChatStatus(error.message || 'Не удалось отправить сообщение.', { isError: true });
+    });
 });
 ticketChatInput.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' || event.shiftKey) return;
-  event.preventDefault();
-  if (currentTicketId == null || ticketChatSendBtn.disabled) return;
-  ticketChatCompose.requestSubmit();
+    if (event.key !== 'Enter' || event.shiftKey)
+        return;
+    event.preventDefault();
+    if (currentTicketId == null || ticketChatSendBtn.disabled)
+        return;
+    ticketChatCompose.requestSubmit();
 });
 ticketChatInput.addEventListener('paste', (event) => {
-  const files = [...(event.clipboardData?.files || [])].filter((file) => isChatImage(file));
-  if (!files.length) return;
-  event.preventDefault();
-  addPendingChatFiles(files);
+    const files = [...(event.clipboardData?.files || [])].filter((file) => isChatImage(file));
+    if (!files.length)
+        return;
+    event.preventDefault();
+    addPendingChatFiles(files);
 });
 ticketChatAttachBtn?.addEventListener('click', () => {
-  if (ticketChatFileInput?.disabled) return;
-  ticketChatFileInput.click();
+    if (ticketChatFileInput?.disabled)
+        return;
+    ticketChatFileInput.click();
 });
 ticketChatFileInput?.addEventListener('change', () => {
-  addPendingChatFiles(ticketChatFileInput.files);
-  ticketChatFileInput.value = '';
+    addPendingChatFiles(ticketChatFileInput.files);
+    ticketChatFileInput.value = '';
 });
 ticketChatPendingEl?.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-pending-id]');
-  if (!button) return;
-  removePendingChatFile(button.dataset.pendingId);
+    const button = event.target.closest('[data-pending-id]');
+    if (!button)
+        return;
+    removePendingChatFile(button.dataset.pendingId);
 });
-
 function isFileDrag(event) {
-  const types = event.dataTransfer?.types;
-  if (!types) return false;
-  return [...types].includes('Files');
+    const types = event.dataTransfer?.types;
+    if (!types)
+        return false;
+    return [...types].includes('Files');
 }
-
 function handleChatDragEnter(event) {
-  if (!isFileDrag(event) || ticketChatCompose.hidden) return;
-  event.preventDefault();
-  setChatDropActive(true);
+    if (!isFileDrag(event) || ticketChatCompose.hidden)
+        return;
+    event.preventDefault();
+    setChatDropActive(true);
 }
-
 function handleChatDragOver(event) {
-  if (!isFileDrag(event)) return;
-  event.preventDefault();
-  if (ticketChatCompose.hidden) return;
-  event.dataTransfer.dropEffect = 'copy';
+    if (!isFileDrag(event))
+        return;
+    event.preventDefault();
+    if (ticketChatCompose.hidden)
+        return;
+    event.dataTransfer.dropEffect = 'copy';
 }
-
 function handleChatDragLeave(event) {
-  if (!isFileDrag(event)) return;
-  const next = event.relatedTarget;
-  if (next && ticketChatCard.contains(next)) return;
-  setChatDropActive(false);
+    if (!isFileDrag(event))
+        return;
+    const next = event.relatedTarget;
+    if (next && ticketChatCard.contains(next))
+        return;
+    setChatDropActive(false);
 }
-
 function handleChatDrop(event) {
-  if (!isFileDrag(event)) return;
-  event.preventDefault();
-  setChatDropActive(false);
-  if (ticketChatCompose.hidden) return;
-  addPendingChatFiles(filesFromDataTransfer(event.dataTransfer));
+    if (!isFileDrag(event))
+        return;
+    event.preventDefault();
+    setChatDropActive(false);
+    if (ticketChatCompose.hidden)
+        return;
+    addPendingChatFiles(filesFromDataTransfer(event.dataTransfer));
 }
-
 ticketChatCard.addEventListener('dragenter', handleChatDragEnter);
 ticketChatCard.addEventListener('dragover', handleChatDragOver);
 ticketChatCard.addEventListener('dragleave', handleChatDragLeave);
 ticketChatCard.addEventListener('drop', handleChatDrop);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && currentTicketId != null && ticket?.chat_id) {
-    refreshChatTail(currentTicketId).catch(() => {});
-  }
+    if (document.visibilityState === 'visible' && currentTicketId != null && ticket?.chat_id) {
+        refreshChatTail(currentTicketId).catch(() => { });
+    }
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape') return;
-  if (!editTicketModal.hidden) closeEditTicketModal();
-  else if (!createOrderModal.hidden) closeCreateOrderModal();
+    if (event.key !== 'Escape')
+        return;
+    if (!editTicketModal.hidden)
+        closeEditTicketModal();
+    else if (!createOrderModal.hidden)
+        closeCreateOrderModal();
 });
-
 editTicketForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!ticket || editTicketBusy) return;
-  showEditTicketError('');
-  setEditTicketBusy(true);
-  const payload = {
-    subject: editTicketSubject.value.trim(),
-    description: editTicketDescription.value.trim(),
-    direction: editTicketDirection.value,
-    status: editTicketStatus.value,
-  };
-  if (editTicketResponsible.value) {
-    payload.responsible_user_id = Number(editTicketResponsible.value);
-  }
-  try {
-    const data = await api(`/bot-admin/api/tickets/${encodeURIComponent(ticket.id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
-    renderTicket(data.ticket);
-    closeEditTicketModal({ force: true });
-    showSuccess('Тикет обновлён.');
-  } catch (error) {
-    showEditTicketError(error.message);
-    setEditTicketBusy(false);
-  }
+    event.preventDefault();
+    if (!ticket || editTicketBusy)
+        return;
+    showEditTicketError('');
+    setEditTicketBusy(true);
+    const payload = {
+        subject: editTicketSubject.value.trim(),
+        description: editTicketDescription.value.trim(),
+        direction: editTicketDirection.value,
+        status: editTicketStatus.value,
+    };
+    if (editTicketResponsible.value) {
+        payload.responsible_user_id = Number(editTicketResponsible.value);
+    }
+    try {
+        const data = await api(`/bot-admin/api/tickets/${encodeURIComponent(ticket.id)}`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+        });
+        renderTicket(data.ticket);
+        closeEditTicketModal({ force: true });
+        showSuccess('Тикет обновлён.');
+    }
+    catch (error) {
+        showEditTicketError(error.message);
+        setEditTicketBusy(false);
+    }
 });
-
 firmSearchBtn.addEventListener('click', () => {
-  triggerFirmSearchNow();
+    triggerFirmSearchNow();
 });
 firmSearchInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    triggerFirmSearchNow();
-  }
-});
-
-createOrderForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (createOrderBusy) return;
-  showModalError('');
-  showSuccess('');
-  setCreateOrderBusy(true);
-  try {
-    const payload = {
-      amount: orderAmountInput.value,
-      client_phone: orderClientPhoneInput.value.trim(),
-      additional_phone: orderAdditionalPhoneInput.value.trim() || undefined,
-      ticket_id: ticket?.id,
-      client_id: ticket?.client_id ?? ticket?.client?.id,
-    };
-
-    if (selectedFirm) {
-      payload.client_name = selectedFirm.clientName || undefined;
-      payload.client_type = selectedFirm.type || undefined;
-      payload.record_id = selectedFirm.recordId ?? undefined;
-      payload.firm_message = selectedFirm.message || undefined;
-      payload.firm_phone = selectedFirm.phone || undefined;
-    } else {
-      payload.client_name = ticket?.client?.name || undefined;
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        triggerFirmSearchNow();
     }
-
-    const data = await api('/bot-admin/api/orders', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    const payUrl = data.payment_page_url;
-    showSuccess(
-      payUrl
-        ? `Заказ ${data.order.id} создан. Страница оплаты: ${payUrl}`
-        : `Заказ ${data.order.id} создан.`
-    );
-    closeCreateOrderModal({ force: true });
-  } catch (error) {
-    showModalError(error.message);
-    setCreateOrderBusy(false);
-  }
 });
-
+createOrderForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (createOrderBusy)
+        return;
+    showModalError('');
+    showSuccess('');
+    setCreateOrderBusy(true);
+    try {
+        const payload = {
+            amount: orderAmountInput.value,
+            client_phone: orderClientPhoneInput.value.trim(),
+            additional_phone: orderAdditionalPhoneInput.value.trim() || undefined,
+            ticket_id: ticket?.id,
+            client_id: ticket?.client_id ?? ticket?.client?.id,
+        };
+        if (selectedFirm) {
+            payload.client_name = selectedFirm.clientName || undefined;
+            payload.client_type = selectedFirm.type || undefined;
+            payload.record_id = selectedFirm.recordId ?? undefined;
+            payload.firm_message = selectedFirm.message || undefined;
+            payload.firm_phone = selectedFirm.phone || undefined;
+        }
+        else {
+            payload.client_name = ticket?.client?.name || undefined;
+        }
+        const data = await api('/bot-admin/api/orders', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        });
+        const payUrl = data.payment_page_url;
+        showSuccess(payUrl
+            ? `Заказ ${data.order.id} создан. Страница оплаты: ${payUrl}`
+            : `Заказ ${data.order.id} создан.`);
+        closeCreateOrderModal({ force: true });
+    }
+    catch (error) {
+        showModalError(error.message);
+        setCreateOrderBusy(false);
+    }
+});
 async function init() {
-  const session = await ensureSession({ requiredPermission: 'tickets_read' });
-  canEditTickets = hasPermission(session, 'tickets_edit');
-  canEditClosedTickets = hasPermission(session, 'tickets_edit_closed');
-  updateEditTicketToggleVisibility();
-  const ticketId = parseTicketIdFromPath();
-  if (!ticketId) {
-    showError('Некорректный идентификатор тикета.');
-    return;
-  }
-  await loadUsers();
-  await loadTicket(ticketId);
+    const session = await ensureSession({ requiredPermission: 'tickets_read' });
+    canEditTickets = hasPermission(session, 'tickets_edit');
+    canEditClosedTickets = hasPermission(session, 'tickets_edit_closed');
+    updateEditTicketToggleVisibility();
+    const ticketId = parseTicketIdFromPath();
+    if (!ticketId) {
+        showError('Некорректный идентификатор тикета.');
+        return;
+    }
+    await loadUsers();
+    await loadTicket(ticketId);
 }
-
 setupLogout();
 init().catch((error) => {
-  document.body.innerHTML = `<main class="page"><p class="message error">${escapeHtml(error.message)}</p></main>`;
+    document.body.innerHTML = `<main class="page"><p class="message error">${escapeHtml(error.message)}</p></main>`;
 });

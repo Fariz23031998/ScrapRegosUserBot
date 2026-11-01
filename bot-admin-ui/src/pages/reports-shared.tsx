@@ -19,7 +19,7 @@ import SimpleTable from "../components/SimpleTable";
 import { PeriodFilterButton } from "../components/TicketPeriodModal";
 import { formatMoneyLine, parseDisplayCurrency, totalsPriceLines, type MoneyCurrency } from "../lib/money";
 import type { TaskLocation } from "../lib/types";
-import { datetimeLocalToUnix, getTicketPeriodDefaults, toDatetimeLocalValue } from "../lib/ticket-display";
+import { datetimeLocalToUnix, formatCallDuration, getTicketPeriodDefaults, toDatetimeLocalValue } from "../lib/ticket-display";
 
 export const FILTERS_STORAGE_KEY = "bot-admin.reports.filters";
 export const DEFAULT_SCORE_PER_TICKET = "0.5";
@@ -502,23 +502,33 @@ export function ReportResultTables({
     {
       id: "technician_task_score",
       header: "Баллы с задач",
-      accessorFn: (row) => formatTechnicianScore(row.technician_task_score),
+      accessorFn: (row) => row.technician_task_score ?? 0,
+      cell: ({ getValue }) => formatTechnicianScore(Number(getValue() || 0)),
     },
     {
       id: "distance_score",
       header: "Баллы за дистанции",
-      accessorFn: (row) => formatTechnicianScore(row.distance_score || 0),
+      accessorFn: (row) => row.distance_score || 0,
+      cell: ({ getValue }) => formatTechnicianScore(Number(getValue() || 0)),
     },
     { id: "ticket_count", header: "Тикетов", accessorKey: "ticket_count" },
     {
+      id: "call_duration",
+      header: "Длительность",
+      accessorFn: (row) => row.call_duration_seconds || 0,
+      cell: ({ getValue }) => formatCallDuration(Number(getValue() || 0)),
+    },
+    {
       id: "ticket_score",
       header: "Баллы с тикетов",
-      accessorFn: (row) => formatTechnicianScore(row.ticket_score),
+      accessorFn: (row) => row.ticket_score ?? 0,
+      cell: ({ getValue }) => formatTechnicianScore(Number(getValue() || 0)),
     },
     {
       id: "total_score",
       header: "Всего баллов",
-      accessorFn: (row) => formatTechnicianScore(row.total_score),
+      accessorFn: (row) => row.total_score ?? 0,
+      cell: ({ getValue }) => formatTechnicianScore(Number(getValue() || 0)),
     },
   ];
 
@@ -530,6 +540,7 @@ export function ReportResultTables({
       id: "commission",
       header: "Комиссия",
       meta: { align: "right" },
+      accessorFn: (row) => row.commission_uzs ?? 0,
       cell: ({ row }) => money(row.original.commission_uzs, row.original.commission_usd),
     },
   ];
@@ -542,54 +553,63 @@ export function ReportResultTables({
       id: "net_revenue",
       header: "Выручка",
       meta: { align: "right" },
+      accessorFn: (row) => row.net_revenue_uzs ?? 0,
       cell: ({ row }) => money(row.original.net_revenue_uzs, row.original.net_revenue_usd),
     },
     {
       id: "refund",
       header: "Возвраты",
       meta: { align: "right" },
+      accessorFn: (row) => row.refund_uzs ?? 0,
       cell: ({ row }) => money(row.original.refund_uzs, row.original.refund_usd),
     },
     {
       id: "cost",
       header: "Себестоимость",
       meta: { align: "right" },
+      accessorFn: (row) => row.cost_uzs ?? 0,
       cell: ({ row }) => money(row.original.cost_uzs, row.original.cost_usd),
     },
     {
       id: "profit",
       header: "Прибыль",
       meta: { align: "right" },
+      accessorFn: (row) => row.profit_uzs ?? 0,
       cell: ({ row }) => money(row.original.profit_uzs, row.original.profit_usd),
     },
     {
       id: "income",
       header: "Приход",
       meta: { align: "right" },
+      accessorFn: (row) => row.income_uzs ?? 0,
       cell: ({ row }) => money(row.original.income_uzs, row.original.income_usd),
     },
     {
       id: "expense",
       header: "Расход",
       meta: { align: "right" },
+      accessorFn: (row) => row.expense_uzs ?? 0,
       cell: ({ row }) => money(row.original.expense_uzs, row.original.expense_usd),
     },
     {
       id: "paid",
       header: "Оплачено",
       meta: { align: "right" },
+      accessorFn: (row) => row.paid_uzs ?? 0,
       cell: ({ row }) => money(row.original.paid_uzs, row.original.paid_usd),
     },
     {
       id: "refunded_cash",
       header: "Возврат денег",
       meta: { align: "right" },
+      accessorFn: (row) => row.refunded_cash_uzs ?? 0,
       cell: ({ row }) => money(row.original.refunded_cash_uzs, row.original.refunded_cash_usd),
     },
     {
       id: "due",
       header: "К оплате",
       meta: { align: "right" },
+      accessorFn: (row) => row.due_uzs ?? 0,
       cell: ({ row }) => money(row.original.due_uzs, row.original.due_usd),
     },
   ];
@@ -606,6 +626,7 @@ export function ReportResultTables({
           { label: "Баллы с задач", value: formatTechnicianScore(row.technician_task_score) },
           { label: "Баллы за дистанции", value: formatTechnicianScore(row.distance_score || 0) },
           { label: "Тикетов", value: row.ticket_count },
+          { label: "Длительность", value: formatCallDuration(row.call_duration_seconds || 0) },
           { label: "Баллы с тикетов", value: formatTechnicianScore(row.ticket_score) },
           { label: "Всего баллов", value: formatTechnicianScore(row.total_score) },
         ]}
@@ -615,6 +636,7 @@ export function ReportResultTables({
         tableKey="bot-admin.reports.technician"
         data={technicianRows}
         columns={technicianColumns}
+        columnMenuSort
         emptyMessage="Нет данных за выбранный период."
         getRowId={(row) => String(row.user_id)}
       />
@@ -638,6 +660,7 @@ export function ReportResultTables({
         tableKey="bot-admin.reports.commission"
         data={commissionReport?.rows || []}
         columns={commissionColumns}
+        columnMenuSort
         emptyMessage="Нет данных за выбранный период."
         getRowId={(row) => String(row.user_id)}
       />
@@ -676,6 +699,7 @@ export function ReportResultTables({
         tableKey="bot-admin.reports.finance"
         data={financeRows}
         columns={financeColumns}
+        columnMenuSort
         emptyMessage="Нет данных за выбранный период."
         getRowId={(row) => String(row.location_id ?? "none")}
         footerData={financeTotalsRow || undefined}
@@ -702,6 +726,7 @@ export function reportSummaryItems(job: ReportJob, scorePerTicket: number, displ
     return [
       { label: "задач", value: technicianTotals?.technician_task_count ?? 0, valueFirst: true as const },
       { label: "тикетов", value: technicianTotals?.ticket_count ?? 0 },
+      { label: "длительность", value: formatCallDuration(technicianTotals?.call_duration_seconds ?? 0) },
       { label: "баллов", value: formatTechnicianScore(totalScore), tone: "info" as const },
       ...(unassignedTicketCount
         ? [{ label: "без сотрудника", value: unassignedTicketCount, tone: "muted" as const }]

@@ -31,6 +31,7 @@ import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
 import MoneyFields, { MoneyCell } from "../components/MoneyFields";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -126,17 +127,20 @@ export default function ServicesPage() {
   });
   const categories = categoriesQuery.data?.categories || [];
 
+  const { sort, onSortingChange } = useServerTableSort();
   const servicesQuery = usePagedInfiniteQuery({
-    queryKey: ["services", search, appliedCategoryId],
+    queryKey: ["services", search, appliedCategoryId, sort],
     queryFn: (page, pageSize) =>
       listServices({
         page,
         limit: pageSize,
         q: search || undefined,
         category_id: appliedCategoryId || undefined,
+        sort: sort || undefined,
       }),
     getItems: (data) => data.services || [],
     getItemId: (service) => service.id,
+    keepPrevious: true,
   });
 
   function invalidateServices() {
@@ -308,6 +312,7 @@ export default function ServicesPage() {
       {
         id: "cost",
         header: "Себестоимость",
+        accessorFn: (row) => row.cost_amount ?? 0,
         cell: ({ row }) => {
           const lines = catalogCostLines(row.original);
           return <MoneyCell primary={lines.primary} muted={lines.muted} />;
@@ -316,6 +321,7 @@ export default function ServicesPage() {
       {
         id: "price",
         header: "Цена",
+        accessorFn: (row) => row.price_uzs ?? 0,
         cell: ({ row }) => {
           const lines = catalogPriceLines(row.original, rate);
           return <MoneyCell primary={lines.primary} muted={lines.muted} />;
@@ -418,6 +424,9 @@ export default function ServicesPage() {
             data={services}
             columns={columns}
             isLoading={servicesQuery.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={search || appliedCategoryId ? "Ничего не найдено." : "Услуг пока нет."}
             getRowId={(row) => String(row.id)}

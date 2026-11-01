@@ -16,6 +16,7 @@ export type TaskListParams = {
   status?: string;
   category_id?: string | number;
   location_id?: string | number;
+  sort?: string;
 };
 
 export type TaskPayload = {
@@ -48,6 +49,7 @@ export function listTasks(params: TaskListParams) {
   if (params.status) search.set("status", params.status);
   if (params.category_id) search.set("category_id", String(params.category_id));
   if (params.location_id) search.set("location_id", String(params.location_id));
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<{ tasks: FieldTask[]; total: number; page: number; limit: number }>(
     `/bot-admin/api/tasks?${search}`,
   );

@@ -1,7 +1,7 @@
-import { ColumnDef } from "@tanstack/react-table";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Menu, Plus, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ColumnDef, type SortingState } from "@tanstack/react-table";
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { Check, Columns3, Menu, Plus, RefreshCw, Table2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { createOrder } from "../api/admin";
 import {
@@ -10,13 +10,16 @@ import {
   getFirm,
   linkClientFirm,
   listTicketChannels,
+  listTicketSummary,
   listTickets,
   listTicketUsers,
+  type TicketSummaryCounts,
   searchFirms,
   searchTicketClients,
   ticketRecordingUrl,
   unlinkClientFirm,
   updateClient,
+  updateTicket,
 } from "../api/tickets";
 import filterFunnelIcon from "../assets/filter-funnel.png";
 import CheckboxSelect from "../components/CheckboxSelect";
@@ -24,32 +27,38 @@ import EntityAvatar from "../components/EntityAvatar";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import Modal from "../components/Modal";
 import SearchField from "../components/SearchField";
+import PhoneCopyButton from "../components/PhoneCopyButton";
 import SimpleTable from "../components/SimpleTable";
 import SummaryBar from "../components/SummaryBar";
-import TicketCards from "../components/TicketCards";
+import TicketBoard from "../components/TicketBoard";
+import TicketCards, { TicketRecordingControl } from "../components/TicketCards";
 import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
 import { PeriodFilterButton, TicketPeriodModal } from "../components/TicketPeriodModal";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
+import { useTicketBoardColumns } from "../hooks/useTicketBoardColumns";
 import { useStickyOffsetVar } from "../hooks/useStickyOffsetVar";
-import { useDurationAwareSummary, useTicketRecordingDurations } from "../hooks/useTicketListDurations";
+import { useTicketRecordingDurations } from "../hooks/useTicketListDurations";
 import { useTicketEvents } from "../hooks/useTicketEvents";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import { useAdminShell } from "../lib/admin-shell";
+import {
+  moveTicketBetweenBoardColumns,
+  TICKET_BOARD_STATUSES,
+  ticketBoardQueryKey,
+} from "../lib/ticket-board";
 import {
   channelDisplayName,
   datetimeLocalToUnix,
   directionLabel,
   firmButtonLabel,
   firmTypeLabel,
-  formatCallDuration,
   formatUnix,
   getCachedRecordingDuration,
   getTicketClientId,
   getTicketPeriodDefaults,
   hasLookupPhone,
-  hasTicketRecording,
   statusBadgeClass,
   statusLabel,
   TICKET_STATUS_OPTIONS,
@@ -60,11 +69,56 @@ import {
   unpaidOrdersLabel,
   userDisplayName,
 } from "../lib/ticket-display";
-import type { DurationSummary } from "../lib/ticket-display";
 import type { FirmSearchResult, Ticket, TicketFirmLink } from "../lib/types";
 import { sanitizeTelegramHtml } from "../lib/utils";
 
 const FILTERS_STORAGE_KEY = "bot-admin.tickets.filters";
+const TICKET_VIEW_STORAGE_KEY = "bot-admin.tickets.view";
+
+type TicketListView = "table" | "cards";
+
+function loadTicketListView(): TicketListView {
+  try {
+    return localStorage.getItem(TICKET_VIEW_STORAGE_KEY) === "cards" ? "cards" : "table";
+  } catch {
+    return "table";
+  }
+}
+
+function saveTicketListView(view: TicketListView) {
+  try {
+    localStorage.setItem(TICKET_VIEW_STORAGE_KEY, view);
+  } catch {
+    /* ignore */
+  }
+}
+
+type TicketListPage = {
+  tickets?: Ticket[];
+  total: number;
+  page: number;
+  summary?: TicketSummaryCounts | null;
+  active_ticket?: Ticket | null;
+};
+
+function patchTicketStatusInPages(
+  data: InfiniteData<TicketListPage> | undefined,
+  ticketId: number,
+  status: string,
+): InfiniteData<TicketListPage> | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      tickets: (page.tickets || []).map((ticket) => (ticket.id === ticketId ? { ...ticket, status } : ticket)),
+      active_ticket:
+        page.active_ticket && page.active_ticket.id === ticketId
+          ? { ...page.active_ticket, status }
+          : page.active_ticket,
+    })),
+  };
+}
 
 type TicketFilters = {
   search: string;
@@ -148,11 +202,36 @@ function saveFilters(filters: TicketFilters) {
   }
 }
 
-function buildListParams(page: number, limit: number, filters: TicketFilters): Record<string, string> {
+const TICKET_SORT_FIELDS: Record<string, string> = {
+  id: "id",
+  client: "client.name",
+  channel: "channel_id",
+  status: "status",
+  direction: "direction",
+  responsible: "responsible_user_id",
+  updated: "last_update",
+  created: "created_date",
+  sla: "sla_breached",
+  rating: "rating",
+};
+
+function ticketSortQuery(sorting: SortingState): string {
+  const primary = sorting.find((item) => TICKET_SORT_FIELDS[item.id]);
+  if (!primary) return "";
+  return `${TICKET_SORT_FIELDS[primary.id]}:${primary.desc ? "desc" : "asc"}`;
+}
+
+function buildListParams(
+  page: number,
+  limit: number,
+  filters: TicketFilters,
+  sort = "",
+): Record<string, string> {
   const params: Record<string, string> = {
     page: String(page),
     limit: String(limit),
   };
+  if (sort) params.sort = sort;
   if (filters.search) params.q = filters.search;
   if (filters.statuses.length) params.status = filters.statuses.join(",");
   if (filters.users.length) params.responsible_user_id = filters.users.join(",");
@@ -169,6 +248,23 @@ function buildListParams(page: number, limit: number, filters: TicketFilters): R
   return params;
 }
 
+function buildSummaryParams(filters: TicketFilters): Record<string, string> {
+  const params = buildListParams(1, 25, filters);
+  delete params.page;
+  delete params.limit;
+  delete params.sort;
+  return params;
+}
+
+function readEmbeddedSummary(summary: TicketListPage["summary"]): TicketSummaryCounts | null {
+  if (!summary || summary.count == null) return null;
+  return {
+    count: summary.count,
+    slaBreached: summary.slaBreached ?? 0,
+    rated: summary.rated ?? 0,
+  };
+}
+
 function regosUserLabel(user: { full_name?: string | null; login?: string | null; id: number }) {
   return user.full_name || user.login || `Пользователь #${user.id}`;
 }
@@ -183,6 +279,41 @@ function filtersHaveAdvancedValues(filters: TicketFilters, periodDays?: number) 
     filters.dateTo !== defaults.dateTo ||
     Boolean(filters.minDuration) ||
     filters.withoutDuplicates
+  );
+}
+
+function TicketViewSwitch({
+  view,
+  onChange,
+}: {
+  view: TicketListView;
+  onChange: (view: TicketListView) => void;
+}) {
+  return (
+    <div className="ticket-view-switch role-tabs" role="tablist" aria-label="Вид списка тикетов">
+      <button
+        type="button"
+        className={`role-tab${view === "table" ? " role-tab--active" : ""}`}
+        role="tab"
+        aria-label="Таблица"
+        title="Таблица"
+        aria-selected={view === "table"}
+        onClick={() => onChange("table")}
+      >
+        <Table2 size={16} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className={`role-tab${view === "cards" ? " role-tab--active" : ""}`}
+        role="tab"
+        aria-label="Карточки"
+        title="Карточки"
+        aria-selected={view === "cards"}
+        onClick={() => onChange("cards")}
+      >
+        <Columns3 size={16} aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
@@ -306,11 +437,19 @@ export default function TicketsPage() {
   const { dateTimeFormat, ticketPeriodDays } = useUiPreferences();
   const queryClient = useQueryClient();
   const [filterBootstrap] = useState(() => loadFilters(ticketPeriodDays));
+  const [ticketView, setTicketView] = useState<TicketListView>(loadTicketListView);
   const [filters, setFilters] = useState(filterBootstrap.filters);
   const [appliedFilters, setAppliedFilters] = useState(filterBootstrap.filters);
+  const [ticketSorting, setTicketSorting] = useState<SortingState>([]);
+  const ticketSort = useMemo(() => ticketSortQuery(ticketSorting), [ticketSorting]);
+  const listScope = useMemo(() => ({ ...appliedFilters, sort: ticketSort }), [appliedFilters, ticketSort]);
+  const handleTicketSortingChange = useCallback((sorting: SortingState) => {
+    setTicketSorting(sorting);
+  }, []);
   // Only auto-default Ответственный when nothing was persisted yet (matches legacy admin UI).
   const [filtersReady, setFiltersReady] = useState(filterBootstrap.fromStorage);
   const [successMessage, setSuccessMessage] = useState("");
+  const [boardError, setBoardError] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
@@ -338,6 +477,8 @@ export default function TicketsPage() {
 
   const canEditClients = hasPermission("clients_edit");
   const canLinkClientFirms = hasPermission("clients_link_firm");
+  const canEditTickets = hasPermission("tickets_edit");
+  const canEditClosedTickets = hasPermission("tickets_edit_closed");
 
   useEffect(() => {
     saveFilters(filters);
@@ -362,11 +503,18 @@ export default function TicketsPage() {
   });
 
   const ticketsQuery = usePagedInfiniteQuery({
-    queryKey: ["tickets", appliedFilters],
-    queryFn: (page, pageSize) => listTickets(buildListParams(page, pageSize, appliedFilters)),
+    queryKey: ["tickets", listScope],
+    queryFn: (page, pageSize) => listTickets(buildListParams(page, pageSize, appliedFilters, ticketSort)),
     getItems: (data) => data.tickets || [],
     getItemId: (ticket) => ticket.id,
-    enabled: filtersReady,
+    enabled: filtersReady && ticketView !== "cards",
+    keepPrevious: true,
+  });
+  const board = useTicketBoardColumns({
+    filters: listScope,
+    enabled: filtersReady && ticketView === "cards",
+    fetchPage: (status, page, pageSize) =>
+      listTickets(buildListParams(page, pageSize, { ...appliedFilters, statuses: [status] }, ticketSort)),
   });
 
   const userNames = useMemo(() => {
@@ -388,25 +536,97 @@ export default function TicketsPage() {
   const tickets = ticketsQuery.items;
   const total = ticketsQuery.total;
   const firstPage = ticketsQuery.data?.pages[0];
-  const activeTicket = firstPage?.active_ticket || null;
-  const recordingDurations = useTicketRecordingDurations(tickets);
+  const cardView = ticketView === "cards";
+  const activeTicket = (cardView ? board.activeTicket : firstPage?.active_ticket) || null;
+  const recordingDurations = useTicketRecordingDurations(cardView ? board.tickets : tickets);
+  const embeddedSummary = cardView ? null : readEmbeddedSummary(firstPage?.summary);
+  const firstPageReady = Boolean(ticketsQuery.data?.pages.length);
+  const summaryQuery = useQuery({
+    queryKey: ["tickets-summary", appliedFilters],
+    queryFn: () => listTicketSummary(buildSummaryParams(appliedFilters)),
+    enabled: filtersReady && (cardView || (firstPageReady && !embeddedSummary)),
+  });
+  const summary = embeddedSummary ?? summaryQuery.data?.summary ?? null;
+  const summaryPending = !summary && !summaryQuery.isError && (cardView || !ticketsQuery.isError);
+  const listRefreshing = cardView
+    ? board.isRefreshing
+    : ticketsQuery.isFetching && !ticketsQuery.isFetchingNextPage;
 
-  const fallbackSummary = useMemo(() => {
-    const raw = firstPage?.summary as
-      | { count?: number; slaBreached?: number; rated?: number }
-      | undefined;
-    return {
-      count: raw?.count ?? total,
-      slaBreached: raw?.slaBreached ?? 0,
-      rated: raw?.rated ?? 0,
-    };
-  }, [firstPage?.summary, total]);
+  function readBoardColumns() {
+    const columns: Record<string, InfiniteData<TicketListPage> | undefined> = {};
+    for (const status of TICKET_BOARD_STATUSES) {
+      columns[status] = queryClient.getQueryData<InfiniteData<TicketListPage>>(
+        ticketBoardQueryKey(status, listScope),
+      );
+    }
+    return columns;
+  }
 
-  const { summary, calculating: summaryCalculating } = useDurationAwareSummary(
-    firstPage?.duration_summary as DurationSummary | null | undefined,
-    appliedFilters.minDuration,
-    fallbackSummary,
-  );
+  function writeBoardColumns(
+    current: Record<string, InfiniteData<TicketListPage> | undefined>,
+    moved: Record<string, InfiniteData<TicketListPage> | undefined>,
+  ) {
+    for (const status of TICKET_BOARD_STATUSES) {
+      if (moved[status] === current[status]) continue;
+      queryClient.setQueryData(ticketBoardQueryKey(status, listScope), moved[status]);
+    }
+  }
+
+  function refreshTicketList() {
+    if (cardView) {
+      void board.refetch();
+      void summaryQuery.refetch();
+      return;
+    }
+    void ticketsQuery.refetch();
+    if (!embeddedSummary) void summaryQuery.refetch();
+  }
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) => updateTicket(id, { status }),
+    onMutate: async ({ id, status }) => {
+      setBoardError("");
+      await queryClient.cancelQueries({ queryKey: ["tickets", listScope] });
+      await Promise.all(
+        TICKET_BOARD_STATUSES.map((columnStatus) =>
+          queryClient.cancelQueries({ queryKey: ticketBoardQueryKey(columnStatus, listScope) }),
+        ),
+      );
+      const previous = queryClient.getQueryData<InfiniteData<TicketListPage>>(["tickets", listScope]);
+      const previousBoard = readBoardColumns();
+      queryClient.setQueryData<InfiniteData<TicketListPage>>(["tickets", listScope], (current) =>
+        patchTicketStatusInPages(current, id, status),
+      );
+      writeBoardColumns(previousBoard, moveTicketBetweenBoardColumns(previousBoard, id, status));
+      return { previous, previousBoard };
+    },
+    onError: (error: Error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["tickets", listScope], context.previous);
+      }
+      if (context?.previousBoard) {
+        for (const status of TICKET_BOARD_STATUSES) {
+          const key = ticketBoardQueryKey(status, listScope);
+          const previousColumn = context.previousBoard[status];
+          if (previousColumn === undefined) {
+            queryClient.removeQueries({ queryKey: key, exact: true });
+          } else {
+            queryClient.setQueryData(key, previousColumn);
+          }
+        }
+      }
+      setBoardError(error.message || "Не удалось изменить статус.");
+    },
+    onSuccess: (data, { id }) => {
+      const nextStatus = data.ticket?.status;
+      if (!nextStatus) return;
+      queryClient.setQueryData<InfiniteData<TicketListPage>>(["tickets", listScope], (current) =>
+        patchTicketStatusInPages(current, id, String(nextStatus)),
+      );
+      const currentBoard = readBoardColumns();
+      writeBoardColumns(currentBoard, moveTicketBetweenBoardColumns(currentBoard, id, String(nextStatus)));
+    },
+  });
 
   const createMutation = useMutation({
     mutationFn: createTicket,
@@ -425,14 +645,17 @@ export default function TicketsPage() {
         id: "subject",
         header: "Тема",
         accessorKey: "subject",
+        enableSorting: false,
         cell: ({ getValue }) => getValue() || "—",
       },
       {
         id: "client",
         header: "Клиент",
+        accessorFn: (row) => row.client?.name || row.client_name || "",
         cell: ({ row }) => {
           const client = row.original.client;
           const name = client?.name || "—";
+          const phone = client?.phone || row.original.client_phone || "";
           const clientId = getTicketClientId(row.original);
           const hasClient = Boolean(clientId || client?.name);
           const canOpenClient = Boolean(clientId && (canEditClients || canLinkClientFirms));
@@ -458,18 +681,15 @@ export default function TicketsPage() {
                 )
               ) : null}
               <span className="ticket-client-name">{name}</span>
+              {phone ? <PhoneCopyButton phone={phone} /> : null}
             </span>
           );
         },
       },
       {
-        id: "phone",
-        header: "Телефон",
-        cell: ({ row }) => row.original.client?.phone || "—",
-      },
-      {
         id: "unpaid",
         header: "Неоплаченные",
+        enableSorting: false,
         cell: ({ row }) => {
           const ticket = row.original;
           if (!hasLookupPhone(ticket)) return "—";
@@ -488,6 +708,7 @@ export default function TicketsPage() {
       {
         id: "ts",
         header: "ТП",
+        enableSorting: false,
         cell: ({ row }) => {
           const display = technicalSupportDisplay(row.original);
           if (display.kind === "missing") return "—";
@@ -509,6 +730,7 @@ export default function TicketsPage() {
       {
         id: "firms",
         header: "Фирмы",
+        enableSorting: false,
         cell: ({ row }) => {
           const firms = row.original.local?.firms || [];
           if (!firms.length) return "—";
@@ -540,11 +762,13 @@ export default function TicketsPage() {
       {
         id: "channel",
         header: "Канал",
+        accessorFn: (row) => row.channel_id ?? null,
         cell: ({ row }) => channelDisplayName(row.original.channel_id, channelNames),
       },
       {
         id: "status",
         header: "Статус",
+        accessorFn: (row) => row.status || "",
         cell: ({ row }) => (
           <span className={statusBadgeClass(row.original.status)}>{statusLabel(row.original.status)}</span>
         ),
@@ -552,56 +776,48 @@ export default function TicketsPage() {
       {
         id: "direction",
         header: "Направление",
+        accessorFn: (row) => row.direction || "",
         cell: ({ row }) => directionLabel(row.original.direction),
       },
       {
         id: "responsible",
         header: "Ответственный",
+        accessorFn: (row) => row.responsible_user_id ?? null,
         cell: ({ row }) => userDisplayName(row.original.responsible_user_id, userNames),
       },
       {
         id: "updated",
         header: "Обновлён",
+        accessorFn: (row) => row.last_update ?? null,
         cell: ({ row }) => formatUnix(row.original.last_update),
       },
       {
         id: "created",
         header: "Создан",
+        accessorFn: (row) => row.created_date ?? null,
         cell: ({ row }) => formatUnix(row.original.created_date),
       },
       {
         id: "recording",
         header: "Запись",
-        cell: ({ row }) =>
-          hasTicketRecording(row.original) ? (
-            <button
-              type="button"
-              className="ticket-recording-open"
-              onClick={(event) => {
-                event.stopPropagation();
-                setRecordingTicket(row.original);
-              }}
-            >
-              Воспроизвести
-            </button>
-          ) : (
-            "—"
-          ),
-      },
-      {
-        id: "duration",
-        header: "Длительность",
+        enableSorting: false,
         cell: ({ row }) => {
           const ticket = row.original;
           const cached = getCachedRecordingDuration(ticket);
           const probed = recordingDurations[String(ticket.id)];
-          const duration = cached ?? probed;
-          return duration != null ? formatCallDuration(duration) : "—";
+          return (
+            <TicketRecordingControl
+              ticket={ticket}
+              duration={cached ?? probed}
+              onOpen={setRecordingTicket}
+            />
+          );
         },
       },
       {
         id: "sla",
         header: "SLA нарушен",
+        accessorFn: (row) => Boolean(row.sla_breached),
         cell: ({ row }) =>
           row.original.sla_breached ? (
             <span className="badge badge--warn">Да</span>
@@ -612,6 +828,7 @@ export default function TicketsPage() {
       {
         id: "rating",
         header: "Оценка",
+        accessorFn: (row) => row.rating ?? null,
         cell: ({ row }) => (row.original.rating != null ? row.original.rating : "—"),
       },
     ],
@@ -625,6 +842,15 @@ export default function TicketsPage() {
   const users = usersQuery.data?.users || [];
   const channels = channelsQuery.data?.channels || [];
   const filtersActive = filtersHaveAdvancedValues(appliedFilters, ticketPeriodDays);
+  const ticketsEmptyMessage =
+    appliedFilters.search ||
+    appliedFilters.statuses.length ||
+    appliedFilters.users.length ||
+    appliedFilters.channels.length ||
+    appliedFilters.dateFrom ||
+    appliedFilters.dateTo
+      ? "Ничего не найдено. Измените фильтры."
+      : "Тикетов пока нет.";
 
   return (
     <section className="card tickets-page">
@@ -636,22 +862,23 @@ export default function TicketsPage() {
         />
       ) : null}
 
-      {ticketsQuery.error ? (
+      {ticketView !== "cards" && ticketsQuery.error ? (
         <p className="message error">{(ticketsQuery.error as Error).message}</p>
       ) : null}
+      {boardError ? <p className="message error">{boardError}</p> : null}
       {successMessage ? <p className="message success">{successMessage}</p> : null}
 
       <div className="tickets-sticky-head" ref={stickyHeadRef}>
         <SummaryBar
-          placeholder={summaryCalculating ? "Расчёт итогов по длительности звонков…" : undefined}
+          placeholder={summaryPending ? "Расчёт итогов по длительности звонков…" : undefined}
           items={
-            summaryCalculating
-              ? undefined
-              : [
+            summary
+              ? [
                   { label: "тикетов", value: summary.count, tone: "neutral", valueFirst: true },
                   { label: "SLA нарушен", value: summary.slaBreached, tone: "danger" },
                   { label: "С оценкой", value: summary.rated, tone: "ok" },
                 ]
+              : undefined
           }
         />
 
@@ -670,8 +897,8 @@ export default function TicketsPage() {
               channels={channels}
               onOpenPeriod={() => setPeriodOpen(true)}
               showActions
-              onRefresh={() => void ticketsQuery.refetch()}
-              refreshing={ticketsQuery.isFetching && !ticketsQuery.isFetchingNextPage}
+              onRefresh={refreshTicketList}
+              refreshing={listRefreshing}
             />
           </div>
 
@@ -704,6 +931,13 @@ export default function TicketsPage() {
                 className="ticket-filters__search-box"
               />
             </label>
+            <TicketViewSwitch
+              view={ticketView}
+              onChange={(next) => {
+                setTicketView(next);
+                saveTicketListView(next);
+              }}
+            />
           </div>
         </form>
       </div>
@@ -737,8 +971,8 @@ export default function TicketsPage() {
               className="btn-secondary btn-icon"
               aria-label="Обновить"
               title="Обновить"
-              onClick={() => void ticketsQuery.refetch()}
-              disabled={ticketsQuery.isFetching && !ticketsQuery.isFetchingNextPage}
+              onClick={refreshTicketList}
+              disabled={listRefreshing}
             >
               <RefreshCw size={18} aria-hidden="true" />
             </button>
@@ -767,21 +1001,35 @@ export default function TicketsPage() {
         onApply={(dateFrom, dateTo) => setFilters((current) => ({ ...current, dateFrom, dateTo }))}
       />
 
-      <div className="ticket-table-section">
-        {compact ? (
+      <div className={`ticket-table-section${ticketView === "cards" ? " ticket-table-section--board" : ""}`}>
+        {ticketView === "cards" ? (
+          <TicketBoard
+            columns={board.columns}
+            emptyMessage={ticketsEmptyMessage}
+            userNames={userNames}
+            canEditTickets={canEditTickets}
+            canEditClosedTickets={canEditClosedTickets}
+            busyTicketId={statusMutation.isPending ? statusMutation.variables?.id ?? null : null}
+            recordingDurations={recordingDurations}
+            onNearEnd={(status) => {
+              const column = board.columns.find((item) => item.id === status);
+              if (column?.hasNextPage && !column.isFetchingNextPage) {
+                void column.fetchNextPage();
+              }
+            }}
+            onOpenTicket={(ticket) => navigate(`/tickets/${ticket.id}`)}
+            onOpenRecording={setRecordingTicket}
+            onStatusChange={(ticket, status) => {
+              if (!canEditTickets) return;
+              if (String(ticket.status || "") === "Closed" && !canEditClosedTickets) return;
+              statusMutation.mutate({ id: ticket.id, status });
+            }}
+          />
+        ) : compact ? (
           <TicketCards
             tickets={tickets}
             isLoading={ticketsQuery.isPending}
-            emptyMessage={
-              appliedFilters.search ||
-              appliedFilters.statuses.length ||
-              appliedFilters.users.length ||
-              appliedFilters.channels.length ||
-              appliedFilters.dateFrom ||
-              appliedFilters.dateTo
-                ? "Ничего не найдено. Измените фильтры."
-                : "Тикетов пока нет."
-            }
+            emptyMessage={ticketsEmptyMessage}
             userNames={userNames}
             channelNames={channelNames}
             recordingDurations={recordingDurations}
@@ -806,27 +1054,23 @@ export default function TicketsPage() {
             columns={columns}
             isLoading={ticketsQuery.isPending}
             serverSideSearch
-            emptyMessage={
-              appliedFilters.search ||
-              appliedFilters.statuses.length ||
-              appliedFilters.users.length ||
-              appliedFilters.channels.length ||
-              appliedFilters.dateFrom ||
-              appliedFilters.dateTo
-                ? "Ничего не найдено. Измените фильтры."
-                : "Тикетов пока нет."
-            }
+            columnMenuSort
+            manualSorting
+            onSortingChange={handleTicketSortingChange}
+            emptyMessage={ticketsEmptyMessage}
             getRowId={(row) => String(row.id)}
             onRowClick={(row) => navigate(`/tickets/${row.id}`)}
           />
         )}
-        <InfiniteScrollSentinel
-          loaded={tickets.length}
-          total={total}
-          hasNextPage={Boolean(ticketsQuery.hasNextPage)}
-          isFetchingNextPage={ticketsQuery.isFetchingNextPage}
-          fetchNextPage={ticketsQuery.fetchNextPage}
-        />
+        {ticketView === "cards" ? null : (
+          <InfiniteScrollSentinel
+            loaded={tickets.length}
+            total={total}
+            hasNextPage={Boolean(ticketsQuery.hasNextPage)}
+            isFetchingNextPage={ticketsQuery.isFetchingNextPage}
+            fetchNextPage={ticketsQuery.fetchNextPage}
+          />
+        )}
       </div>
 
       <CreateTicketModal
@@ -988,6 +1232,13 @@ function RecordingModal({ ticket, onClose }: { ticket: Ticket | null; onClose: (
     }
   }, [ticket]);
 
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!ticket || !player) return;
+    const attempt = player.play();
+    if (attempt) void attempt.catch(() => {});
+  }, [ticket]);
+
   return (
     <Modal title="Запись звонка" open={Boolean(ticket)} onClose={onClose}>
       {ticket ? (
@@ -999,6 +1250,7 @@ function RecordingModal({ ticket, onClose }: { ticket: Ticket | null; onClose: (
             ref={playerRef}
             className="ticket-recording-modal__player"
             controls
+            autoPlay
             preload="metadata"
             crossOrigin="use-credentials"
             src={ticketRecordingUrl(ticket.id)}

@@ -16,6 +16,7 @@ import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -187,17 +188,20 @@ export default function TechnicalSupportPage() {
     },
   });
 
+  const { sort, onSortingChange } = useServerTableSort();
   const subsQuery = usePagedInfiniteQuery({
-    queryKey: ["ts-subscriptions", search, appliedStatus],
+    queryKey: ["ts-subscriptions", search, appliedStatus, sort],
     queryFn: (page, pageSize) =>
       listTechnicalSupportSubscriptions({
         page,
         limit: pageSize,
         q: search || undefined,
         status: appliedStatus || undefined,
+        sort: sort || undefined,
       }),
     getItems: (data) => data.subscriptions || [],
     getItemId: (item) => item.id,
+    keepPrevious: true,
   });
 
   const savePricesMutation = useMutation({
@@ -414,6 +418,9 @@ export default function TechnicalSupportPage() {
                 data={subscriptions}
                 columns={columns}
                 isLoading={subsQuery.isPending}
+                columnMenuSort
+                manualSorting
+                onSortingChange={onSortingChange}
                 serverSideSearch
                 emptyMessage={emptyMessage}
                 getRowId={(row) => String(row.id)}

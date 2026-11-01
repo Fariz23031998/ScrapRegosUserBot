@@ -336,7 +336,8 @@ export default function FinancesPage() {
       {
         id: "created_at",
         header: "Дата",
-        accessorFn: (row) => formatDateTime(row.created_at),
+        accessorFn: (row) => row.created_at || "",
+        cell: ({ row }) => formatDateTime(row.original.created_at),
       },
       {
         id: "direction",
@@ -361,6 +362,7 @@ export default function FinancesPage() {
       {
         id: "amount",
         header: "Сумма",
+        accessorFn: (row) => (row.direction === "out" ? -1 : 1) * Number(row.amount || 0),
         cell: ({ row }) => {
           const sign = row.original.direction === "out" ? "−" : "+";
           return `${sign}${formatMoneyLine(row.original.amount, row.original.currency)}`;
@@ -541,6 +543,7 @@ export default function FinancesPage() {
             data={visiblePayments}
             columns={columns}
             isLoading={paymentsQuery.isPending}
+            columnMenuSort
             serverSideSearch
             emptyMessage={
               search || appliedAccountId || appliedDirection || appliedCategoryId || appliedLocationId

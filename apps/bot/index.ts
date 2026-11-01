@@ -1,0 +1,468 @@
+import type { Unchecked } from '../../src/types/unchecked';
+import { envPath } from '../../src/paths';
+import dotenv from 'dotenv';
+import TelegramBot from 'node-telegram-bot-api';
+import { searchUser, looksLikePhone } from '../../src/bot/search-user';
+import { openDb, getBotUser, getEmployeeByPhone, linkEmployeeTelegram, registerCustomer, getUnpaidOrdersByClientPhone, getUnpaidOrdersByUserPhone } from '../../src/db/partners-db';
+import { isLinkedEmployee } from '../../src/db/user-rights';
+import { syncUserCommands, getHelpCommandLines, buildDefaultBotCommands } from '../../src/bot/bot-commands';
+import { registerVipHandlers, handleVipMessage } from '../../src/bot/vip-bot';
+import { registerServiceHandlers, handleServiceMessage, makeServiceButtonForResult } from '../../src/bot/service-bot';
+import { registerReportHandlers, handleReportMessage } from '../../src/bot/report-bot';
+import { registerOrderActionHandlers, sendOrdersWithActions } from '../../src/bot/order-actions-bot';
+import { registerDashboardHandlers } from '../../src/bot/dashboard-bot';
+import { registerTechnicalSupportHandlers, handleTechnicalSupportMessage } from '../../src/bot/technical-support-bot';
+import { registerTariffInfoHandlers } from '../../src/bot/tariff-info-bot';
+import { registerPricesHandlers } from '../../src/bot/prices-bot';
+import { handleCustomerQuestionMessage } from '../../src/bot/customer-question-bot';
+import { ensureCustomerRegosOnStart, MSG_CLIENT_NOT_REGISTERED, REGISTER_KEYBOARD } from '../../src/bot/customer-start-bot';
+import { loadTelegramTicketSettings, isTelegramTicketConfigured } from '../../src/bot/telegram-ticket-settings';
+import { formatUnpaidOrdersBlock } from '../../src/bot/bot-format';
+import { enrichOrderParties } from '../../src/bot/order-parties';
+import { sendChatActionSafe } from '../../src/bot/telegram-safe';
+import { startSessionKeepalive } from '../../src/live/session-keepalive';
+import { withHtml } from '../../src/bot/telegram-html';
+
+dotenv.config({ path: envPath() });
+
+const token = process.env.TELEGRAM_BOT_TOKEN;
+if (!token) {
+  console.error('Set TELEGRAM_BOT_TOKEN in .env or environment variables.');
+  process.exit(1);
+}
+
+const db = openDb();
+const bot = new TelegramBot(token, { polling: true });
+
+const SEARCH_HELP = [
+  'Отправьте номер телефона, код лицензии или API-логин для поиска.',
+  '',
+  'Поля поиска:',
+  '- телефон партнёра (partners.phone)',
+  '- телефон / код лицензии (licenses.phone / licenses.code)',
+  '- телефон / код аккаунта RPOS (rpos_clients.phone / rpos_accounts.code)',
+  '- API-логин (partner_accounts.api_login)',
+  '',
+  'Совпадения по телефону из разных источников возвращаются вместе.',
+  'Для записей старше 3 месяцев добавляется: Срок технической поддержки истёк.',
+].join('\n');
+
+function buildHelpText(telegramId?: any) {
+  const commandLines = getHelpCommandLines(db, telegramId);
+  if (!commandLines.length) {
+    return SEARCH_HELP;
+  }
+  return [SEARCH_HELP, '', ...commandLines].join('\n');
+}
+
+const REGISTER_SUCCESS = 'Регистрация успешна. Теперь вы можете выполнять поиск.';
+const CUSTOMER_NO_ORDERS = 'По вашему номеру не найдено неоплаченных заказов.';
+const CUSTOMER_ONLY_MODE_TEXT =
+  'Напишите вопрос в поддержку или отправьте /my_unpaid_orders для проверки заказов.';
+const CUSTOMER_START_HINT = 'Неоплаченные заказы: /my_unpaid_orders';
+const PHONE_ALREADY_LINKED = 'Номер уже привязан к другому аккаунту Telegram.';
+const EMPLOYEE_NOT_CONFIGURED =
+  'Ваш номер не найден среди сотрудников. Обратитесь к администратору для добавления в систему.';
+
+const REMOVE_KEYBOARD = {
+  reply_markup: {
+    remove_keyboard: true,
+  },
+};
+
+const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
+
+function sendRegisterPrompt(chatId?: any) {
+  return bot.sendMessage(chatId, MSG_CLIENT_NOT_REGISTERED, REGISTER_KEYBOARD);
+}
+
+function splitTelegramMessage(text: any, maxLength: any = TELEGRAM_MAX_MESSAGE_LENGTH) {
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const chunks: any[] = [];
+  const separator = '\n\n---\n\n';
+  const parts = text.split(separator);
+  let current = '';
+
+  for (const part of parts) {
+    const piece = current ? `${current}${separator}${part}` : part;
+    if (piece.length <= maxLength) {
+      current = piece;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+    }
+
+    if (part.length <= maxLength) {
+      current = part;
+      continue;
+    }
+
+    let offset = 0;
+    while (offset < part.length) {
+      chunks.push(part.slice(offset, offset + maxLength));
+      offset += maxLength;
+    }
+    current = '';
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
+async function sendBotMessage(chatId?: any, text?: any, options?: any) {
+  const chunks = splitTelegramMessage(text);
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    const chunkOptions = i === chunks.length - 1 ? options : undefined;
+    await bot.sendMessage(chatId, chunk, chunkOptions);
+  }
+}
+
+function getProfileFromMessage(msg?: any) {
+  return {
+    username: msg.from.username,
+    firstName: msg.from.first_name,
+    lastName: msg.from.last_name,
+  };
+}
+
+function getPhoneFromMessage(msg?: any) {
+  if (msg.contact?.phone_number) {
+    return msg.contact.phone_number;
+  }
+  return msg.text?.trim() || null;
+}
+
+async function sendCustomerPaymentLinks(chatId?: any, phone?: any) {
+  const orders = getUnpaidOrdersByUserPhone(db, phone);
+  const unpaidBlock = formatUnpaidOrdersBlock(orders.map((order?: any) => enrichOrderParties(db, order)));
+  if (!unpaidBlock) {
+    await sendBotMessage(chatId, CUSTOMER_NO_ORDERS, REMOVE_KEYBOARD);
+    return;
+  }
+  await sendBotMessage(chatId, unpaidBlock, withHtml(REMOVE_KEYBOARD));
+}
+
+async function sendCustomerStartFollowUp(chatId?: any) {
+  const lines = [CUSTOMER_START_HINT];
+  if (isTelegramTicketConfigured(loadTelegramTicketSettings(db))) {
+    lines.push(
+      'Можете написать вопрос — бот создаст обращение в поддержку.'
+    );
+  }
+  await sendBotMessage(chatId, lines.join('\n'), REMOVE_KEYBOARD);
+}
+
+async function sendCustomerStartFlow(msg: any, botUser: any, { alreadyRegistered = false }: Unchecked = {}) {
+  await ensureCustomerRegosOnStart({
+    bot,
+    msg,
+    botUser,
+    db,
+    alreadyRegistered,
+    onReady: async () => {
+      await sendCustomerStartFollowUp(msg.chat.id);
+    },
+  });
+}
+
+async function sendEmployeeStartMessage(chatId?: any, telegramId?: any) {
+  const text = `Бот поиска пользователей ROFEEV\n\n${buildHelpText(telegramId)}`;
+  await sendBotMessage(chatId, text, REMOVE_KEYBOARD);
+}
+
+async function sendSearchResultWithAction(chatId: any, telegramId: any, entry: any, { appendUnpaid = true }: Unchecked = {}) {
+  const text = entry.message || '';
+  const unpaidOrders = appendUnpaid ? getUnpaidOrdersByClientPhone(db, entry.phone) : [];
+
+  const chunks = splitTelegramMessage(text);
+  for (let i = 0; i < chunks.length; i += 1) {
+    const isLast = i === chunks.length - 1;
+    if (isLast) {
+      await bot.sendMessage(
+        chatId,
+        chunks[i],
+        withHtml(makeServiceButtonForResult(entry, telegramId, db))
+      );
+    } else {
+      await bot.sendMessage(chatId, chunks[i], withHtml());
+    }
+  }
+
+  if (unpaidOrders.length) {
+    await sendOrdersWithActions(bot, chatId, unpaidOrders, telegramId, db, {
+      includeClientPhone: true,
+    });
+  }
+}
+
+function tryRegisterUser(msg?: any) {
+  const phoneInput = getPhoneFromMessage(msg);
+  if (!phoneInput || !looksLikePhone(phoneInput)) {
+    return { ok: false, reason: 'invalid' };
+  }
+
+  const phone = String(phoneInput).trim();
+  const profile = getProfileFromMessage(msg);
+  const employee = getEmployeeByPhone(db, phone);
+
+  if (employee) {
+    if (employee.telegram_id && employee.telegram_id !== msg.from.id) {
+      return { ok: false, reason: 'phone_taken' };
+    }
+    const user = employee.telegram_id
+      ? getBotUser(db, msg.from.id)
+      : linkEmployeeTelegram(db, employee.id, msg.from.id, profile);
+    return { ok: true, role: 'employee', user };
+  }
+
+  try {
+    const user = registerCustomer(db, {
+      telegramId: msg.from.id,
+      phone,
+      ...profile,
+    });
+    return { ok: true, role: 'customer', user };
+  } catch (error: any) {
+    if (error.message === 'PHONE_ALREADY_LINKED') {
+      return { ok: false, reason: 'phone_taken' };
+    }
+    throw error;
+  }
+}
+
+registerVipHandlers(bot, {
+  db,
+  getBotUser: (telegramId?: any) => getBotUser(db, telegramId),
+  sendRegisterPrompt,
+});
+registerServiceHandlers(bot, {
+  db,
+  getBotUser: (telegramId?: any) => getBotUser(db, telegramId),
+});
+registerReportHandlers(bot, { db });
+registerOrderActionHandlers(bot, { db });
+registerDashboardHandlers(bot, {
+  db,
+  getBotUser: (telegramId?: any) => getBotUser(db, telegramId),
+  sendRegisterPrompt,
+});
+registerTechnicalSupportHandlers(bot, {
+  db,
+  getBotUser: (telegramId?: any) => getBotUser(db, telegramId),
+});
+registerTariffInfoHandlers(bot, {
+  getBotUser: (telegramId?: any) => getBotUser(db, telegramId),
+});
+registerPricesHandlers(bot);
+
+bot.onText(/\/start/, async (msg?: any) => {
+  const botUser = getBotUser(db, msg.from.id);
+  if (botUser) {
+    await syncUserCommands(bot, db, msg.from.id);
+    if (isLinkedEmployee(botUser)) {
+      await sendEmployeeStartMessage(msg.chat.id, msg.from.id);
+      return;
+    }
+    await sendCustomerStartFlow(msg, botUser, { alreadyRegistered: true });
+    return;
+  }
+  await sendRegisterPrompt(msg.chat.id);
+});
+
+bot.onText(/\/my_unpaid_orders(?:@\w+)?$/i, async (msg?: any) => {
+  const botUser = getBotUser(db, msg.from.id);
+  if (!botUser) {
+    await sendRegisterPrompt(msg.chat.id);
+    return;
+  }
+  if (isLinkedEmployee(botUser)) {
+    await sendBotMessage(
+      msg.chat.id,
+      'Команда /my_unpaid_orders доступна клиентам. Для сотрудников используйте /order или /orders.',
+      REMOVE_KEYBOARD
+    );
+    return;
+  }
+  await syncUserCommands(bot, db, msg.from.id);
+  await sendCustomerPaymentLinks(msg.chat.id, botUser.phone);
+});
+
+bot.onText(/\/help/, async (msg?: any) => {
+  const botUser = getBotUser(db, msg.from.id);
+  if (!botUser) {
+    await sendRegisterPrompt(msg.chat.id);
+    return;
+  }
+  await syncUserCommands(bot, db, msg.from.id);
+  if (!isLinkedEmployee(botUser)) {
+    const commandLines = getHelpCommandLines(db, msg.from.id);
+    const parts = commandLines.length ? commandLines : [];
+    if (isTelegramTicketConfigured(loadTelegramTicketSettings(db))) {
+      parts.push(
+        '',
+        'Можете написать вопрос — бот создаст обращение в поддержку.'
+      );
+    }
+    await sendBotMessage(
+      msg.chat.id,
+      parts.length ? parts.join('\n') : CUSTOMER_START_HINT,
+      REMOVE_KEYBOARD
+    );
+    return;
+  }
+  await bot.sendMessage(msg.chat.id, buildHelpText(msg.from.id), REMOVE_KEYBOARD);
+});
+
+bot.on('message', async (msg?: any) => {
+  try {
+    await handleIncomingMessage(msg);
+  } catch (err: any) {
+    console.error('[bot] message handler failed:', err.message);
+  }
+});
+
+async function handleIncomingMessage(msg?: any) {
+  const text = msg.text?.trim();
+  if (text?.startsWith('/')) return;
+
+  const botUser = getBotUser(db, msg.from.id);
+
+  if (!botUser) {
+    const registration = tryRegisterUser(msg);
+    if (!registration.ok) {
+      if (registration.reason === 'phone_taken') {
+        await sendBotMessage(msg.chat.id, PHONE_ALREADY_LINKED, REMOVE_KEYBOARD);
+        return;
+      }
+      await sendRegisterPrompt(msg.chat.id);
+      return;
+    }
+    if (registration.role === 'employee') {
+      await syncUserCommands(bot, db, msg.from.id);
+      await sendBotMessage(
+        msg.chat.id,
+        `${REGISTER_SUCCESS}\n\n${buildHelpText(msg.from.id)}`,
+        REMOVE_KEYBOARD
+      );
+      return;
+    }
+    await sendCustomerStartFlow(msg, registration.user);
+    return;
+  }
+
+  if (!isLinkedEmployee(botUser)) {
+    if (text && looksLikePhone(text)) {
+      const employee = getEmployeeByPhone(db, text);
+      if (employee && !employee.telegram_id) {
+        const registration = tryRegisterUser(msg);
+        if (registration.ok && registration.role === 'employee') {
+          await syncUserCommands(bot, db, msg.from.id);
+          await sendBotMessage(
+            msg.chat.id,
+            `${REGISTER_SUCCESS}\n\n${buildHelpText(msg.from.id)}`,
+            REMOVE_KEYBOARD
+          );
+          return;
+        }
+      }
+      if (employee && employee.telegram_id && employee.telegram_id !== msg.from.id) {
+        await sendBotMessage(msg.chat.id, PHONE_ALREADY_LINKED, REMOVE_KEYBOARD);
+        return;
+      }
+      if (employee) {
+        await sendBotMessage(msg.chat.id, EMPLOYEE_NOT_CONFIGURED, REMOVE_KEYBOARD);
+        return;
+      }
+    }
+    if (await handleCustomerQuestionMessage(bot, msg, botUser, db)) {
+      return;
+    }
+    await sendBotMessage(msg.chat.id, CUSTOMER_ONLY_MODE_TEXT, REMOVE_KEYBOARD);
+    return;
+  }
+
+  if (!text) return;
+
+  if (await handleReportMessage(bot, msg, db)) {
+    return;
+  }
+
+  if (await handleServiceMessage(bot, msg, botUser, db)) {
+    return;
+  }
+
+  if (await handleTechnicalSupportMessage(bot, msg, botUser, db)) {
+    return;
+  }
+
+  if (await handleVipMessage(bot, msg, botUser, db)) {
+    return;
+  }
+
+  try {
+    await sendChatActionSafe(bot, msg.chat.id);
+    const result = await searchUser(text, db);
+    const results = (result as { results?: any[] }).results;
+    if (result.found && Array.isArray(results) && results.length > 0) {
+      const shownUnpaidForPhones: Set<any> = new Set();
+      for (const entry of results) {
+        const phoneKey = String(entry.phone || '').trim();
+        const appendUnpaid = !phoneKey || !shownUnpaidForPhones.has(phoneKey);
+        if (appendUnpaid && phoneKey) {
+          shownUnpaidForPhones.add(phoneKey);
+        }
+        await sendSearchResultWithAction(msg.chat.id, msg.from.id, entry, { appendUnpaid });
+      }
+      return;
+    }
+    await sendBotMessage(msg.chat.id, result.message);
+  } catch (err: any) {
+    console.error(`Failed to send search result to ${msg.chat.id}:`, err.message);
+    await bot.sendMessage(msg.chat.id, 'Ошибка при отправке результата. Попробуйте ещё раз.');
+  }
+}
+
+console.log('Telegram bot is running.');
+
+const sessionKeepalive = startSessionKeepalive();
+
+bot
+  .setMyCommands(buildDefaultBotCommands())
+  .catch((error: Error) => {
+    console.error('Failed to set default bot commands:', error.message);
+  });
+
+bot.on('polling_error', (error: Error) => {
+  console.error('[telegram] polling error:', error.message);
+});
+
+bot.on('error', (error: Error) => {
+  console.error('[telegram] client error:', error.message);
+});
+
+// A single failed Telegram/DB call must not take the long-running bot down.
+process.on('unhandledRejection', (reason?: any) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  console.error('[bot] unhandled rejection:', message);
+});
+
+process.on('SIGINT', () => {
+  sessionKeepalive.stop();
+  db.close();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  sessionKeepalive.stop();
+  db.close();
+  process.exit(0);
+});

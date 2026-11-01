@@ -7,6 +7,7 @@ export type RepairReturnListParams = {
   q?: string;
   status?: "pending" | "returned" | "all";
   location_id?: string | number;
+  sort?: string;
 };
 
 export type RepairReturnListResponse = {
@@ -25,6 +26,7 @@ export function listRepairReturns(params: RepairReturnListParams) {
   if (params.q) search.set("q", params.q);
   if (params.status) search.set("status", params.status);
   if (params.location_id) search.set("location_id", String(params.location_id));
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<RepairReturnListResponse>(`/bot-admin/api/repair-returns?${search}`);
 }
 

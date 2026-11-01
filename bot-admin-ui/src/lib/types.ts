@@ -596,6 +596,10 @@ export type FirmSearchResult = {
   recordId?: string | number | null;
   clientName?: string | null;
   message?: string | null;
+  accountId?: string | number | null;
+  accountLabel?: string | null;
+  apiLogin?: string | null;
+  tariff?: string | null;
 };
 
 export type ChatFile = {

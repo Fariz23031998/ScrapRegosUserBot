@@ -20,6 +20,7 @@ import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
 import SimpleTable from "../components/SimpleTable";
 import TaskEditorModal from "../components/TaskEditorModal";
+import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -140,8 +141,9 @@ export default function TasksPage() {
     queryFn: listTaskLocations,
   });
 
+  const { sort, onSortingChange } = useServerTableSort();
   const tasksQuery = usePagedInfiniteQuery({
-    queryKey: ["tasks", search, appliedStatus, appliedCategoryId, appliedLocationId],
+    queryKey: ["tasks", search, appliedStatus, appliedCategoryId, appliedLocationId, sort],
     queryFn: (page, pageSize) =>
       listTasks({
         page,
@@ -150,9 +152,11 @@ export default function TasksPage() {
         status: appliedStatus || undefined,
         category_id: appliedCategoryId || undefined,
         location_id: appliedLocationId || undefined,
+        sort: sort || undefined,
       }),
     getItems: (data) => data.tasks || [],
     getItemId: (task) => task.id,
+    keepPrevious: true,
   });
 
   const categories = categoriesQuery.data?.categories || [];
@@ -266,6 +270,7 @@ export default function TasksPage() {
       {
         id: "title",
         header: "Задача",
+        accessorFn: (row) => row.title || "",
         cell: ({ row }) => (
           <Link to={`/tasks/${row.original.id}`} onClick={(event) => event.stopPropagation()}>
             {row.original.title}
@@ -300,6 +305,7 @@ export default function TasksPage() {
       {
         id: "devices",
         header: "Устройства",
+        enableSorting: false,
         accessorFn: (row) => taskDevicesSummary(row),
       },
       {
@@ -440,6 +446,9 @@ export default function TasksPage() {
             data={tasks}
             columns={columns}
             isLoading={tasksQuery.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={emptyMessage}
             getRowId={(row) => String(row.id)}

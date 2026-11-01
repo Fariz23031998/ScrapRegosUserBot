@@ -31,6 +31,7 @@ import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
 import MoneyFields, { MoneyCell } from "../components/MoneyFields";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -126,17 +127,20 @@ export default function DevicesPage() {
   });
   const categories = categoriesQuery.data?.categories || [];
 
+  const { sort, onSortingChange } = useServerTableSort();
   const devicesQuery = usePagedInfiniteQuery({
-    queryKey: ["devices", search, appliedCategoryId],
+    queryKey: ["devices", search, appliedCategoryId, sort],
     queryFn: (page, pageSize) =>
       listDevices({
         page,
         limit: pageSize,
         q: search || undefined,
         category_id: appliedCategoryId || undefined,
+        sort: sort || undefined,
       }),
     getItems: (data) => data.devices || [],
     getItemId: (device) => device.id,
+    keepPrevious: true,
   });
 
   function invalidateDevices() {
@@ -308,6 +312,7 @@ export default function DevicesPage() {
       {
         id: "cost",
         header: "Себестоимость",
+        accessorFn: (row) => row.cost_amount ?? 0,
         cell: ({ row }) => {
           const lines = catalogCostLines(row.original);
           return <MoneyCell primary={lines.primary} muted={lines.muted} />;
@@ -316,6 +321,7 @@ export default function DevicesPage() {
       {
         id: "price",
         header: "Цена",
+        accessorFn: (row) => row.price_uzs ?? 0,
         cell: ({ row }) => {
           const lines = catalogPriceLines(row.original, rate);
           return <MoneyCell primary={lines.primary} muted={lines.muted} />;
@@ -418,6 +424,9 @@ export default function DevicesPage() {
             data={devices}
             columns={columns}
             isLoading={devicesQuery.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={search || appliedCategoryId ? "Ничего не найдено." : "Устройств пока нет."}
             getRowId={(row) => String(row.id)}

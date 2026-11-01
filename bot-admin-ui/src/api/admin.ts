@@ -5,13 +5,14 @@ export function getRightsMeta() {
   return apiFetch<{ rights: RightMeta[] }>("/bot-admin/rights-meta");
 }
 
-export function listUsers(params: { page: number; limit: number; q?: string; role?: string }) {
+export function listUsers(params: { page: number; limit: number; q?: string; role?: string; sort?: string }) {
   const search = new URLSearchParams({
     page: String(params.page),
     limit: String(params.limit),
   });
   if (params.q) search.set("q", params.q);
   if (params.role) search.set("role", params.role);
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<{ users: BotUser[]; total: number; page: number; limit: number }>(
     `/bot-admin/api/users?${search}`,
   );
@@ -102,23 +103,25 @@ export function createOrder(payload: Record<string, unknown>) {
   });
 }
 
-export function listOrderLogs(params: { page: number; limit: number; q?: string }) {
+export function listOrderLogs(params: { page: number; limit: number; q?: string; sort?: string }) {
   const search = new URLSearchParams({
     page: String(params.page),
     limit: String(params.limit),
   });
   if (params.q) search.set("q", params.q);
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<{ logs: OrderLog[]; total: number; page: number; limit: number }>(
     `/bot-admin/api/order-logs?${search}`,
   );
 }
 
-export function listAdminLogs(params: { page: number; limit: number; q?: string }) {
+export function listAdminLogs(params: { page: number; limit: number; q?: string; sort?: string }) {
   const search = new URLSearchParams({
     page: String(params.page),
     limit: String(params.limit),
   });
   if (params.q) search.set("q", params.q);
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<{ logs: AdminLog[]; total: number; page: number; limit: number }>(
     `/bot-admin/api/logs?${search}`,
   );

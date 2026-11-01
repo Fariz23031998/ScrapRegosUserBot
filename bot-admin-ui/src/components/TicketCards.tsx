@@ -1,6 +1,7 @@
-import { Pencil } from "lucide-react";
+import { Pencil, Play } from "lucide-react";
 import { Link } from "react-router-dom";
 import LoadingState from "./LoadingState";
+import PhoneCopyButton from "./PhoneCopyButton";
 import {
   channelDisplayName,
   directionLabel,
@@ -19,6 +20,34 @@ import {
   userDisplayName,
 } from "../lib/ticket-display";
 import type { Ticket, TicketFirmLink } from "../lib/types";
+
+export function TicketRecordingControl({
+  ticket,
+  duration,
+  onOpen,
+}: {
+  ticket: Ticket;
+  duration: number | null | undefined;
+  onOpen: (ticket: Ticket) => void;
+}) {
+  if (!hasTicketRecording(ticket)) return <>—</>;
+  return (
+    <span className="ticket-recording-cell">
+      <button
+        type="button"
+        className="ticket-recording-open"
+        aria-label={`Воспроизвести запись тикета №${ticket.id}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpen(ticket);
+        }}
+      >
+        <Play size={16} aria-hidden="true" />
+      </button>
+      <span className="ticket-recording-duration">{duration != null ? formatCallDuration(duration) : "—"}</span>
+    </span>
+  );
+}
 
 export type TicketCardsProps = {
   tickets: Ticket[];
@@ -65,6 +94,7 @@ export default function TicketCards({
         const cached = getCachedRecordingDuration(ticket);
         const probed = recordingDurations[String(ticket.id)];
         const duration = cached ?? probed;
+        const channelName = channelDisplayName(ticket.channel_id, channelNames);
 
         return (
           <article
@@ -83,6 +113,7 @@ export default function TicketCards({
             <header className="ticket-card__head">
               <div className="ticket-card__id-row">
                 <span className="ticket-card__id">#{ticket.id}</span>
+                {channelName !== "—" ? <span className="ticket-card__channel">{channelName}</span> : null}
                 <span className={statusBadgeClass(ticket.status)}>{statusLabel(ticket.status)}</span>
               </div>
               <h2 className="ticket-card__subject">{ticket.subject || "Без темы"}</h2>
@@ -104,17 +135,13 @@ export default function TicketCards({
                 </button>
               ) : null}
               <span>{clientName}</span>
-              {ticket.client?.phone ? <span className="ticket-card__muted">· {ticket.client.phone}</span> : null}
+              {ticket.client?.phone ? <PhoneCopyButton phone={ticket.client.phone} /> : null}
             </div>
 
             <dl className="ticket-card__meta">
               <div>
                 <dt>Ответственный</dt>
                 <dd>{userDisplayName(ticket.responsible_user_id, userNames)}</dd>
-              </div>
-              <div>
-                <dt>Канал</dt>
-                <dd>{channelDisplayName(ticket.channel_id, channelNames)}</dd>
               </div>
               <div>
                 <dt>Направление</dt>
@@ -181,21 +208,7 @@ export default function TicketCards({
             ) : null}
 
             <footer className="ticket-card__foot">
-              <span className="ticket-card__muted">
-                {duration != null ? formatCallDuration(duration) : "Длительность —"}
-              </span>
-              {hasTicketRecording(ticket) ? (
-                <button
-                  type="button"
-                  className="ticket-recording-open"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenRecording(ticket);
-                  }}
-                >
-                  Воспроизвести
-                </button>
-              ) : null}
+              <TicketRecordingControl ticket={ticket} duration={duration} onOpen={onOpenRecording} />
             </footer>
           </article>
         );

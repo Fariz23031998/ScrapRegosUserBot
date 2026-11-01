@@ -123,6 +123,12 @@ export function canonicalizeUzbekPhone(phone: unknown): string | null {
   return null;
 }
 
+export function uzbekPhoneWithoutCountryCode(phone: unknown): string {
+  const canonical = canonicalizeUzbekPhone(phone);
+  if (canonical) return canonical.slice(4);
+  return String(phone ?? "");
+}
+
 export function formatUzbekPhone(phone: unknown): string {
   const canonical = canonicalizeUzbekPhone(phone);
   const digits = canonical ? canonical.slice(1) : String(phone ?? "").replace(/\D/g, "");

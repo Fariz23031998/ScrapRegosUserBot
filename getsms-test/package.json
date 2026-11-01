@@ -5,7 +5,8 @@
   "description": "Minimal GETSMS.UZ client — send one SMS for testing",
   "type": "commonjs",
   "scripts": {
-    "send": "node send.js"
+    "send": "node --import tsx send.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
     "node": ">=18"

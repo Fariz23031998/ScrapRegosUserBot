@@ -1,0 +1,86 @@
+import type { Unchecked } from '../types/unchecked';
+import { requiredEnv, isTestMode, getPaymeSecretKey } from './payme';
+
+const RECEIPT_STATE_OPEN = 0;
+const RECEIPT_STATE_PAID = 4;
+const RECEIPT_STATE_CANCELLED = 50;
+
+class PaymeApiError extends Error {
+  paymeError: any;
+  constructor(error: any) {
+    const message = error?.message || error?.data || 'Payme API error';
+    super(typeof message === 'string' ? message : JSON.stringify(message));
+    this.code = error?.code;
+    this.paymeError = error;
+  }
+}
+
+function getPaymeApiUrl() {
+  const host = isTestMode() ? 'https://checkout.test.paycom.uz' : 'https://checkout.paycom.uz';
+  return `${host}/api`;
+}
+
+function getPaymeAuthHeader() {
+  const merchantId = requiredEnv('PAYME_MERCHANT_ID');
+  const key = getPaymeSecretKey();
+  return `${merchantId}:${key}`;
+}
+
+async function paymeRpcCall(method: any, params: any, requestId: any = Date.now()) {
+  const response = await fetch(getPaymeApiUrl(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Auth': getPaymeAuthHeader(),
+      'Cache-Control': 'no-cache',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: requestId,
+      method,
+      params,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new PaymeApiError({ message: `HTTP ${response.status}` });
+  }
+  if (data.error) {
+    throw new PaymeApiError(data.error);
+  }
+  return data.result;
+}
+
+async function createReceipt({ amountTiyin, account, description, timeout }: Unchecked = {}) {
+  const params: Unchecked = {
+    amount: amountTiyin,
+    account,
+    description,
+  };
+  const timeoutSec = Number(timeout);
+  if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
+    params.timeout = Math.floor(timeoutSec);
+  }
+  const result = await paymeRpcCall('receipts.create', params);
+  return result.receipt;
+}
+
+async function checkReceipt(receiptId?: any) {
+  return paymeRpcCall('receipts.check', { id: receiptId });
+}
+
+async function getReceipt(receiptId?: any) {
+  const result = await paymeRpcCall('receipts.get', { id: receiptId });
+  return result.receipt;
+}
+
+export {
+  PaymeApiError,
+  RECEIPT_STATE_OPEN,
+  RECEIPT_STATE_PAID,
+  RECEIPT_STATE_CANCELLED,
+  createReceipt,
+  checkReceipt,
+  getReceipt,
+};

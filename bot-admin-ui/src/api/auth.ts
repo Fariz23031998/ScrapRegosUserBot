@@ -31,6 +31,22 @@ export async function loginTelegramWebApp(initData: string) {
   return storeAuthToken(data);
 }
 
+export function requestPasswordReset(login: string) {
+  return apiFetch<{ ok: boolean; message: string }>("/bot-admin/api/password-reset/request", {
+    method: "POST",
+    body: JSON.stringify({ login }),
+    skipAuthRedirect: true,
+  });
+}
+
+export function confirmPasswordReset(login: string, code: string, password: string) {
+  return apiFetch<{ ok: boolean; message: string }>("/bot-admin/api/password-reset/confirm", {
+    method: "POST",
+    body: JSON.stringify({ login, code, password }),
+    skipAuthRedirect: true,
+  });
+}
+
 export async function logout() {
   try {
     return await apiFetch<{ ok: boolean }>("/bot-admin/api/logout", {

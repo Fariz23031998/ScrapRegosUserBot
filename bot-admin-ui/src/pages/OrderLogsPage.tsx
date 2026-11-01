@@ -5,6 +5,7 @@ import EntityCards from "../components/EntityCards";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import type { OrderLog } from "../lib/types";
 import { formatAmount, formatDateTime } from "../lib/utils";
 import { useUiPreferences } from "../hooks/useUiPreferences";
@@ -16,11 +17,13 @@ export default function OrderLogsPage() {
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [search, setSearch] = useState("");
 
+  const { sort, onSortingChange } = useServerTableSort();
   const query = usePagedInfiniteQuery({
-    queryKey: ["order-logs", search],
-    queryFn: (page, pageSize) => listOrderLogs({ page, limit: pageSize, q: search || undefined }),
+    queryKey: ["order-logs", search, sort],
+    queryFn: (page, pageSize) => listOrderLogs({ page, limit: pageSize, q: search || undefined, sort: sort || undefined }),
     getItems: (data) => data.logs || [],
     getItemId: (log) => log.id,
+    keepPrevious: true,
   });
 
   const columns = useMemo<ColumnDef<OrderLog>[]>(
@@ -106,6 +109,9 @@ export default function OrderLogsPage() {
             data={logs}
             columns={columns}
             isLoading={query.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={search ? "Ничего не найдено." : "Записей пока нет."}
             getRowId={(row) => String(row.id)}

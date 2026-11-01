@@ -15,6 +15,12 @@ import type {
   TelegramTicketSettings,
 } from "../lib/types";
 
+export type TicketSummaryCounts = {
+  count: number;
+  slaBreached: number;
+  rated: number;
+};
+
 export function listTickets(params: Record<string, string>) {
   const search = new URLSearchParams(params);
   return apiFetch<{
@@ -22,10 +28,15 @@ export function listTickets(params: Record<string, string>) {
     total: number;
     page: number;
     limit: number;
-    summary?: unknown;
+    summary?: TicketSummaryCounts;
     duration_summary?: unknown;
     active_ticket?: Ticket | null;
   }>(`/bot-admin/api/tickets?${search}`);
+}
+
+export function listTicketSummary(params: Record<string, string>) {
+  const search = new URLSearchParams(params);
+  return apiFetch<{ summary: TicketSummaryCounts }>(`/bot-admin/api/tickets/summary?${search}`);
 }
 
 export function getTicket(id: number) {
@@ -133,6 +144,44 @@ export function searchFirms(q: string) {
   return apiFetch<{ found?: boolean; results: FirmSearchResult[] }>(
     `/bot-admin/api/firm-search?q=${encodeURIComponent(q)}`,
   );
+}
+
+export type FirmOrderResult = {
+  order: { id: string };
+  payment_page_url?: string | null;
+};
+
+export function createFirmServiceOrder(payload: Record<string, unknown>) {
+  return apiFetch<FirmOrderResult>("/bot-admin/api/firm-service-orders", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getFirmSupportPrices() {
+  return apiFetch<{
+    prices: Array<{ months: number; amount: number; label: string }>;
+    message?: string | null;
+  }>("/bot-admin/api/firm-support-prices");
+}
+
+export function createFirmSupportOrder(payload: Record<string, unknown>) {
+  return apiFetch<FirmOrderResult>("/bot-admin/api/firm-support-orders", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getFirmTariff(firm: FirmSearchResult) {
+  return apiFetch<{ message: string }>("/bot-admin/api/firm-tariff", {
+    method: "POST",
+    body: JSON.stringify({
+      accountId: firm.accountId,
+      accountLabel: firm.accountLabel,
+      apiLogin: firm.apiLogin,
+      tariff: firm.tariff,
+    }),
+  });
 }
 
 export function linkClientFirm(clientId: number, payload: Record<string, unknown>) {

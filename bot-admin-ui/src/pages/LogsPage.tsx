@@ -5,6 +5,7 @@ import EntityCards from "../components/EntityCards";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import type { AdminLog } from "../lib/types";
 import { formatDateTime } from "../lib/utils";
 import { useUiPreferences } from "../hooks/useUiPreferences";
@@ -77,11 +78,13 @@ export default function LogsPage() {
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [search, setSearch] = useState("");
 
+  const { sort, onSortingChange } = useServerTableSort();
   const query = usePagedInfiniteQuery({
-    queryKey: ["admin-logs", search],
-    queryFn: (page, pageSize) => listAdminLogs({ page, limit: pageSize, q: search || undefined }),
+    queryKey: ["admin-logs", search, sort],
+    queryFn: (page, pageSize) => listAdminLogs({ page, limit: pageSize, q: search || undefined, sort: sort || undefined }),
     getItems: (data) => data.logs || [],
     getItemId: (log) => log.id,
+    keepPrevious: true,
   });
 
   const columns = useMemo<ColumnDef<AdminLog>[]>(
@@ -92,12 +95,15 @@ export default function LogsPage() {
       {
         id: "entity",
         header: "Объект",
+        accessorFn: (row) => entityLabel(row as AdminLog & { entity_type_label?: string; entity_id?: string }),
         cell: ({ row }) =>
           entityLabel(row.original as AdminLog & { entity_type_label?: string; entity_id?: string }),
       },
       {
         id: "description",
         header: "Описание / изменения",
+        accessorFn: (row) =>
+          String((row as AdminLog & { summary?: string }).summary || row.description || ""),
         cell: ({ row }) =>
           renderChanges(
             row.original as AdminLog & { details?: Record<string, unknown>; summary?: string },
@@ -155,6 +161,9 @@ export default function LogsPage() {
             data={logs}
             columns={columns}
             isLoading={query.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={search ? "Ничего не найдено." : "Записей пока нет."}
             getRowId={(row) => String(row.id)}

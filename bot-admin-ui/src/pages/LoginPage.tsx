@@ -3,14 +3,17 @@ import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { login } from "../api/auth";
 import LoadingState from "../components/LoadingState";
+import PasswordResetModal from "../components/PasswordResetModal";
 import { useAuth } from "../hooks/useAuth";
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { isAuthenticated, isLoading, refreshSession, firstAllowedPath, webAppDenied } = useAuth();
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
 
   const landingPath = firstAllowedPath || "/";
 
@@ -23,6 +26,7 @@ export default function LoginPage() {
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setNotice("");
     setBusy(true);
     const form = new FormData(event.currentTarget);
     try {
@@ -53,6 +57,7 @@ export default function LoginPage() {
         <h1>Вход в Bot Admin</h1>
         <p>Используйте логин и пароль администратора или сотрудника.</p>
         {webAppDenied ? <p className="message error">{webAppDenied}</p> : null}
+        {notice ? <p className="message success">{notice}</p> : null}
         <form className="stack-form" onSubmit={handleSubmit}>
           <label>
             Логин
@@ -82,7 +87,15 @@ export default function LoginPage() {
           <button type="submit" className="btn-primary" disabled={busy}>
             Войти
           </button>
+          <button type="button" className="btn-text" onClick={() => setResetOpen(true)}>
+            Восстановить или задать пароль
+          </button>
         </form>
+        <PasswordResetModal
+          open={resetOpen}
+          onClose={() => setResetOpen(false)}
+          onSaved={(message) => setNotice(message)}
+        />
       </main>
     </div>
   );

@@ -5,10 +5,11 @@
   "description": "Minimal Eskiz.uz client — send SMS and manage templates",
   "type": "commonjs",
   "scripts": {
-    "send": "node send.js",
-    "templates": "node templates-list.js",
-    "templates:list": "node templates-list.js",
-    "templates:create": "node templates-create.js"
+    "send": "node --import tsx send.ts",
+    "templates": "node --import tsx templates-list.ts",
+    "templates:list": "node --import tsx templates-list.ts",
+    "templates:create": "node --import tsx templates-create.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
     "node": ">=18"

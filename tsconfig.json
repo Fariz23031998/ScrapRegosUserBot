@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "allowJs": false,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["src", "apps", "cli", "scripts", "test", "types"],
+  "exclude": ["node_modules", "apps/bot/index.js", "apps/server/index.js"]
+}

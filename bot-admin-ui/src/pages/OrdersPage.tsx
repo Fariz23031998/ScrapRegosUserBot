@@ -16,6 +16,7 @@ import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import SimpleTable from "../components/SimpleTable";
 import SummaryBar from "../components/SummaryBar";
+import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -262,8 +263,9 @@ export default function OrdersPage() {
     queryFn: listOrderEmployees,
   });
 
+  const { sort, onSortingChange } = useServerTableSort();
   const ordersQuery = usePagedInfiniteQuery({
-    queryKey: ["orders", appliedFilters],
+    queryKey: ["orders", appliedFilters, sort],
     queryFn: (page, pageSize) =>
       listOrders({
         page: String(page),
@@ -275,9 +277,11 @@ export default function OrdersPage() {
         ...(appliedFilters.employee ? { telegram_id: appliedFilters.employee } : {}),
         ...(appliedFilters.fromDate ? { from_date: appliedFilters.fromDate } : {}),
         ...(appliedFilters.toDate ? { to_date: appliedFilters.toDate } : {}),
+        ...(sort ? { sort } : {}),
       }),
     getItems: (data) => data.orders || [],
     getItemId: (order) => order.id,
+    keepPrevious: true,
   });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["orders"] });
@@ -328,6 +332,7 @@ export default function OrdersPage() {
       {
         id: "status",
         header: "Статус",
+        accessorFn: (row) => row.status || "",
         cell: ({ row }) => orderStatusLabel(row.original),
       },
       { id: "amount", header: "Сумма", accessorFn: (row) => formatAmount(row.amount) },
@@ -356,6 +361,7 @@ export default function OrdersPage() {
       {
         id: "ticket",
         header: "Тикет",
+        accessorFn: (row) => row.ticket_id ?? null,
         cell: ({ row }) =>
           row.original.ticket_id ? (
             <Link to={`/tickets/${row.original.ticket_id}`}>{row.original.ticket_id}</Link>
@@ -478,6 +484,9 @@ export default function OrdersPage() {
             data={orders}
             columns={columns}
             isLoading={ordersQuery.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={emptyMessage}
             getRowId={(row) => row.id}

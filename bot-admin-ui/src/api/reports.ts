@@ -28,6 +28,7 @@ export type TechnicianReportRow = {
   technician_task_score: number;
   distance_score: number;
   ticket_count: number;
+  call_duration_seconds?: number;
 };
 
 export type TechnicianReportTotals = {
@@ -35,12 +36,14 @@ export type TechnicianReportTotals = {
   technician_task_score: number;
   distance_score: number;
   ticket_count: number;
+  call_duration_seconds?: number;
 };
 
 export type TechnicianReport = {
   rows: TechnicianReportRow[];
   totals: TechnicianReportTotals;
   unassigned_ticket_count: number;
+  unassigned_call_duration_seconds?: number;
 };
 
 export type CommissionReportRow = {
@@ -153,12 +156,13 @@ export function createReportJob(type: ReportType, params: ReportJobParams) {
   });
 }
 
-export function listReportJobs(params: { page: number; limit: number; type?: ReportType }) {
+export function listReportJobs(params: { page: number; limit: number; type?: ReportType; sort?: string }) {
   const search = new URLSearchParams({
     page: String(params.page),
     limit: String(params.limit),
   });
   if (params.type) search.set("type", params.type);
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<ReportJobListPage>(`/bot-admin/api/reports/jobs?${search}`);
 }
 

@@ -1,4 +1,4 @@
-import { useInfiniteQuery, type QueryKey } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, type QueryKey } from "@tanstack/react-query";
 
 export const INFINITE_PAGE_SIZE = 25;
 
@@ -14,6 +14,7 @@ export function usePagedInfiniteQuery<TPage extends PagedPage, TItem>({
   getItemId,
   pageSize = INFINITE_PAGE_SIZE,
   enabled = true,
+  keepPrevious = false,
 }: {
   queryKey: QueryKey;
   queryFn: (page: number, pageSize: number) => Promise<TPage>;
@@ -21,12 +22,14 @@ export function usePagedInfiniteQuery<TPage extends PagedPage, TItem>({
   getItemId?: (item: TItem) => string | number;
   pageSize?: number;
   enabled?: boolean;
+  keepPrevious?: boolean;
 }) {
   const query = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) => queryFn(pageParam, pageSize),
     initialPageParam: 1,
     enabled,
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
     getNextPageParam: (lastPage, allPages) => {
       const loaded = allPages.reduce((count, page) => count + getItems(page).length, 0);
       if (loaded >= lastPage.total) return undefined;

@@ -1,0 +1,487 @@
+import type { Unchecked } from '../src/types/unchecked';
+import type { Response } from 'express';
+import { describe, it, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import http from 'http';
+import express from 'express';
+import { openDb } from '../src/db/partners-db';
+import { createBotAdminRouter } from '../src/admin/bot-admin';
+import { getKnowledgeArticle, listKnowledgeArticles, setKnowledgeArticleLocked } from '../src/db/knowledge-articles';
+import { listAdminAuditLogs } from '../src/db/admin-audit-logs';
+
+const MCP_TOKEN = 'test-mcp-token';
+
+function makeTempDbPath() {
+  return path.join(
+    os.tmpdir(),
+    `scrapregos-knowledge-mcp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.db`
+  );
+}
+
+function removeDbFiles(dbPath?: any) {
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      fs.unlinkSync(`${dbPath}${suffix}`);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function request(server: any, method: any, urlPath: any, { headers = {}, body = null }: Unchecked = {}) {
+  return new Promise<any>((resolve?: any, reject?: any) => {
+    const { port } = server.address();
+    const payload = body == null ? null : JSON.stringify(body);
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path: urlPath,
+        method,
+        headers: {
+          Accept: 'application/json',
+          ...(payload
+            ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+            : {}),
+          ...headers,
+        },
+      },
+      (res: any) => {
+        const chunks: any[] = [];
+        res.on('data', (chunk?: any) => chunks.push(chunk));
+        res.on('end', () =>
+          resolve({
+            statusCode: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          })
+        );
+      }
+    );
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function mcpRpc(id?: any, method?: any, params?: any) {
+  const body = { jsonrpc: '2.0', method };
+  if (id !== undefined) (body as any).id = id;
+  if (params !== undefined) (body as any).params = params;
+  return body;
+}
+
+function parseJson(res: any) {
+  return JSON.parse(res.body || '{}');
+}
+
+function parseToolPayload(res: any) {
+  const rpc = parseJson(res);
+  assert.ok(rpc.result, 'expected JSON-RPC result');
+  assert.ok(Array.isArray(rpc.result.content));
+  assert.equal(rpc.result.content[0]?.type, 'text');
+  return {
+    rpc,
+    isError: Boolean(rpc.result.isError),
+    data: JSON.parse(rpc.result.content[0].text),
+  };
+}
+
+
+describe('knowledge MCP HTTP', () => {
+  let dbPath: any;
+  let db: any;
+  let server: any;
+  let previousEnv: any;
+  let imagesDir: any;
+
+  before(() => {
+    previousEnv = {
+      MCP_TOKEN: process.env.MCP_TOKEN,
+      MCP_KNOWLEDGE_READONLY: process.env.MCP_KNOWLEDGE_READONLY,
+      BOT_ADMIN_LOGIN: process.env.BOT_ADMIN_LOGIN,
+      BOT_ADMIN_PASSWORD: process.env.BOT_ADMIN_PASSWORD,
+      KNOWLEDGE_IMAGES_DIR: process.env.KNOWLEDGE_IMAGES_DIR,
+    };
+    process.env.BOT_ADMIN_LOGIN = 'admin';
+    process.env.BOT_ADMIN_PASSWORD = 'test-password';
+    imagesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scrapregos-knowledge-mcp-images-'));
+    process.env.KNOWLEDGE_IMAGES_DIR = imagesDir;
+  });
+
+  after(() => {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value as any;
+    }
+    if (imagesDir) fs.rmSync(imagesDir, { recursive: true, force: true });
+  });
+
+  beforeEach(async () => {
+    if (server) {
+      await new Promise<any>((resolve?: any) => server.close(resolve));
+      server = null;
+    }
+    if (db) {
+      db.close();
+      db = null;
+    }
+    if (dbPath) removeDbFiles(dbPath);
+
+    dbPath = makeTempDbPath();
+    db = openDb(dbPath);
+    process.env.MCP_TOKEN = MCP_TOKEN;
+    delete process.env.MCP_KNOWLEDGE_READONLY;
+
+    const app = express();
+    app.use('/bot-admin', createBotAdminRouter(db));
+    server = await new Promise<any>((resolve?: any) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+  });
+
+  after(async () => {
+    if (server) {
+      await new Promise<any>((resolve?: any) => server.close(resolve));
+      server = null;
+    }
+    if (db) {
+      db.close();
+      db = null;
+    }
+    if (dbPath) removeDbFiles(dbPath);
+  });
+
+  function callMcp(body: any, { token = MCP_TOKEN, headers = {} }: Unchecked = {}) {
+    return request(server, 'POST', '/bot-admin/mcp', {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+      body,
+    });
+  }
+
+  it('returns 503 when MCP_TOKEN is unset', async () => {
+    delete process.env.MCP_TOKEN;
+    const res = await callMcp(mcpRpc(1, 'initialize', { protocolVersion: '2025-03-26' }), {
+      token: MCP_TOKEN,
+    });
+    assert.equal(res.statusCode, 503);
+    assert.equal(parseJson(res).message, 'MCP is not configured.');
+  });
+
+  it('returns 401 without a token', async () => {
+    const res = await callMcp(mcpRpc(1, 'initialize', { protocolVersion: '2025-03-26' }), {
+      token: '',
+    });
+    assert.equal(res.statusCode, 401);
+    assert.equal(parseJson(res).message, 'Unauthorized.');
+  });
+
+  it('returns 401 with a wrong token', async () => {
+    const res = await callMcp(mcpRpc(1, 'initialize', { protocolVersion: '2025-03-26' }), {
+      token: 'wrong-token',
+    });
+    assert.equal(res.statusCode, 401);
+  });
+
+  it('returns 405 for GET and DELETE', async () => {
+    const getRes = await request(server, 'GET', '/bot-admin/mcp', {
+      headers: { Authorization: `Bearer ${MCP_TOKEN}` },
+    });
+    assert.equal(getRes.statusCode, 405);
+    const deleteRes = await request(server, 'DELETE', '/bot-admin/mcp', {
+      headers: { Authorization: `Bearer ${MCP_TOKEN}` },
+    });
+    assert.equal(deleteRes.statusCode, 405);
+  });
+
+  it('initializes and lists write tools', async () => {
+    const init = await callMcp(
+      mcpRpc(1, 'initialize', {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'test', version: '1.0.0' },
+      })
+    );
+    assert.equal(init.statusCode, 200);
+    const initBody = parseJson(init);
+    assert.equal(initBody.result.protocolVersion, '2025-03-26');
+    assert.equal(initBody.result.serverInfo?.name, 'scrapregos-knowledge');
+    assert.ok(initBody.result.capabilities?.tools);
+
+    const listed = await callMcp(mcpRpc(2, 'tools/list', {}));
+    assert.equal(listed.statusCode, 200);
+    const names = parseJson(listed).result.tools.map((tool?: any) => tool.name);
+    assert.deepEqual(names, [
+      'knowledge_search',
+      'knowledge_get',
+      'knowledge_list_categories',
+      'knowledge_create',
+      'knowledge_update',
+      'knowledge_delete',
+      'knowledge_add_screenshot',
+      'knowledge_delete_screenshot',
+      'knowledge_create_category',
+      'knowledge_update_category',
+      'knowledge_delete_category',
+    ]);
+    assert.ok(!names.includes('knowledge_confirm'));
+    assert.ok(!names.includes('knowledge_unconfirm'));
+  });
+
+  it('omits write tools when MCP_KNOWLEDGE_READONLY=1', async () => {
+    process.env.MCP_KNOWLEDGE_READONLY = '1';
+    const listed = await callMcp(mcpRpc(1, 'tools/list', {}));
+    assert.equal(listed.statusCode, 200);
+    const names = parseJson(listed).result.tools.map((tool?: any) => tool.name);
+    assert.deepEqual(names, ['knowledge_search', 'knowledge_get', 'knowledge_list_categories']);
+  });
+
+  it('searches, creates, and gets articles', async () => {
+    const search = await callMcp(
+      mcpRpc(1, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'прайс' },
+      })
+    );
+    assert.equal(search.statusCode, 200);
+    const searchPayload = parseToolPayload(search);
+    assert.equal(searchPayload.isError, false);
+    assert.equal(searchPayload.data.query_used, 'прайс');
+    assert.ok(searchPayload.data.articles.some((article?: any) => /прайс/i.test(article.title)));
+
+    const create = await callMcp(
+      mcpRpc(2, 'tools/call', {
+        name: 'knowledge_create',
+        arguments: {
+          title: 'MCP unique test article',
+          body: 'Created via MCP HTTP endpoint.',
+          tags: 'mcp, test',
+        },
+      })
+    );
+    assert.equal(create.statusCode, 200);
+    const created = parseToolPayload(create);
+    assert.equal(created.isError, false);
+    assert.ok(created.data.article.id);
+    assert.equal(created.data.article.title, 'MCP unique test article');
+    assert.equal(created.data.article.is_confirmed, false);
+    assert.equal(created.data.article.creator, 'mcp');
+    assert.equal(getKnowledgeArticle(db, created.data.article.id)?.title, 'MCP unique test article');
+    assert.equal(getKnowledgeArticle(db, created.data.article.id)?.is_confirmed, false);
+
+    const audit = listAdminAuditLogs(db, { query: 'MCP unique test article', limit: 5 });
+    assert.ok(audit.logs.some((row?: any) => row.actor_type === 'mcp' && row.actor_name === 'MCP'));
+
+    const got = await callMcp(
+      mcpRpc(3, 'tools/call', {
+        name: 'knowledge_get',
+        arguments: { id: created.data.article.id },
+      })
+    );
+    assert.equal(got.statusCode, 200);
+    const gotPayload = parseToolPayload(got);
+    assert.equal(gotPayload.isError, false);
+    assert.equal(gotPayload.data.article.id, created.data.article.id);
+    assert.match(gotPayload.data.article.body, /MCP HTTP endpoint/);
+    assert.deepEqual(gotPayload.data.article.images, []);
+
+    const roundTripSearch = await callMcp(
+      mcpRpc(4, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'MCP unique test article' },
+      })
+    );
+    const roundTrip = parseToolPayload(roundTripSearch);
+    assert.ok(roundTrip.data.articles.some((article?: any) => article.id === created.data.article.id));
+  });
+
+  it('creates a category and assigns it on article create/update', async () => {
+    const emptyList = await callMcp(
+      mcpRpc(1, 'tools/call', { name: 'knowledge_list_categories', arguments: {} })
+    );
+    const emptyPayload = parseToolPayload(emptyList);
+    assert.equal(emptyPayload.isError, false);
+    assert.deepEqual(emptyPayload.data.categories, []);
+
+    const createCategory = await callMcp(
+      mcpRpc(2, 'tools/call', {
+        name: 'knowledge_create_category',
+        arguments: { name: 'MCP category', tags: 'mcp, category' },
+      })
+    );
+    const categoryPayload = parseToolPayload(createCategory);
+    assert.equal(categoryPayload.isError, false);
+    const categoryId = categoryPayload.data.category.id;
+    assert.equal(categoryPayload.data.category.name, 'MCP category');
+    assert.equal(categoryPayload.data.category.tags, 'mcp, category');
+
+    const listedCategoriesRes = await callMcp(
+      mcpRpc(3, 'tools/call', { name: 'knowledge_list_categories', arguments: {} })
+    );
+    const listedCategories = parseToolPayload(listedCategoriesRes);
+    assert.equal(listedCategories.isError, false);
+    assert.deepEqual(
+      listedCategories.data.categories.map((category?: any) => ({
+        id: category.id,
+        name: category.name,
+        tags: category.tags,
+      })),
+      [{ id: categoryId, name: 'MCP category', tags: 'mcp, category' }]
+    );
+
+    const listed = await callMcp(mcpRpc(4, 'tools/list', {}));
+    const createTool = parseJson(listed).result.tools.find((tool?: any) => tool.name === 'knowledge_create');
+    assert.ok(createTool);
+    assert.match(createTool.description, new RegExp(`${categoryId}\\s+MCP category`));
+    assert.match(createTool.inputSchema.properties.category_id.description, new RegExp(`${categoryId}\\s+MCP category`));
+
+    const create = await callMcp(
+      mcpRpc(5, 'tools/call', {
+        name: 'knowledge_create',
+        arguments: {
+          title: 'MCP categorized article',
+          body: 'Assigned via MCP.',
+          tags: 'mcp',
+          category_id: categoryId,
+        },
+      })
+    );
+    const created = parseToolPayload(create);
+    assert.equal(created.isError, false);
+    assert.equal(created.data.article.category_id, categoryId);
+    assert.equal(created.data.article.category?.name, 'MCP category');
+
+    const filteredSearch = await callMcp(
+      mcpRpc(6, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'MCP categorized article', category_id: categoryId },
+      })
+    );
+    const filtered = parseToolPayload(filteredSearch);
+    assert.equal(filtered.isError, false);
+    assert.equal(filtered.data.category_id, categoryId);
+    assert.deepEqual(
+      filtered.data.articles.map((article?: any) => article.id),
+      [created.data.article.id]
+    );
+
+    const uncategorizedSearch = await callMcp(
+      mcpRpc(7, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'MCP categorized article', category_id: null },
+      })
+    );
+    const uncategorized = parseToolPayload(uncategorizedSearch);
+    assert.equal(uncategorized.isError, false);
+    assert.equal(uncategorized.data.category_id, null);
+    assert.equal(
+      uncategorized.data.articles.some((article?: any) => article.id === created.data.article.id),
+      false
+    );
+
+    const emptyQueryInCategory = await callMcp(
+      mcpRpc(8, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: '', category_id: categoryId },
+      })
+    );
+    const emptyQuery = parseToolPayload(emptyQueryInCategory);
+    assert.equal(emptyQuery.isError, false);
+    assert.ok(emptyQuery.data.articles.every((article?: any) => article.category_id === categoryId));
+    assert.ok(emptyQuery.data.articles.some((article?: any) => article.id === created.data.article.id));
+
+    const invalidCategory = await callMcp(
+      mcpRpc(9, 'tools/call', {
+        name: 'knowledge_search',
+        arguments: { query: 'MCP', category_id: 0 },
+      })
+    );
+    const invalidPayload = parseToolPayload(invalidCategory);
+    assert.equal(invalidPayload.isError, true);
+    assert.match(String(invalidPayload.data.error || ''), /category_id/i);
+
+    const updated = await callMcp(
+      mcpRpc(10, 'tools/call', {
+        name: 'knowledge_update',
+        arguments: { id: created.data.article.id, category_id: null },
+      })
+    );
+    const updatedPayload = parseToolPayload(updated);
+    assert.equal(updatedPayload.isError, false);
+    assert.equal(updatedPayload.data.article.category_id, null);
+    assert.equal(updatedPayload.data.article.category, null);
+  });
+
+  it('adds and deletes screenshots', async () => {
+    const create = await callMcp(
+      mcpRpc(1, 'tools/call', {
+        name: 'knowledge_create',
+        arguments: {
+          title: 'Article with screenshot',
+          body: 'UI steps.',
+          tags: 'screenshot',
+        },
+      })
+    );
+    const created = parseToolPayload(create);
+    assert.equal(created.isError, false);
+    const articleId = created.data.article.id;
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+    const missing = await callMcp(
+      mcpRpc(2, 'tools/call', {
+        name: 'knowledge_add_screenshot',
+        arguments: { article_id: articleId },
+      })
+    );
+    const missingPayload = parseToolPayload(missing);
+    assert.equal(missingPayload.isError, true);
+
+    const localhost = await callMcp(
+      mcpRpc(3, 'tools/call', {
+        name: 'knowledge_add_screenshot',
+        arguments: { article_id: articleId, url: 'http://127.0.0.1/secret.png' },
+      })
+    );
+    const localhostPayload = parseToolPayload(localhost);
+    assert.equal(localhostPayload.isError, true);
+    assert.equal(localhostPayload.data.code, 'INVALID_IMAGE_URL');
+
+    const added = await callMcp(
+      mcpRpc(4, 'tools/call', {
+        name: 'knowledge_add_screenshot',
+        arguments: {
+          article_id: articleId,
+          data_base64: png,
+          filename: 'ui.png',
+          alt: 'Главный экран',
+        },
+      })
+    );
+    const addedPayload = parseToolPayload(added);
+    assert.equal(addedPayload.isError, false);
+    assert.ok(addedPayload.data.image.id);
+    assert.match(addedPayload.data.markdown, /!\[Главный экран\]\(/);
+    assert.match(addedPayload.data.article.body, /!\[Главный экран\]\(/);
+    assert.equal(addedPayload.data.article.images.length, 1);
+
+    const imageId = addedPayload.data.image.id;
+    const removed = await callMcp(
+      mcpRpc(5, 'tools/call', {
+        name: 'knowledge_delete_screenshot',
+        arguments: { article_id: articleId, image_id: imageId },
+      })
+    );
+    const removedPayload = parseToolPayload(removed);
+    assert.equal(removedPayload.isError, false);
+    assert.equal(removedPayload.data.article.images.length, 0);
+    assert.doesNotMatch(removedPayload.data.article.body, /Главный экран/);
+  });
+});

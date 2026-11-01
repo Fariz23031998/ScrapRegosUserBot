@@ -1,0 +1,238 @@
+const statusEl = (document.getElementById('status') as any);
+const statusTextEl = (document.getElementById('status-text') as any);
+const orderInfoEl = (document.getElementById('order-info') as any);
+const paymentsSectionEl = (document.getElementById('payments') as any);
+const paymentButtonsEl = (document.getElementById('payment-buttons') as any);
+
+let paymeStatusTimer: any = null;
+
+function getOrderIdFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  const fromQuery = params.get('order_id')?.trim();
+  if (fromQuery) {
+    return fromQuery;
+  }
+
+  const segments = window.location.pathname.split('/').filter(Boolean);
+  const lastSegment = segments[segments.length - 1] || '';
+  return lastSegment;
+}
+
+function formatAmount(amount: any, currency: any = 'UZS') {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) {
+    return `${amount} ${currency}`;
+  }
+  return `${value.toLocaleString('ru-RU')} ${currency}`;
+}
+
+function formatStatusText(status: any) {
+  const map: Record<string, string> = {
+    pending: 'Ожидает оплаты',
+    paid: 'Оплачен',
+    failed: 'Ошибка оплаты',
+    cancelled: 'Отменён',
+  };
+  return map[status] || status;
+}
+
+function statusBadgeClass(status: any) {
+  return status === 'paid' ? 'status-badge--paid' : 'status-badge--pending';
+}
+
+function setStatus(message: any, type: any = 'default') {
+  statusTextEl.textContent = message;
+  statusEl.classList.remove('status--loading', 'status--success', 'status--error');
+  if (type === 'loading') {
+    statusEl.classList.add('status--loading');
+  } else if (type === 'success') {
+    statusEl.classList.add('status--success');
+  } else if (type === 'error') {
+    statusEl.classList.add('status--error');
+  }
+}
+
+function renderOrderInfo(order: any) {
+  orderInfoEl.innerHTML = [
+    `<div class="order-row order-row--amount">
+      <span class="order-row__label">К оплате</span>
+      <span class="order-row__value">${formatAmount(order.amount, order.currency || 'UZS')}</span>
+    </div>`,
+    `<div class="order-row">
+      <span class="order-row__label">Клиент</span>
+      <span class="order-row__value">${order.client_phone || '—'}</span>
+    </div>`,
+    `<div class="order-row">
+      <span class="order-row__label">Статус</span>
+      <span class="order-row__value">
+        <span class="status-badge ${statusBadgeClass(order.status)}">${formatStatusText(order.status)}</span>
+      </span>
+    </div>`,
+    `<div class="order-row">
+      <span class="order-row__label">ID заказа</span>
+      <span class="order-row__value">${order.id}</span>
+    </div>`,
+  ].join('');
+  orderInfoEl.classList.remove('hidden');
+}
+
+function renderPaymentButtons(payments: any) {
+  const paymeOnly = payments.filter((payment: any) => payment.provider === 'payme');
+  paymentButtonsEl.innerHTML = '';
+
+  if (!paymeOnly.length) {
+    setStatus('Оплата через Payme временно недоступна.', 'error');
+    return;
+  }
+
+  for (const payment of paymeOnly) {
+    const button = document.createElement('a');
+    const isPayme = payment.provider === 'payme';
+    button.className = `payment-button${isPayme ? ' payment-button--payme' : ''}${
+      payment.enabled ? '' : ' disabled'
+    }`;
+    button.href = payment.enabled ? payment.url : '#';
+    button.target = '_blank';
+    button.rel = 'noopener noreferrer';
+
+    if (isPayme) {
+      button.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="2" y="5" width="20" height="14" rx="3" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+        Оплатить через Payme
+      `;
+    } else {
+      button.textContent = payment.label;
+    }
+
+    if (!payment.enabled) {
+      button.addEventListener('click', (event: any) => event.preventDefault());
+    }
+
+    paymentButtonsEl.appendChild(button);
+  }
+
+  paymentsSectionEl.classList.remove('hidden');
+}
+
+async function checkPaymeStatus(orderId: any) {
+  const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payme/check`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    return null;
+  }
+  return response.json();
+}
+
+function startPaymeStatusPolling(orderId: any) {
+  if (paymeStatusTimer) {
+    clearInterval(paymeStatusTimer);
+  }
+
+  setStatus('Проверка оплаты…', 'loading');
+
+  const poll = async () => {
+    try {
+      if (document.visibilityState === 'visible') {
+        setStatus('Проверка оплаты…', 'loading');
+      }
+      const result = await checkPaymeStatus(orderId);
+      if (!result || result.status !== 'paid') {
+        if (document.visibilityState === 'visible') {
+          setStatus('Ожидаем подтверждение оплаты в Payme…', 'loading');
+        }
+        return;
+      }
+
+      clearInterval(paymeStatusTimer);
+      paymeStatusTimer = null;
+
+      const orderResponse = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payments`);
+      if (orderResponse.ok) {
+        const data = await orderResponse.json();
+        renderOrderInfo(data.order);
+      }
+
+      setStatus('Оплата прошла успешно. Спасибо!', 'success');
+      paymentsSectionEl.classList.add('hidden');
+    } catch {
+      // Ignore polling errors; user can refresh manually.
+    }
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      poll();
+    }
+  });
+
+  paymeStatusTimer = setInterval(poll, 5000);
+}
+
+async function loadPaymentData() {
+  const orderId = getOrderIdFromLocation();
+  if (!orderId) {
+    setStatus('Не указан ID заказа.', 'error');
+    return;
+  }
+
+  setStatus('Загрузка данных...', 'loading');
+
+  try {
+    // Check existing Payme receipt first so a paid order is recognized
+    // before GET /payments would otherwise create a new checkout.
+    const earlyCheck = await checkPaymeStatus(orderId);
+    if (earlyCheck?.status === 'paid') {
+      const paidResponse = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payments`);
+      if (paidResponse.ok) {
+        const paidData = await paidResponse.json();
+        renderOrderInfo(paidData.order);
+      } else if (earlyCheck.order) {
+        renderOrderInfo({
+          id: earlyCheck.order.id,
+          status: earlyCheck.order.status,
+          paid_at: earlyCheck.order.paid_at,
+          amount: earlyCheck.order.amount,
+          currency: earlyCheck.order.currency || 'UZS',
+          client_phone: earlyCheck.order.client_phone,
+        });
+      }
+      setStatus('Этот заказ уже оплачен.', 'success');
+      return;
+    }
+
+    const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payments`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      setStatus(data.message || 'Заказ не найден.', 'error');
+      return;
+    }
+
+    renderOrderInfo(data.order);
+
+    if (data.order.status === 'paid') {
+      setStatus('Этот заказ уже оплачен.', 'success');
+      return;
+    }
+
+    if (data.order.status !== 'pending') {
+      setStatus(`Заказ в статусе: ${formatStatusText(data.order.status)}`, 'error');
+      return;
+    }
+
+    setStatus('Нажмите кнопку ниже для перехода к оплате');
+    renderPaymentButtons(data.payments || []);
+
+    if ((data.payments || []).some((payment: any) => payment.provider === 'payme')) {
+      startPaymeStatusPolling(orderId);
+    }
+  } catch {
+    setStatus('Не удалось загрузить данные оплаты.', 'error');
+  }
+}
+
+loadPaymentData();

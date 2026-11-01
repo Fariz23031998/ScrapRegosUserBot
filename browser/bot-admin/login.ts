@@ -1,0 +1,54 @@
+const form = (document.getElementById('login-form') as any);
+const errorEl = (document.getElementById('login-error') as any);
+const submitBtn = (document.getElementById('login-submit') as any);
+const togglePassword = (document.getElementById('toggle-password') as any);
+const passwordInput = form.querySelector('input[name="password"]');
+
+togglePassword.addEventListener('click', () => {
+  const reveal = passwordInput.type === 'password';
+  passwordInput.type = reveal ? 'text' : 'password';
+  togglePassword.setAttribute('aria-pressed', String(reveal));
+  togglePassword.setAttribute('aria-label', reveal ? 'Скрыть пароль' : 'Показать пароль');
+});
+
+async function checkSession() {
+  const response = await fetch('/bot-admin/api/session', { credentials: 'same-origin' });
+  if (response.ok) {
+    window.location.href = '/bot-admin/';
+  }
+}
+
+form.addEventListener('submit', async (event: any) => {
+  event.preventDefault();
+  errorEl.hidden = true;
+  submitBtn.classList.add('is-loading');
+  submitBtn.disabled = true;
+  submitBtn.setAttribute('aria-busy', 'true');
+
+  const formData = new FormData(form);
+  try {
+    const response = await fetch('/bot-admin/api/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        login: formData.get('login'),
+        password: formData.get('password'),
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || 'Не удалось войти');
+    }
+    window.location.href = '/bot-admin/';
+  } catch (error: any) {
+    errorEl.textContent = error.message;
+    errorEl.hidden = false;
+  } finally {
+    submitBtn.classList.remove('is-loading');
+    submitBtn.disabled = false;
+    submitBtn.removeAttribute('aria-busy');
+  }
+});
+
+checkSession();

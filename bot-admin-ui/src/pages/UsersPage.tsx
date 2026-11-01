@@ -18,6 +18,7 @@ import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
 import Modal from "../components/Modal";
 import SimpleTable from "../components/SimpleTable";
+import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
@@ -73,11 +74,13 @@ export default function UsersPage() {
 
   const rightsQuery = useQuery({ queryKey: ["rights-meta"], queryFn: getRightsMeta });
   const regosQuery = useQuery({ queryKey: ["regos-users"], queryFn: listRegosUsers, enabled: modalMode != null });
+  const { sort, onSortingChange } = useServerTableSort();
   const usersQuery = usePagedInfiniteQuery({
-    queryKey: ["users", role, search],
-    queryFn: (page, pageSize) => listUsers({ role, page, limit: pageSize, q: search || undefined }),
+    queryKey: ["users", role, search, sort],
+    queryFn: (page, pageSize) => listUsers({ role, page, limit: pageSize, q: search || undefined, sort: sort || undefined }),
     getItems: (data) => data.users || [],
     getItemId: (user) => user.id,
+    keepPrevious: true,
   });
 
   const rightsMeta = rightsQuery.data?.rights || [];
@@ -121,6 +124,8 @@ export default function UsersPage() {
       {
         id: "name",
         header: "Имя",
+        accessorFn: (row) =>
+          row.display_name || [row.first_name, row.last_name].filter(Boolean).join(" ") || row.username || "",
         cell: ({ row }) => {
           const u = row.original;
           const tg = [u.first_name, u.last_name].filter(Boolean).join(" ").trim();
@@ -140,11 +145,13 @@ export default function UsersPage() {
       {
         id: "schedule",
         header: "График",
+        enableSorting: false,
         accessorFn: (row) => formatScheduleSummary(row.schedule),
       },
       {
         id: "regos",
         header: "REGOS",
+        accessorFn: (row) => row.regos_full_name || row.regos_login || (row.regos_user_id ? String(row.regos_user_id) : ""),
         cell: ({ row }) =>
           row.original.regos_user_id ? (
             <span className="status-linked">
@@ -157,12 +164,14 @@ export default function UsersPage() {
       {
         id: "telegram",
         header: "Telegram",
+        accessorFn: (row) => row.telegram_id ?? null,
         cell: ({ row }) =>
           row.original.telegram_id ? `Привязан · ${row.original.telegram_id}` : "Ожидает привязки",
       },
       {
         id: "rights",
         header: "Права",
+        enableSorting: false,
         cell: ({ row }) => {
           const active = rightsMeta.filter((r) => row.original.rights?.[r.key]);
           if (!active.length) return "Нет прав";
@@ -212,6 +221,7 @@ export default function UsersPage() {
       {
         id: "name",
         header: "Имя",
+        accessorFn: (row) => row.display_name || [row.first_name, row.last_name].filter(Boolean).join(" ") || "",
         cell: ({ row }) => {
           const u = row.original;
           return u.display_name || [u.first_name, u.last_name].filter(Boolean).join(" ") || "—";
@@ -220,6 +230,7 @@ export default function UsersPage() {
       {
         id: "telegram",
         header: "Telegram",
+        accessorFn: (row) => row.telegram_id ?? null,
         cell: ({ row }) => (row.original.telegram_id ? `Привязан · ${row.original.telegram_id}` : "Не привязан"),
       },
       {
@@ -451,6 +462,9 @@ export default function UsersPage() {
             data={users}
             columns={role === "employee" ? employeeColumns : customerColumns}
             isLoading={usersQuery.isPending}
+            columnMenuSort
+            manualSorting
+            onSortingChange={onSortingChange}
             serverSideSearch
             emptyMessage={search ? "Ничего не найдено." : "Пользователей пока нет."}
             getRowId={(row) => String(row.id)}

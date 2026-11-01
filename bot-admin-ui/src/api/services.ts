@@ -8,13 +8,14 @@ export type ServicePayload = {
   category_id?: number | null;
 } & CatalogMoneyPayload;
 
-export function listServices(params: { page: number; limit: number; q?: string; category_id?: string | number }) {
+export function listServices(params: { page: number; limit: number; q?: string; category_id?: string | number; sort?: string }) {
   const search = new URLSearchParams({
     page: String(params.page),
     limit: String(params.limit),
   });
   if (params.q) search.set("q", params.q);
   if (params.category_id) search.set("category_id", String(params.category_id));
+  if (params.sort) search.set("sort", params.sort);
   return apiFetch<{ services: CatalogService[]; total: number; page: number; limit: number }>(
     `/bot-admin/api/services?${search}`,
   );

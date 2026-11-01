@@ -31,7 +31,7 @@ import {
   type Column,
   type Table,
 } from "@tanstack/react-table";
-import { SlidersHorizontal } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, SlidersHorizontal } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -61,6 +61,11 @@ type SimpleTableProps<T> = {
   serverSideSearch?: boolean;
   footerData?: T | T[];
   extraFooter?: ReactNode;
+  /** Show a sort-direction control in the column menu for sortable columns. */
+  columnMenuSort?: boolean;
+  /** Rows are already ordered by the server. Header and menu sort only update state. */
+  manualSorting?: boolean;
+  onSortingChange?: (sorting: SortingState) => void;
 };
 
 function readColumnValue<T>(column: Column<T, unknown>, row: T): unknown {
@@ -68,6 +73,16 @@ function readColumnValue<T>(column: Column<T, unknown>, row: T): unknown {
   const def = column.columnDef as ColumnDef<T, unknown> & { accessorKey?: keyof T | string };
   if (def.accessorKey != null) return (row as Record<string, unknown>)[String(def.accessorKey)];
   return undefined;
+}
+
+function columnHeaderLabel(column: { id: string; columnDef: { header?: unknown } }): string {
+  return typeof column.columnDef.header === "string" ? column.columnDef.header : column.id;
+}
+
+function sortButtonLabel(name: string, sorted: false | "asc" | "desc"): string {
+  if (sorted === "asc") return `${name}: по возрастанию`;
+  if (sorted === "desc") return `${name}: по убыванию`;
+  return `${name}: без сортировки`;
 }
 
 function columnAlignClass(column: Column<unknown, unknown> | { columnDef: { meta?: unknown } }): string | undefined {
@@ -166,6 +181,9 @@ export default function SimpleTable<T>({
   serverSideSearch = false,
   footerData,
   extraFooter,
+  columnMenuSort = false,
+  manualSorting = false,
+  onSortingChange,
 }: SimpleTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
@@ -175,6 +193,8 @@ export default function SimpleTable<T>({
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const onSortingChangeRef = useRef(onSortingChange);
+  onSortingChangeRef.current = onSortingChange;
 
   const sensors = useSensors(useSensor(HeaderPointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -212,6 +232,11 @@ export default function SimpleTable<T>({
   }, [tableKey, sorting, columnVisibility, columnSizing, columnOrder, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) return;
+    onSortingChangeRef.current?.(sorting);
+  }, [sorting, prefsLoaded]);
+
+  useEffect(() => {
     if (!columnsMenuOpen) return;
     function onDocClick(event: MouseEvent) {
       if (!menuRef.current?.contains(event.target as Node)) setColumnsMenuOpen(false);
@@ -228,6 +253,9 @@ export default function SimpleTable<T>({
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
     onColumnOrderChange: setColumnOrder,
+    manualSorting,
+    enableMultiSort: columnMenuSort ? false : undefined,
+    sortDescFirst: columnMenuSort ? false : undefined,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -316,16 +344,51 @@ export default function SimpleTable<T>({
       </button>
       {columnsMenuOpen ? (
         <div className="columns-menu columns-menu--header" role="menu">
-          {table.getAllLeafColumns().map((column) => (
-            <label key={column.id} className="columns-menu__item">
-              <input
-                type="checkbox"
-                checked={column.getIsVisible()}
-                onChange={column.getToggleVisibilityHandler()}
-              />
-              <span>{typeof column.columnDef.header === "string" ? column.columnDef.header : column.id}</span>
-            </label>
-          ))}
+          {table.getAllLeafColumns().map((column) => {
+            const label = columnHeaderLabel(column);
+            const sorted = column.getIsSorted();
+            const visibility = (
+              <>
+                <input
+                  type="checkbox"
+                  checked={column.getIsVisible()}
+                  onChange={column.getToggleVisibilityHandler()}
+                />
+                <span>{label}</span>
+              </>
+            );
+            if (!columnMenuSort || !column.getCanSort()) {
+              return (
+                <label key={column.id} className="columns-menu__item">
+                  {visibility}
+                </label>
+              );
+            }
+            return (
+              <div key={column.id} className="columns-menu__item columns-menu__item--sort">
+                <label className="columns-menu__check">{visibility}</label>
+                <button
+                  type="button"
+                  className={`columns-menu__sort${sorted ? " columns-menu__sort--active" : ""}`}
+                  aria-label={sortButtonLabel(label, sorted)}
+                  title={sortButtonLabel(label, sorted)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    column.toggleSorting(undefined, false);
+                  }}
+                >
+                  {sorted === "asc" ? (
+                    <ArrowUp size={14} aria-hidden="true" />
+                  ) : sorted === "desc" ? (
+                    <ArrowDown size={14} aria-hidden="true" />
+                  ) : (
+                    <ArrowUpDown size={14} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>
