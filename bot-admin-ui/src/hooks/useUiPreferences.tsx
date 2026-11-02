@@ -1,12 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   type DateTimeFormatId,
+  type PhoneAction,
   type ThemePreference,
   loadDateTimeFormat,
+  loadPhoneAction,
   loadThemePreference,
   loadTicketPeriodDays,
   normalizeTicketPeriodDays,
   saveDateTimeFormat,
+  savePhoneAction,
   saveThemePreference,
   saveTicketPeriodDays,
 } from "../lib/ui-preferences";
@@ -16,9 +19,11 @@ type UiPreferencesContextValue = {
   theme: ThemePreference;
   dateTimeFormat: DateTimeFormatId;
   ticketPeriodDays: number;
+  phoneAction: PhoneAction;
   setTheme: (theme: ThemePreference) => void;
   setDateTimeFormat: (format: DateTimeFormatId) => void;
   setTicketPeriodDays: (days: number) => void;
+  setPhoneAction: (action: PhoneAction) => void;
 };
 
 const UiPreferencesContext = createContext<UiPreferencesContextValue | null>(null);
@@ -27,6 +32,7 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemePreference>(loadThemePreference);
   const [dateTimeFormat, setDateTimeFormatState] = useState<DateTimeFormatId>(loadDateTimeFormat);
   const [ticketPeriodDays, setTicketPeriodDaysState] = useState<number>(loadTicketPeriodDays);
+  const [phoneAction, setPhoneActionState] = useState<PhoneAction>(loadPhoneAction);
 
   useEffect(() => {
     applyTheme(theme);
@@ -40,6 +46,10 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     saveTicketPeriodDays(ticketPeriodDays);
   }, [ticketPeriodDays]);
+
+  useEffect(() => {
+    savePhoneAction(phoneAction);
+  }, [phoneAction]);
 
   useEffect(() => {
     if (theme !== "system") return;
@@ -61,9 +71,22 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
     setTicketPeriodDaysState(normalizeTicketPeriodDays(next));
   }, []);
 
+  const setPhoneAction = useCallback((next: PhoneAction) => {
+    setPhoneActionState(next);
+  }, []);
+
   const value = useMemo(
-    () => ({ theme, dateTimeFormat, ticketPeriodDays, setTheme, setDateTimeFormat, setTicketPeriodDays }),
-    [theme, dateTimeFormat, ticketPeriodDays, setTheme, setDateTimeFormat, setTicketPeriodDays],
+    () => ({
+      theme,
+      dateTimeFormat,
+      ticketPeriodDays,
+      phoneAction,
+      setTheme,
+      setDateTimeFormat,
+      setTicketPeriodDays,
+      setPhoneAction,
+    }),
+    [theme, dateTimeFormat, ticketPeriodDays, phoneAction, setTheme, setDateTimeFormat, setTicketPeriodDays, setPhoneAction],
   );
 
   return <UiPreferencesContext.Provider value={value}>{children}</UiPreferencesContext.Provider>;

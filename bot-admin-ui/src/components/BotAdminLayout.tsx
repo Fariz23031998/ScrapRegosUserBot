@@ -75,7 +75,7 @@ function ReportNotifications() {
 
 export default function BotAdminLayout() {
   const { actor, profile, permissions, clearSession, refreshSession, hasPermission } = useAuth();
-  const { theme, dateTimeFormat, ticketPeriodDays, setTheme, setDateTimeFormat, setTicketPeriodDays } =
+  const { theme, dateTimeFormat, ticketPeriodDays, phoneAction, setTheme, setDateTimeFormat, setTicketPeriodDays, setPhoneAction } =
     useUiPreferences();
   const navigate = useNavigate();
   const location = useLocation();
@@ -365,6 +365,17 @@ export default function BotAdminLayout() {
                     <p className="account-menu__hint">
                       От 1 до 30. Например, 7 — последние 7 дней (00:00–23:59).
                     </p>
+                    <label>
+                      Действие с номером
+                      <select
+                        value={phoneAction}
+                        onChange={(event) => setPhoneAction(event.target.value as "copy" | "microsip")}
+                      >
+                        <option value="microsip">Открыть в MicroSIP</option>
+                        <option value="copy">Копировать</option>
+                      </select>
+                    </label>
+                    <p className="account-menu__hint">sip:909999999, без +998.</p>
                   </section>
 
                   {profileError ? <p className="message error">{profileError}</p> : null}

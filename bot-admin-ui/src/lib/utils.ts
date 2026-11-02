@@ -129,6 +129,10 @@ export function uzbekPhoneWithoutCountryCode(phone: unknown): string {
   return String(phone ?? "");
 }
 
+export function microsipUri(phone: unknown): string {
+  return `sip:${uzbekPhoneWithoutCountryCode(phone)}`;
+}
+
 export function formatUzbekPhone(phone: unknown): string {
   const canonical = canonicalizeUzbekPhone(phone);
   const digits = canonical ? canonical.slice(1) : String(phone ?? "").replace(/\D/g, "");

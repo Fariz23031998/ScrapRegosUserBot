@@ -2,9 +2,12 @@ export type ThemePreference = "light" | "dark" | "system";
 
 export type DateTimeFormatId = "ru-short" | "ru-long" | "iso" | "us";
 
+export type PhoneAction = "copy" | "microsip";
+
 export const THEME_STORAGE_KEY = "bot_admin_theme";
 export const DATETIME_FORMAT_STORAGE_KEY = "bot_admin_datetime_format";
 export const TICKET_PERIOD_DAYS_STORAGE_KEY = "bot_admin_ticket_period_days";
+export const PHONE_ACTION_STORAGE_KEY = "bot_admin_phone_action";
 
 export const MIN_TICKET_PERIOD_DAYS = 1;
 export const MAX_TICKET_PERIOD_DAYS = 30;
@@ -73,6 +76,24 @@ export function loadTicketPeriodDays(): number {
 export function saveTicketPeriodDays(days: number): void {
   try {
     localStorage.setItem(TICKET_PERIOD_DAYS_STORAGE_KEY, String(normalizeTicketPeriodDays(days)));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadPhoneAction(): PhoneAction {
+  try {
+    const raw = localStorage.getItem(PHONE_ACTION_STORAGE_KEY);
+    if (raw === "copy" || raw === "microsip") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "microsip";
+}
+
+export function savePhoneAction(action: PhoneAction): void {
+  try {
+    localStorage.setItem(PHONE_ACTION_STORAGE_KEY, action);
   } catch {
     /* ignore */
   }

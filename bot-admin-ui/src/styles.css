@@ -3791,6 +3791,10 @@ body.is-column-resizing * {
   color: var(--primary);
 }
 
+.ticket-phone-copy--microsip {
+  cursor: pointer;
+}
+
 .ticket-phone-copy--copied,
 .ticket-phone-copy--copied:hover {
   color: var(--success);
