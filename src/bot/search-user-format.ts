@@ -103,8 +103,8 @@ function phonesMatch(storedPhone?: any, queryPhone?: any) {
 }
 
 const BILLING_PAGE_LABELS: Record<string, string> = {
-  SAMARKAND: 'Samarkand',
-  BUKHARA: 'Bukhara',
+  SAMARKAND: 'ROFEEV TECH',
+  BUKHARA: 'IVO SOFTWARE',
 };
 
 function billingPageLabel(account?: any) {
