@@ -3406,9 +3406,18 @@ body.is-column-resizing * {
 
 .ticket-board-card__top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.4rem;
+}
+
+.ticket-board-card__identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
 }
 
 .ticket-board-card__subject {
@@ -6248,6 +6257,12 @@ body.is-column-resizing * {
   font-size: 0.95rem;
   display: grid;
   gap: 0.15rem;
+}
+
+.task-product-card__price-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .task-product-card__total-label {

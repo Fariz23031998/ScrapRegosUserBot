@@ -454,10 +454,6 @@ export default function DevicesPage() {
           onSubmit={(event) => {
             event.preventDefault();
             if (!editor) return;
-            if (!editor.price_uzs.trim() && !editor.price_usd.trim()) {
-              setFormError("Укажите цену в сумах или в USD.");
-              return;
-            }
             setFormError("");
             saveMutation.mutate(editor);
           }}

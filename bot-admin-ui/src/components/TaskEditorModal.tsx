@@ -31,7 +31,7 @@ import { TASK_STATUSES } from "../lib/task-status";
 import { datetimeLocalToIso } from "../lib/utils";
 
 const TASK_ACTIONS = [
-  { value: "install", label: "Установка" },
+  { value: "install", label: "Установка/Техподдержка" },
   { value: "repair", label: "Ремонт" },
   { value: "sale", label: "Продажа" },
 ] as const;

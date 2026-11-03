@@ -1,5 +1,5 @@
 import type { Db } from '../types/db';
-import { emptyDiscount, normalizeDiscountInput } from './money';
+import { emptyDiscount, normalizeDiscountInput, normalizePriceInput } from './money';
 import { ensureTaskTables } from './tasks-schema';
 import { getTask, touchTask } from './tasks-read';
 import {
@@ -149,6 +149,11 @@ function updateTask(db: Db, id: any, input: any = {}, options: any = {}) {
   }
 }
 
+function linePriceUpdate(input: any = {}) {
+  if (input.price_uzs === undefined && input.price_usd === undefined) return null;
+  return normalizePriceInput(input);
+}
+
 function bumpLineQuantity(db: Db, table?: any, lineId?: any, currentQuantity?: any) {
   if (table !== 'task_devices' && table !== 'task_services') {
     throw new Error('INVALID_TABLE');
@@ -292,11 +297,30 @@ function updateTaskDevice(db: Db, taskId: any, lineId: any, input: any = {}) {
           discount_value: Number(row.discount_value) || 0,
           discount_currency: row.discount_currency || null,
         };
-  db.prepare(
-    `UPDATE task_devices
-     SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?
-     WHERE id = ? AND task_id = ?`
-  ).run(quantity, discount.discount_type, discount.discount_value, discount.discount_currency, id, current.id);
+  const price = linePriceUpdate(input);
+  if (price) {
+    db.prepare(
+      `UPDATE task_devices
+       SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?,
+           price_uzs = ?, price_usd = ?
+       WHERE id = ? AND task_id = ?`
+    ).run(
+      quantity,
+      discount.discount_type,
+      discount.discount_value,
+      discount.discount_currency,
+      price.price_uzs,
+      price.price_usd,
+      id,
+      current.id
+    );
+  } else {
+    db.prepare(
+      `UPDATE task_devices
+       SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?
+       WHERE id = ? AND task_id = ?`
+    ).run(quantity, discount.discount_type, discount.discount_value, discount.discount_currency, id, current.id);
+  }
   touchTask(db, current.id);
   return getTask(db, current.id);
 }
@@ -326,11 +350,30 @@ function updateTaskService(db: Db, taskId: any, lineId: any, input: any = {}) {
           discount_value: Number(row.discount_value) || 0,
           discount_currency: row.discount_currency || null,
         };
-  db.prepare(
-    `UPDATE task_services
-     SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?
-     WHERE id = ? AND task_id = ?`
-  ).run(quantity, discount.discount_type, discount.discount_value, discount.discount_currency, id, current.id);
+  const price = linePriceUpdate(input);
+  if (price) {
+    db.prepare(
+      `UPDATE task_services
+       SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?,
+           price_uzs = ?, price_usd = ?
+       WHERE id = ? AND task_id = ?`
+    ).run(
+      quantity,
+      discount.discount_type,
+      discount.discount_value,
+      discount.discount_currency,
+      price.price_uzs,
+      price.price_usd,
+      id,
+      current.id
+    );
+  } else {
+    db.prepare(
+      `UPDATE task_services
+       SET quantity = ?, discount_type = ?, discount_value = ?, discount_currency = ?
+       WHERE id = ? AND task_id = ?`
+    ).run(quantity, discount.discount_type, discount.discount_value, discount.discount_currency, id, current.id);
+  }
   touchTask(db, current.id);
   return getTask(db, current.id);
 }

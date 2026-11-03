@@ -15,6 +15,7 @@ import {
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject, type SyntheticEvent, type UIEvent } from "react";
 import { Link } from "react-router-dom";
 import {
+  channelDisplayName,
   formatUnix,
   getCachedRecordingDuration,
   statusBadgeClass,
@@ -89,6 +90,7 @@ export type TicketBoardProps = {
   columns: TicketBoardColumnState[];
   emptyMessage: string;
   userNames: Record<string, string>;
+  channelNames: Record<string, string>;
   canEditTickets: boolean;
   canEditClosedTickets: boolean;
   busyTicketId?: number | null;
@@ -103,6 +105,7 @@ export default function TicketBoard({
   columns,
   emptyMessage,
   userNames,
+  channelNames,
   canEditTickets,
   canEditClosedTickets,
   busyTicketId,
@@ -208,6 +211,7 @@ export default function TicketBoard({
               key={column.id}
               column={column}
               userNames={userNames}
+              channelNames={channelNames}
               canEditTickets={canEditTickets}
               canEditClosedTickets={canEditClosedTickets}
               busyTicketId={busyTicketId}
@@ -227,6 +231,7 @@ export default function TicketBoard({
             <TicketBoardCardBody
               ticket={activeTicket}
               userNames={userNames}
+              channelNames={channelNames}
               recordingDurations={recordingDurations}
               onOpenRecording={onOpenRecording}
             />
@@ -240,6 +245,7 @@ export default function TicketBoard({
 function TicketBoardColumn({
   column,
   userNames,
+  channelNames,
   canEditTickets,
   canEditClosedTickets,
   busyTicketId,
@@ -252,6 +258,7 @@ function TicketBoardColumn({
 }: {
   column: TicketBoardColumn & TicketBoardColumnState;
   userNames: Record<string, string>;
+  channelNames: Record<string, string>;
   canEditTickets: boolean;
   canEditClosedTickets: boolean;
   busyTicketId?: number | null;
@@ -312,6 +319,7 @@ function TicketBoardColumn({
               key={ticket.id}
               ticket={ticket}
               userNames={userNames}
+              channelNames={channelNames}
               recordingDurations={recordingDurations}
               draggable={
                 dragEnabled &&
@@ -338,6 +346,7 @@ function TicketBoardColumn({
 function TicketBoardCard({
   ticket,
   userNames,
+  channelNames,
   recordingDurations,
   draggable,
   suppressClickRef,
@@ -346,6 +355,7 @@ function TicketBoardCard({
 }: {
   ticket: Ticket;
   userNames: Record<string, string>;
+  channelNames: Record<string, string>;
   recordingDurations: Record<string, number | undefined>;
   draggable: boolean;
   suppressClickRef: RefObject<boolean>;
@@ -376,6 +386,7 @@ function TicketBoardCard({
       <TicketBoardCardBody
         ticket={ticket}
         userNames={userNames}
+        channelNames={channelNames}
         recordingDurations={recordingDurations}
         onOpenRecording={onOpenRecording}
       />
@@ -386,11 +397,13 @@ function TicketBoardCard({
 function TicketBoardCardBody({
   ticket,
   userNames,
+  channelNames,
   recordingDurations,
   onOpenRecording,
 }: {
   ticket: Ticket;
   userNames: Record<string, string>;
+  channelNames: Record<string, string>;
   recordingDurations: Record<string, number | undefined>;
   onOpenRecording: (ticket: Ticket) => void;
 }) {
@@ -400,10 +413,14 @@ function TicketBoardCardBody({
   const unpaidHref = unpaidLabel ? unpaidOrdersHref(ticket) : null;
   const duration = getCachedRecordingDuration(ticket) ?? recordingDurations[String(ticket.id)];
   const showRecording = duration != null && duration > 0;
+  const channelName = channelDisplayName(ticket.channel_id, channelNames);
   return (
     <>
       <div className="ticket-board-card__top">
-        <span className="ticket-card__id">#{ticket.id}</span>
+        <span className="ticket-board-card__identity">
+          <span className="ticket-card__id">#{ticket.id}</span>
+          {channelName !== "—" ? <span className="ticket-card__channel">{channelName}</span> : null}
+        </span>
         {ticket.sla_breached ? <span className="badge badge--warn">SLA нарушен</span> : null}
       </div>
       <h3 className="ticket-board-card__subject">{ticket.subject || "Без темы"}</h3>

@@ -18,6 +18,8 @@ export function registerTaskLineRoutes(router: any, deps: { db: Db; auditAdminCh
         device_id: req.body?.device_id,
         action: req.body?.action,
         notes: req.body?.notes,
+        price_uzs: req.body?.price_uzs,
+        price_usd: req.body?.price_usd,
       });
       auditAdminChange(db, req, {
         entityType: 'task',
@@ -41,14 +43,19 @@ export function registerTaskLineRoutes(router: any, deps: { db: Db; auditAdminCh
     try {
       const before = requireVisibleTask(req, res);
       if (!before) return;
+      const priceChange = req.body?.price_uzs !== undefined || req.body?.price_usd !== undefined;
       const task = updateTaskDevice(db, req.params.id, req.params.lineId, {
         quantity: req.body?.quantity,
+        price_uzs: req.body?.price_uzs,
+        price_usd: req.body?.price_usd,
       });
       auditAdminChange(db, req, {
         entityType: 'task',
         entityId: task!.id,
         action: 'update',
-        summary: `Изменено количество устройства в задаче #${task!.id}`,
+        summary: priceChange
+          ? `Изменена цена устройства в задаче #${task!.id}`
+          : `Изменено количество устройства в задаче #${task!.id}`,
         details: buildAuditDetails({ before, after: task }),
       });
       return res.json({ task });
@@ -92,6 +99,8 @@ export function registerTaskLineRoutes(router: any, deps: { db: Db; auditAdminCh
       const task = addTaskService(db, req.params.id, {
         service_id: req.body?.service_id,
         notes: req.body?.notes,
+        price_uzs: req.body?.price_uzs,
+        price_usd: req.body?.price_usd,
       });
       auditAdminChange(db, req, {
         entityType: 'task',
@@ -115,14 +124,19 @@ export function registerTaskLineRoutes(router: any, deps: { db: Db; auditAdminCh
     try {
       const before = requireVisibleTask(req, res);
       if (!before) return;
+      const priceChange = req.body?.price_uzs !== undefined || req.body?.price_usd !== undefined;
       const task = updateTaskService(db, req.params.id, req.params.lineId, {
         quantity: req.body?.quantity,
+        price_uzs: req.body?.price_uzs,
+        price_usd: req.body?.price_usd,
       });
       auditAdminChange(db, req, {
         entityType: 'task',
         entityId: task!.id,
         action: 'update',
-        summary: `Изменено количество услуги в задаче #${task!.id}`,
+        summary: priceChange
+          ? `Изменена цена услуги в задаче #${task!.id}`
+          : `Изменено количество услуги в задаче #${task!.id}`,
         details: buildAuditDetails({ before, after: task }),
       });
       return res.json({ task });

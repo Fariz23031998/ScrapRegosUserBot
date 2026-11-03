@@ -43,11 +43,6 @@ function ensureDeviceTables(db: Db) {
   ensureColumn(db, 'devices', 'price_usd', 'REAL');
   ensureColumn(db, 'devices', 'manager_sale_percent', 'REAL NOT NULL DEFAULT 0');
   ensureColumn(db, 'devices', 'technician_score', 'REAL NOT NULL DEFAULT 0');
-  db.exec(`
-    UPDATE devices
-    SET price_uzs = 0
-    WHERE price_uzs IS NULL AND price_usd IS NULL
-  `);
   ensureCatalogCategoryTables(db, 'device');
 }
 

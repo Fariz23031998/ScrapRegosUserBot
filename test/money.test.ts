@@ -24,6 +24,12 @@ describe('money helpers', () => {
     });
     assert.throws(() => normalizeCostInput({ cost_amount: -1, cost_currency: 'UZS' }), /INVALID_MONEY_AMOUNT/);
     assert.throws(() => normalizePriceInput({}), /INVALID_PRICE/);
+    assert.deepEqual(normalizeMoneyInput({ cost_amount: 0 }), {
+      cost_amount: 0,
+      cost_currency: 'UZS',
+      price_uzs: null,
+      price_usd: null,
+    });
     assert.deepEqual(normalizeMoneyInput({ cost_amount: 10, cost_currency: 'USD', price_usd: 12 }), {
       cost_amount: 10,
       cost_currency: 'USD',

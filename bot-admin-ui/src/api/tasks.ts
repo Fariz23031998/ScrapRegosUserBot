@@ -160,9 +160,14 @@ export function createTaskClient(payload: {
   });
 }
 
+export type TaskLinePrice = {
+  price_uzs?: number | null;
+  price_usd?: number | null;
+};
+
 export function addTaskDevice(
   taskId: number,
-  payload: { device_id: number; action?: string; notes?: string; quantity?: number },
+  payload: { device_id: number; action?: string; notes?: string; quantity?: number } & TaskLinePrice,
 ) {
   return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${taskId}/devices`, {
     method: "POST",
@@ -173,7 +178,7 @@ export function addTaskDevice(
 export function updateTaskDevice(
   taskId: number,
   lineId: number,
-  payload: { quantity: number },
+  payload: { quantity?: number } & TaskLinePrice,
 ) {
   return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${taskId}/devices/${lineId}`, {
     method: "PUT",
@@ -189,7 +194,7 @@ export function deleteTaskDevice(taskId: number, lineId: number) {
 
 export function addTaskService(
   taskId: number,
-  payload: { service_id: number; notes?: string; quantity?: number },
+  payload: { service_id: number; notes?: string; quantity?: number } & TaskLinePrice,
 ) {
   return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${taskId}/services`, {
     method: "POST",
@@ -200,7 +205,7 @@ export function addTaskService(
 export function updateTaskService(
   taskId: number,
   lineId: number,
-  payload: { quantity: number },
+  payload: { quantity?: number } & TaskLinePrice,
 ) {
   return apiFetch<{ task: FieldTask }>(`/bot-admin/api/tasks/${taskId}/services/${lineId}`, {
     method: "PUT",

@@ -4,8 +4,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { openDb } from '../src/db/partners-db';
-import { createDevice } from '../src/db/devices';
-import { createService, deleteService } from '../src/db/services';
+import { createDevice, getDevice } from '../src/db/devices';
+import { createService, deleteService, getService } from '../src/db/services';
 import { addTaskDevice, addTaskService, applyTaskDiscount, createTask, getTask, updateTask, updateTaskDevice, updateTaskService } from '../src/db/tasks';
 import { setUsdUzsRate } from '../src/db/money';
 
@@ -200,5 +200,54 @@ describe('task details money snapshots', () => {
     assert.equal(task!.services[0].price_uzs, 150000);
     assert.equal(task!.totals.price_uzs, 150000);
     assert.equal(task!.totals.cost_uzs, 50000);
+  });
+
+  it('keeps an unpriced catalog item empty and stores a task-only line price', () => {
+    setUsdUzsRate(db, 12500);
+    const device = createDevice(db, { name: 'Без цены' });
+    const service = createService(db, { name: 'Без цены услуга' });
+    assert.equal(device!.price_uzs, null);
+    assert.equal(device!.price_usd, null);
+    assert.equal(service!.price_uzs, null);
+    assert.equal(service!.price_usd, null);
+
+    const repair = createTask(db, { title: 'Ремонт без цены', action: 'repair', devices: [] });
+    const repairLine = addTaskDevice(db, repair!.id, { device_id: device!.id });
+    assert.equal(repairLine!.devices[0].price_uzs, 0);
+    assert.equal(repairLine!.devices[0].price_usd, 0);
+
+    const created = createTask(db, { title: 'Своя цена', devices: [] });
+    assert.throws(() => addTaskDevice(db, created!.id, { device_id: device!.id, action: 'sale' }), /INVALID_PRICE/);
+    assert.throws(() => addTaskService(db, created!.id, { service_id: service!.id }), /INVALID_PRICE/);
+
+    const withDevice = addTaskDevice(db, created!.id, {
+      device_id: device!.id,
+      action: 'sale',
+      price_uzs: 80000,
+    });
+    assert.equal(withDevice!.devices[0].price_stored_uzs, 80000);
+    assert.equal(withDevice!.devices[0].price_stored_usd, null);
+    assert.equal(withDevice!.devices[0].price_uzs, 80000);
+    assert.equal(getDevice(db, device!.id)!.price_uzs, null);
+
+    const withService = addTaskService(db, created!.id, { service_id: service!.id, price_usd: 4 });
+    assert.equal(withService!.services[0].price_stored_usd, 4);
+    assert.equal(withService!.services[0].price_uzs, 50000);
+    assert.equal(getService(db, service!.id)!.price_usd, null);
+
+    const discounted = applyTaskDiscount(db, created!.id, {
+      scope: 'selected',
+      lines: [{ kind: 'service', id: withService!.services[0].id }],
+      type: 'percent',
+      value: 10,
+    });
+    const repriced = updateTaskService(db, created!.id, discounted!.services[0].id, { price_uzs: 100000 });
+    assert.equal(repriced!.services[0].discount_type, 'percent');
+    assert.equal(repriced!.services[0].price_stored_uzs, 100000);
+    assert.equal(repriced!.services[0].price_stored_usd, null);
+    assert.equal(repriced!.services[0].price_without_discount_uzs, 100000);
+    assert.equal(repriced!.services[0].price_uzs, 90000);
+    assert.equal(getService(db, service!.id)!.price_uzs, null);
+    assert.equal(getService(db, service!.id)!.price_usd, null);
   });
 });

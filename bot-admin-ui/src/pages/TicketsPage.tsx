@@ -1007,6 +1007,7 @@ export default function TicketsPage() {
             columns={board.columns}
             emptyMessage={ticketsEmptyMessage}
             userNames={userNames}
+            channelNames={channelNames}
             canEditTickets={canEditTickets}
             canEditClosedTickets={canEditClosedTickets}
             busyTicketId={statusMutation.isPending ? statusMutation.variables?.id ?? null : null}

@@ -105,6 +105,27 @@ type CatalogProduct = {
   price_usd?: number | null;
 };
 
+type UnitPrice = { price_uzs: number | null; price_usd: number | null };
+
+type PricePrompt =
+  | { mode: "add"; product: CatalogProduct }
+  | { mode: "edit"; kind: CatalogKind; lineId: number; title: string };
+
+function catalogPriceMissing(item: { price_uzs?: number | null; price_usd?: number | null }) {
+  return item.price_uzs == null && item.price_usd == null;
+}
+
+function parseUnitPrice(uzs: string, usd: string): UnitPrice | null {
+  const priceUzs = uzs.trim();
+  const priceUsd = usd.trim();
+  if (!priceUzs && !priceUsd) return null;
+  const price_uzs = priceUzs ? Number(priceUzs) : null;
+  const price_usd = priceUsd ? Number(priceUsd) : null;
+  if (price_uzs != null && (!Number.isFinite(price_uzs) || price_uzs < 0)) return null;
+  if (price_usd != null && (!Number.isFinite(price_usd) || price_usd < 0)) return null;
+  return { price_uzs, price_usd };
+}
+
 function textOrDash(value: unknown): string {
   if (value == null || value === "") return "—";
   return String(value);
@@ -470,6 +491,7 @@ function CartLine({
   updating,
   onToggleSelected,
   onQuantityChange,
+  onEditPrice,
   onRemove,
   serials,
   onPrintSerial,
@@ -495,6 +517,7 @@ function CartLine({
   updating: boolean;
   onToggleSelected: () => void;
   onQuantityChange: (quantity: number) => void;
+  onEditPrice?: () => void;
   onRemove: () => void;
   serials?: TaskDeviceSerial[];
   onPrintSerial?: (serial: TaskDeviceSerial, printer: PrintEnabledPrinter) => void;
@@ -582,7 +605,21 @@ function CartLine({
         ) : null}
         {!hidePrice ? (
           <div className="task-product-card__price">
-            <span className="task-product-card__total-label">Итого</span>
+            <div className="task-product-card__price-head">
+              <span className="task-product-card__total-label">Итого</span>
+              {canEdit && onEditPrice ? (
+                <button
+                  type="button"
+                  className="btn-secondary btn-icon btn-sm"
+                  aria-label="Изменить цену"
+                  title="Изменить цену в этой задаче"
+                  onClick={onEditPrice}
+                  disabled={updating || removing}
+                >
+                  <Pencil size={14} aria-hidden="true" />
+                </button>
+              ) : null}
+            </div>
             {originalPrice ? (
               <MoneyCell primary={originalPrice.primary} muted={originalPrice.muted} className="money-pair--old" />
             ) : null}
@@ -674,6 +711,10 @@ export default function TaskDetailPage() {
   const [categoryKey, setCategoryKey] = useState<CategoryKey>("all");
   const [productQuery, setProductQuery] = useState("");
   const [lineError, setLineError] = useState("");
+  const [pricePrompt, setPricePrompt] = useState<PricePrompt | null>(null);
+  const [priceUzs, setPriceUzs] = useState("");
+  const [priceUsd, setPriceUsd] = useState("");
+  const [priceError, setPriceError] = useState("");
   const [addingKey, setAddingKey] = useState("");
   const [updatingLineKey, setUpdatingLineKey] = useState("");
   const [selectedLineKeys, setSelectedLineKeys] = useState<string[]>([]);
@@ -791,8 +832,12 @@ export default function TaskDetailPage() {
   }
 
   const addDeviceMutation = useMutation({
-    mutationFn: (payload: { device_id: number; action?: "install" | "repair" | "sale" }) =>
-      addTaskDevice(taskId, payload),
+    mutationFn: (payload: {
+      device_id: number;
+      action?: "install" | "repair" | "sale";
+      price_uzs?: number | null;
+      price_usd?: number | null;
+    }) => addTaskDevice(taskId, payload),
     onSuccess: () => {
       setLineError("");
       setAddingKey("");
@@ -805,7 +850,8 @@ export default function TaskDetailPage() {
   });
 
   const addServiceMutation = useMutation({
-    mutationFn: (serviceId: number) => addTaskService(taskId, { service_id: serviceId }),
+    mutationFn: (payload: { service_id: number; price_uzs?: number | null; price_usd?: number | null }) =>
+      addTaskService(taskId, payload),
     onSuccess: () => {
       setLineError("");
       setAddingKey("");
@@ -830,8 +876,17 @@ export default function TaskDetailPage() {
   });
 
   const updateDeviceMutation = useMutation({
-    mutationFn: (payload: { lineId: number; quantity: number }) =>
-      updateTaskDevice(taskId, payload.lineId, { quantity: payload.quantity }),
+    mutationFn: (payload: {
+      lineId: number;
+      quantity?: number;
+      price_uzs?: number | null;
+      price_usd?: number | null;
+    }) =>
+      updateTaskDevice(taskId, payload.lineId, {
+        quantity: payload.quantity,
+        price_uzs: payload.price_uzs,
+        price_usd: payload.price_usd,
+      }),
     onSuccess: () => {
       setLineError("");
       setUpdatingLineKey("");
@@ -844,8 +899,17 @@ export default function TaskDetailPage() {
   });
 
   const updateServiceMutation = useMutation({
-    mutationFn: (payload: { lineId: number; quantity: number }) =>
-      updateTaskService(taskId, payload.lineId, { quantity: payload.quantity }),
+    mutationFn: (payload: {
+      lineId: number;
+      quantity?: number;
+      price_uzs?: number | null;
+      price_usd?: number | null;
+    }) =>
+      updateTaskService(taskId, payload.lineId, {
+        quantity: payload.quantity,
+        price_uzs: payload.price_uzs,
+        price_usd: payload.price_usd,
+      }),
     onSuccess: () => {
       setLineError("");
       setUpdatingLineKey("");
@@ -983,18 +1047,56 @@ export default function TaskDetailPage() {
     if (ok) removeServiceMutation.mutate(line.id);
   }
 
-  function handleAddProduct(product: CatalogProduct) {
+  function handleAddProduct(product: CatalogProduct, price?: UnitPrice) {
     if (!canEditCart || addingKey || updatingLineKey) return;
     const currentQty = inTaskQty.get(productKey(product)) || 0;
     if (currentQty >= MAX_LINE_QUANTITY) return;
+    const repairDevice = product.kind === "device" && task?.action === "repair";
+    if (!price && currentQty === 0 && !repairDevice && catalogPriceMissing(product)) {
+      setPriceUzs("");
+      setPriceUsd("");
+      setPriceError("");
+      setPricePrompt({ mode: "add", product });
+      return;
+    }
     if (product.kind === "device") {
       const action = task?.action === "repair" || task?.action === "sale" ? task.action : "install";
       setAddingKey(productKey(product));
-      addDeviceMutation.mutate({ device_id: product.id, action });
+      addDeviceMutation.mutate({ device_id: product.id, action, ...price });
       return;
     }
     setAddingKey(productKey(product));
-    addServiceMutation.mutate(product.id);
+    addServiceMutation.mutate({ service_id: product.id, ...price });
+  }
+
+  function openLinePriceEditor(kind: CatalogKind, line: TaskDeviceLine | TaskServiceLine, title: string) {
+    if (!line.id) return;
+    setPriceUzs(line.price_stored_uzs != null ? String(line.price_stored_uzs) : "");
+    setPriceUsd(line.price_stored_usd != null ? String(line.price_stored_usd) : "");
+    setPriceError("");
+    setPricePrompt({ mode: "edit", kind, lineId: line.id, title });
+  }
+
+  function confirmLinePrice() {
+    if (!pricePrompt) return;
+    const price = parseUnitPrice(priceUzs, priceUsd);
+    if (!price) {
+      setPriceError("Укажите цену в сумах или в USD.");
+      return;
+    }
+    if (pricePrompt.mode === "add") {
+      const product = pricePrompt.product;
+      setPricePrompt(null);
+      handleAddProduct(product, price);
+      return;
+    }
+    setUpdatingLineKey(`${pricePrompt.kind}:${pricePrompt.lineId}`);
+    if (pricePrompt.kind === "device") {
+      updateDeviceMutation.mutate({ lineId: pricePrompt.lineId, ...price });
+    } else {
+      updateServiceMutation.mutate({ lineId: pricePrompt.lineId, ...price });
+    }
+    setPricePrompt(null);
   }
 
   function handleDeviceQuantity(line: TaskDeviceLine, quantity: number) {
@@ -1469,6 +1571,11 @@ export default function TaskDetailPage() {
                         updating={updatingLineKey === lineKey}
                         onToggleSelected={() => toggleLineSelected(lineKey)}
                         onQuantityChange={(quantity) => handleDeviceQuantity(line, quantity)}
+                        onEditPrice={
+                          canEditCart && line.id && !hidePrice
+                            ? () => openLinePriceEditor("device", line, title)
+                            : undefined
+                        }
                         onRemove={() => void handleRemoveDevice(line)}
                         serials={line.serials}
                         labelPrinters={labelPrinters}
@@ -1509,6 +1616,9 @@ export default function TaskDetailPage() {
                         updating={updatingLineKey === lineKey}
                         onToggleSelected={() => toggleLineSelected(lineKey)}
                         onQuantityChange={(quantity) => handleServiceQuantity(line, quantity)}
+                        onEditPrice={
+                          canEditCart && line.id ? () => openLinePriceEditor("service", line, title) : undefined
+                        }
                         onRemove={() => void handleRemoveService(line)}
                       />
                     );
@@ -1618,6 +1728,56 @@ export default function TaskDetailPage() {
           </section>
         </div>
       </div>
+
+      <Modal
+        open={pricePrompt != null}
+        title={pricePrompt?.mode === "edit" ? "Цена в задаче" : "Укажите цену"}
+        onClose={() => setPricePrompt(null)}
+        size="confirm"
+      >
+        <form
+          className="stack-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            confirmLinePrice();
+          }}
+        >
+          <p className="muted-copy">
+            {pricePrompt?.mode === "edit"
+              ? `Цена за единицу для «${pricePrompt.title}» изменится только в этой задаче.`
+              : `У «${pricePrompt?.mode === "add" ? pricePrompt.product.name : ""}» нет цены в каталоге. Укажите цену за единицу для этой задачи.`}
+          </p>
+          <label>
+            Цена, сум
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={priceUzs}
+              onChange={(event) => setPriceUzs(event.target.value)}
+            />
+          </label>
+          <label>
+            Цена, USD
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={priceUsd}
+              onChange={(event) => setPriceUsd(event.target.value)}
+            />
+          </label>
+          {priceError ? <p className="message error">{priceError}</p> : null}
+          <div className="form-actions">
+            <button type="button" className="btn-secondary" onClick={() => setPricePrompt(null)}>
+              Отмена
+            </button>
+            <button type="submit" className="btn-primary" disabled={Boolean(addingKey) || Boolean(updatingLineKey)}>
+              Сохранить
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       <TaskMetaModal
         open={taskMetaOpen}

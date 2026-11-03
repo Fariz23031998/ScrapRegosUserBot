@@ -3,7 +3,7 @@ import type { Db } from '../types/db';
 import { getDevice } from './devices';
 import { getService } from './services';
 import { getBotUserById } from './bot-users-db';
-import { CURRENCIES, roundMoney, snapshotMoney, emptyLineMoneySnapshot } from './money';
+import { CURRENCIES, roundMoney, snapshotMoney, emptyLineMoneySnapshot, normalizePriceInput } from './money';
 import { getLocation, canViewerAccessLocation, userCanAccessLocation } from './locations';
 import { tableExists } from './tasks-schema';
 import { getTaskCategory } from './tasks-categories';
@@ -219,6 +219,16 @@ function normalizeQuantity(value: any, fallback: any = 1) {
   return qty;
 }
 
+function withLinePrice(snapshot: any, item: any) {
+  const hasOverride = item?.price_uzs !== undefined || item?.price_usd !== undefined;
+  if (hasOverride) {
+    const price = normalizePriceInput(item);
+    return { ...snapshot, price_uzs: price.price_uzs, price_usd: price.price_usd };
+  }
+  if (snapshot.price_uzs == null && snapshot.price_usd == null) throw new Error('INVALID_PRICE');
+  return snapshot;
+}
+
 function normalizeTaskDeviceLine(db: Db, item: any, index: any = 0, fallbackAction: any = 'install') {
   const device = getDevice(db, item?.device_id);
   if (!device) throw new Error('INVALID_TASK_DEVICE');
@@ -231,7 +241,7 @@ function normalizeTaskDeviceLine(db: Db, item: any, index: any = 0, fallbackActi
     notes,
     quantity,
     sort_order: index,
-    ...(fallbackAction === 'repair' ? emptyLineMoneySnapshot() : snapshotMoney(device)),
+    ...(fallbackAction === 'repair' ? emptyLineMoneySnapshot() : withLinePrice(snapshotMoney(device), item)),
   };
 }
 
@@ -245,7 +255,7 @@ function normalizeTaskServiceLine(db: Db, item: any, index: any = 0) {
     notes,
     quantity,
     sort_order: index,
-    ...snapshotMoney(service),
+    ...withLinePrice(snapshotMoney(service), item),
   };
 }
 

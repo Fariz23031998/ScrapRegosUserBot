@@ -41,17 +41,17 @@ function normalizeCostInput(input: any = {}) {
   return { cost_amount, cost_currency };
 }
 
-function normalizePriceInput(input: any = {}) {
+function normalizePriceInput(input: any = {}, { allowEmpty = false }: Unchecked = {}) {
   const price_uzs = parseNonNegativeAmount(input.price_uzs, { allowNull: true });
   const price_usd = parseNonNegativeAmount(input.price_usd, { allowNull: true });
-  if (price_uzs == null && price_usd == null) throw new Error('INVALID_PRICE');
+  if (!allowEmpty && price_uzs == null && price_usd == null) throw new Error('INVALID_PRICE');
   return { price_uzs, price_usd };
 }
 
 function normalizeMoneyInput(input: any = {}) {
   return {
     ...normalizeCostInput(input),
-    ...normalizePriceInput(input),
+    ...normalizePriceInput(input, { allowEmpty: true }),
   };
 }
 
