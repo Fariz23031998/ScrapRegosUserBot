@@ -124,8 +124,9 @@ function parsePlanHeaders(theadHtml?: any) {
     const name = nameMatch ? stripTags(nameMatch[1]) : null;
     if (!name) continue;
 
+    // Legacy: price-matrix__*; current site: pricing-*
     const amounts = [...cell.matchAll(
-      /<span class="price-matrix__amount">\s*([^<]+)\s*<\/span>[\s\S]*?<span class="price-matrix__note">\s*([^<]+)\s*<\/span>/gi
+      /<span class="(?:price-matrix__amount|pricing-amount)">\s*([^<]+)\s*<\/span>[\s\S]*?<span class="(?:price-matrix__note|pricing-note)">\s*([^<]+)\s*<\/span>/gi
     )];
 
     let monthlyPrice: any = null;
@@ -168,22 +169,31 @@ function parseLimitRows(tbodyHtml?: any, planCount?: any) {
 }
 
 function parseExtras(html?: any) {
-  const tableMatch = String(html || '').match(/<table[^>]*class="[^"]*price-table[^"]*"[^>]*>([\s\S]*?)<\/table>/i);
+  // Legacy: price-table; current site: pricing-service (first extras table under REGOS tab).
+  const tableMatch = String(html || '').match(
+    /<table[^>]*class="[^"]*(?:price-table|pricing-service)[^"]*"[^>]*>([\s\S]*?)<\/table>/i
+  );
   if (!tableMatch) return {};
 
   const extras: Unchecked = {};
   const rows = [...tableMatch[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)];
   for (const row of rows) {
-    if (/price-table__category/i.test(row[0])) continue;
-    const nameMatch = row[1].match(/price-table__name[^>]*>([\s\S]*?)<\/td>/i);
-    if (!nameMatch) continue;
-    const name = stripTags(nameMatch[1]);
+    if (/(?:price-table__category|pricing-category)/i.test(row[0])) continue;
+
+    const cells = [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)];
+    if (cells.length < 2) continue;
+
+    const namedCell = row[1].match(/price-table__name[^>]*>([\s\S]*?)<\/td>/i);
+    const name = stripTags(namedCell ? namedCell[1] : cells[0][1]);
     const keyInfo = EXTRA_NAME_KEYS.find((item?: any) => item.match.test(name));
     if (!keyInfo) continue;
 
-    const cells = [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)];
-    // name, connect, period
-    const periodText = cells[2] ? stripTags(cells[2][1]) : '';
+    // name, connect, period — period is last column when present
+    const periodText = cells[2]
+      ? stripTags(cells[2][1])
+      : cells.length === 2
+        ? stripTags(cells[1][1])
+        : '';
     const periodPrice = parseMoneyAmount(periodText);
     if (periodPrice == null) continue;
     extras[keyInfo.key] = {
@@ -200,8 +210,9 @@ function parseExtras(html?: any) {
  * @param {string} html
  */
 function parseRegosPricePage(html?: any) {
+  // Legacy: price-matrix; current site (regos.uz/ru/price): pricing-comparison
   const matrixMatch = String(html || '').match(
-    /<table[^>]*class="[^"]*price-matrix[^"]*"[^>]*>([\s\S]*?)<\/table>/i
+    /<table[^>]*class="[^"]*(?:price-matrix|pricing-comparison)[^"]*"[^>]*>([\s\S]*?)<\/table>/i
   );
   if (!matrixMatch) {
     throw new Error('regos price page: price-matrix table not found');

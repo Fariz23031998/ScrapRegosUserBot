@@ -110,17 +110,58 @@ const SAMPLE_PRICE_HTML = `
 </table>
 `;
 
+const SAMPLE_PRICE_HTML_V2 = `
+<table class="pricing-comparison">
+  <thead>
+    <tr>
+      <th></th>
+      <th scope="col"><strong>Start</strong><span class="pricing-amount">69 000</span><span class="pricing-currency">сум/мес</span><span class="pricing-note">при оплате за месяц</span></th>
+      <th scope="col"><strong>Basic</strong><span class="pricing-amount">149 000</span><span class="pricing-currency">сум/мес</span><span class="pricing-note">при оплате за месяц</span></th>
+      <th scope="col" class="pricing-featured"><strong>Plus</strong><span class="pricing-amount">254 600</span><span class="pricing-currency">сум/мес</span><span class="pricing-note">при оплате за год</span><span class="pricing-amount">299 000</span><span class="pricing-currency">сум/мес</span><span class="pricing-note">при оплате за месяц</span></th>
+      <th scope="col"><strong>Pro</strong><span class="pricing-amount">687 200</span><span class="pricing-currency">сум/мес</span><span class="pricing-note">при оплате за год</span><span class="pricing-amount">859 000</span><span class="pricing-currency">сум/мес</span><span class="pricing-note">при оплате за месяц</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">Количество предприятий</th><td>1</td><td>1</td><td class="pricing-featured">1</td><td>1</td></tr>
+    <tr><th scope="row">Количество складов</th><td>1</td><td>1</td><td class="pricing-featured">1</td><td>5</td></tr>
+    <tr><th scope="row">Количество касс</th><td>1</td><td>1</td><td class="pricing-featured">1</td><td>5</td></tr>
+    <tr><th scope="row">Количество пользователей</th><td>2</td><td>3</td><td class="pricing-featured">10</td><td>15</td></tr>
+    <tr><th scope="row">Место на диске под файлы</th><td>50 мб</td><td>512 мб</td><td class="pricing-featured">1024 мб</td><td>2048 мб</td></tr>
+    <tr><th scope="row">Период отображения данных</th><td>6 мес</td><td>6 мес</td><td class="pricing-featured">12 мес</td><td>24 мес</td></tr>
+  </tbody>
+</table>
+<table class="pricing-service">
+  <thead><tr><th scope="col">Наименование</th><th scope="col">Стоимость подключения</th><th scope="col">Стоимость за период</th></tr></thead>
+  <tbody>
+    <tr class="pricing-category"><th colspan="3">Тарифные услуги</th></tr>
+    <tr><td>Доп. предприятие</td><td>Бесплатно</td><td>60 000 сум/мес</td></tr>
+    <tr><td>Доп. склад</td><td>Бесплатно</td><td>30 000 сум/мес</td></tr>
+    <tr><td>Доп. касса</td><td>Бесплатно</td><td>30 000 сум/мес</td></tr>
+    <tr><td>Доп. пользователь</td><td>Бесплатно</td><td>25 000 сум/мес</td></tr>
+    <tr><td>Доп. место на диске (+512 Мб)</td><td>Бесплатно</td><td>65 000 сум/мес</td></tr>
+    <tr><td>Доп. период отображения данных (+ 6 мес.)</td><td>Бесплатно</td><td>32 500 сум/мес</td></tr>
+  </tbody>
+</table>
+`;
+
+function assertParsedCatalog(catalog: any) {
+  assert.equal(catalog.plans.Basic.monthlyPrice, 149000);
+  assert.equal(catalog.plans.Plus.monthlyPrice, 299000);
+  assert.equal(catalog.plans.Plus.yearlyMonthlyPrice, 254600);
+  assert.equal(catalog.plans.Pro.monthlyPrice, 859000);
+  assert.equal(catalog.plans.Basic.included.users, 3);
+  assert.equal(catalog.plans.Basic.included.diskMb, 512);
+  assert.equal(catalog.extras.cashRegisters.periodPrice, 30000);
+  assert.equal(catalog.extras.diskMb.unitSize, 512);
+}
+
 describe('parseRegosPricePage', () => {
-  it('parses monthly plan prices, included limits and extras', () => {
-    const catalog = parseRegosPricePage(SAMPLE_PRICE_HTML);
-    assert.equal(catalog.plans.Basic.monthlyPrice, 149000);
-    assert.equal(catalog.plans.Plus.monthlyPrice, 299000);
-    assert.equal(catalog.plans.Plus.yearlyMonthlyPrice, 254600);
-    assert.equal(catalog.plans.Pro.monthlyPrice, 859000);
-    assert.equal(catalog.plans.Basic.included.users, 3);
-    assert.equal(catalog.plans.Basic.included.diskMb, 512);
-    assert.equal(catalog.extras.cashRegisters.periodPrice, 30000);
-    assert.equal(catalog.extras.diskMb.unitSize, 512);
+  it('parses monthly plan prices, included limits and extras (legacy markup)', () => {
+    assertParsedCatalog(parseRegosPricePage(SAMPLE_PRICE_HTML));
+  });
+
+  it('parses monthly plan prices, included limits and extras (pricing-* markup)', () => {
+    assertParsedCatalog(parseRegosPricePage(SAMPLE_PRICE_HTML_V2));
   });
 });
 

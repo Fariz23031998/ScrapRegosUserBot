@@ -107,16 +107,22 @@ function formatTariffInfoMessage(overview: any, calc: any, { apiLogin = null }: 
 }
 
 async function buildTariffInfoReply(draft?: any) {
-  const [overview, catalog] = await Promise.all([
-    liveGetPartnerAccountDetail(draft.accountId, draft.accountLabel),
-    getRegosPriceCatalog(),
-  ]);
+  const overview = await liveGetPartnerAccountDetail(draft.accountId, draft.accountLabel);
+
+  let catalog: any = null;
+  try {
+    catalog = await getRegosPriceCatalog();
+  } catch (err: any) {
+    console.error('[tariff-info] price catalog failed:', err.message || err);
+  }
 
   const tariffName = overview.tariff || draft.tariff || null;
-  const calc = calculateTariffMonthlyTotal(
-    { tariffName, limits: overview.limits || [] },
-    catalog
-  );
+  const calc = catalog
+    ? calculateTariffMonthlyTotal(
+        { tariffName, limits: overview.limits || [] },
+        catalog
+      )
+    : { ok: false, reason: 'catalog_unavailable', total: null, lines: [] };
 
   return formatTariffInfoMessage(overview, calc, {
     apiLogin: draft.apiLogin || null,
