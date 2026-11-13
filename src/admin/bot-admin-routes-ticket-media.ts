@@ -13,6 +13,7 @@ import { ticketEventHub } from './ticket-events';
 import { CHAT_MESSAGE_JSON_LIMIT, parseChatUploadFiles } from '../ai/chat-uploads';
 import { resolveSessionRegosUserId, buildRegosUserNameMap, auditAdminChange } from './bot-admin-shared';
 import { collectMessageFileIds, isSafeFileUrl, resolveChatFileContentType, fetchUpstreamMedia } from './bot-admin-media';
+import { serveTicketRecordingCached } from './ticket-recording-file-cache';
 
 export function registerBotAdminTicketMediaRoutes(router: any, deps: { db: Db; resolveChatFiles: (chatId?: any, fileIds?: any) => Promise<any>; getCachedChatFile: (fileId?: any) => any; attachPublicFiles: (messages?: any, filesById?: any) => any; cacheTicketRecordingUrl: (ticket?: any) => any; resolveRecordingUrlFromStore: (ticketId?: any) => any }) {
   const { db, resolveChatFiles, getCachedChatFile, attachPublicFiles, cacheTicketRecordingUrl, resolveRecordingUrlFromStore } = deps;
@@ -41,34 +42,10 @@ export function registerBotAdminTicketMediaRoutes(router: any, deps: { db: Db; r
         return res.status(404).json({ message: 'Запись звонка не найдена.' });
       }
 
-      const range = String(req.headers.range || '').trim();
-      const upstream = await fetchUpstreamMedia(recordingUrl, {
-        range,
+      await serveTicketRecordingCached(req.params.id, recordingUrl, res, {
+        fetchUpstream: (url, opts) => fetchUpstreamMedia(url, opts),
         signal: abortController.signal,
       });
-
-      if (![200, 206].includes(upstream.status) || !upstream.body) {
-        console.error(
-          `[bot-admin] Recording server returned ${upstream.status} for ticket ${req.params.id}`
-        );
-        return res.status(502).json({ message: 'Не удалось загрузить запись звонка.' });
-      }
-
-      res.status(upstream.status);
-      for (const header of [
-        'accept-ranges',
-        'content-length',
-        'content-range',
-        'content-type',
-        'etag',
-        'last-modified',
-      ]) {
-        const value = upstream.headers.get(header);
-        if (value) res.setHeader(header, value);
-      }
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.setHeader('Content-Disposition', 'inline');
-      await pipeline(Readable.fromWeb(upstream.body as any), res);
       return undefined;
     } catch (error: any) {
       if (abortController.signal.aborted) return undefined;

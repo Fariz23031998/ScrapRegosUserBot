@@ -163,7 +163,6 @@ function FieldValue({
           className="ticket-audio__player"
           controls
           preload="metadata"
-          crossOrigin="use-credentials"
           src={ticketRecordingUrl(ticketId)}
         >
           Ваш браузер не поддерживает воспроизведение аудио.

@@ -1224,21 +1224,41 @@ function ActiveTicketBanner({
 
 function RecordingModal({ ticket, onClose }: { ticket: Ticket | null; onClose: () => void }) {
   const playerRef = useRef<HTMLAudioElement>(null);
+  const ticketId = ticket?.id ?? null;
+  const [buffering, setBuffering] = useState(false);
+  // Same-origin proxy: no crossOrigin — credentialed CORS mode can force a full
+  // multi‑MB WAV download and freeze the tab instead of Range streaming.
+  const src = ticketId != null ? ticketRecordingUrl(ticketId) : undefined;
 
   useEffect(() => {
-    if (!ticket && playerRef.current) {
-      playerRef.current.pause();
-      playerRef.current.removeAttribute("src");
-      playerRef.current.load();
-    }
-  }, [ticket]);
+    setBuffering(ticketId != null);
+  }, [ticketId]);
 
   useEffect(() => {
     const player = playerRef.current;
-    if (!ticket || !player) return;
-    const attempt = player.play();
-    if (attempt) void attempt.catch(() => {});
-  }, [ticket]);
+    if (!player || ticketId == null) return;
+
+    let cancelled = false;
+
+    const tryPlay = () => {
+      if (cancelled) return;
+      void player.play().catch(() => {});
+    };
+
+    // Wait until the WAV has buffered enough. Calling play() at readyState 0
+    // was aborted by pause() and canceled the media download (no canplay).
+    player.addEventListener("canplay", tryPlay);
+    if (player.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+      tryPlay();
+    }
+
+    return () => {
+      cancelled = true;
+      player.removeEventListener("canplay", tryPlay);
+      // Do not pause() here: an early pause() aborts play() and cancels the
+      // multi-MB WAV download, so canplay never fires.
+    };
+  }, [ticketId]);
 
   return (
     <Modal title="Запись звонка" open={Boolean(ticket)} onClose={onClose}>
@@ -1247,14 +1267,16 @@ function RecordingModal({ ticket, onClose }: { ticket: Ticket | null; onClose: (
           <p className="ticket-recording-modal__ticket">
             Тикет #{ticket.id} — {ticket.subject || "Без темы"}
           </p>
+          {buffering ? <p className="ticket-recording-modal__ticket">Загрузка записи…</p> : null}
           <audio
             ref={playerRef}
             className="ticket-recording-modal__player"
             controls
-            autoPlay
-            preload="metadata"
-            crossOrigin="use-credentials"
-            src={ticketRecordingUrl(ticket.id)}
+            preload="auto"
+            src={src}
+            onLoadStart={() => setBuffering(true)}
+            onCanPlay={() => setBuffering(false)}
+            onError={() => setBuffering(false)}
           >
             Ваш браузер не поддерживает воспроизведение аудио.
           </audio>

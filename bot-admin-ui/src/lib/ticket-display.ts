@@ -175,6 +175,17 @@ export function hasTicketRecording(ticket: Ticket): boolean {
   return Boolean(getRecordingUrl(ticket));
 }
 
+/**
+ * Client-side <audio> duration probing downloads through the WAV proxy.
+ * Skip when the server already attached local.recording (even with null duration).
+ */
+export function shouldProbeRecordingDuration(ticket: Ticket): boolean {
+  if (getCachedRecordingDuration(ticket) != null) return false;
+  if (!getRecordingUrl(ticket)) return false;
+  if (ticket.local?.recording) return false;
+  return true;
+}
+
 export function collectUnpaidClientPhones(ticket: Ticket): string[] {
   const phones: string[] = [];
   const seen = new Set<string>();
@@ -261,18 +272,22 @@ export function channelDisplayName(
 }
 
 const recordingDurationCache = new Map<string, number>();
+/** Remember failed probes so list re-renders do not re-download multi‑MB WAVs. */
+const recordingDurationFailures = new Set<string>();
 const recordingDurationPromises = new Map<string, Promise<number | null>>();
 
 export function loadRecordingDuration(ticketId: number): Promise<number | null> {
   const key = String(ticketId);
   const cached = recordingDurationCache.get(key);
   if (cached != null) return Promise.resolve(cached);
+  if (recordingDurationFailures.has(key)) return Promise.resolve(null);
   const pending = recordingDurationPromises.get(key);
   if (pending) return pending;
 
   const promise = new Promise<number | null>((resolve) => {
     const audio = new Audio();
-    audio.crossOrigin = "use-credentials";
+    // Same-origin proxy URL: omit crossOrigin so the browser can use Range
+    // requests without a CORS credentialed media mode (which forced full downloads).
     audio.preload = "metadata";
     const timeout = window.setTimeout(() => finish(null), 15_000);
 
@@ -282,10 +297,12 @@ export function loadRecordingDuration(ticketId: number): Promise<number | null> 
       audio.removeEventListener("error", onError);
       audio.removeAttribute("src");
       audio.load();
-      if (duration != null && Number.isFinite(duration)) {
+      if (duration != null && Number.isFinite(duration) && duration > 0) {
         recordingDurationCache.set(key, duration);
+        recordingDurationFailures.delete(key);
         resolve(duration);
       } else {
+        recordingDurationFailures.add(key);
         resolve(null);
       }
     }
@@ -313,6 +330,7 @@ export function loadRecordingDuration(ticketId: number): Promise<number | null> 
 export function seedRecordingDurationCache(ticketId: number, duration: number) {
   if (Number.isFinite(duration) && duration > 0) {
     recordingDurationCache.set(String(ticketId), duration);
+    recordingDurationFailures.delete(String(ticketId));
   }
 }
 

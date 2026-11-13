@@ -257,17 +257,12 @@ function convertCustomerToEmployee(db: Db, userId: any, { displayName, jobTitle,
 function deleteEmployeeUser(db: Db, userId?: any) {
   const user = getBotUserById(db, userId);
   if (!user || user.role !== 'employee') {
-    return false;
+    throw new Error('NOT_FOUND');
   }
-  const orderCount = (
-    db
-      .prepare('SELECT COUNT(*) AS count FROM orders WHERE telegram_id = ?')
-      .get(user.telegram_id) as { count: number } | undefined
-  )?.count;
-  if (orderCount! > 0) {
-    throw new Error('HAS_ORDERS');
+  const result = db.prepare('DELETE FROM bot_users WHERE id = ?').run(userId);
+  if (!result.changes) {
+    throw new Error('NOT_FOUND');
   }
-  db.prepare('DELETE FROM bot_users WHERE id = ?').run(userId);
   return true;
 }
 

@@ -20,6 +20,7 @@ import Modal from "../components/Modal";
 import SimpleTable from "../components/SimpleTable";
 import { useServerTableSort } from "../lib/table-sort";
 import { useConfirm } from "../contexts/ConfirmContext";
+import { useToast } from "../contexts/ToastContext";
 import { useAuth } from "../hooks/useAuth";
 import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
@@ -60,6 +61,7 @@ function formatRegosLabel(user: RegosUser): string {
 
 export default function UsersPage() {
   const { hasPermission } = useAuth();
+  const { pushToast } = useToast();
   const { dateTimeFormat } = useUiPreferences();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
@@ -115,6 +117,7 @@ export default function UsersPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteUser,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["users"] }),
+    onError: (error: Error) => pushToast({ message: error.message, tone: "error" }),
   });
 
   const employeeColumns = useMemo<ColumnDef<BotUser>[]>(

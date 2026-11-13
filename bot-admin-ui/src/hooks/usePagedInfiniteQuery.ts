@@ -1,4 +1,5 @@
 import { keepPreviousData, useInfiniteQuery, type QueryKey } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 export const INFINITE_PAGE_SIZE = 25;
 
@@ -38,7 +39,9 @@ export function usePagedInfiniteQuery<TPage extends PagedPage, TItem>({
     },
   });
 
-  const items = (() => {
+  // Stable while page data is unchanged. Do not depend on getItems/getItemId
+  // identity — callers often pass inline lambdas every render.
+  const items = useMemo(() => {
     const flat = query.data?.pages.flatMap(getItems) ?? [];
     if (!getItemId) return flat;
     const seen = new Set<string | number>();
@@ -48,7 +51,8 @@ export function usePagedInfiniteQuery<TPage extends PagedPage, TItem>({
       seen.add(id);
       return true;
     });
-  })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only recompute when pages change
+  }, [query.data?.pages]);
 
   const pages = query.data?.pages;
   const total = pages?.[pages.length - 1]?.total ?? pages?.[0]?.total ?? 0;

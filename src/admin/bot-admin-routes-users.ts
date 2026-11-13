@@ -437,9 +437,6 @@ export function registerBotAdminUserRoutes(router: any, deps: { db: Db }) {
       if (error.message === 'NOT_FOUND') {
         return res.status(404).json({ message: 'Пользователь не найден.' });
       }
-      if (error.message === 'HAS_ORDERS') {
-        return res.status(409).json({ message: 'Нельзя удалить сотрудника с созданными заказами.' });
-      }
       console.error('Delete employee error:', error);
       return res.status(500).json({ message: 'Не удалось удалить пользователя.' });
     }
