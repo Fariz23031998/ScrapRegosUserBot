@@ -44,6 +44,13 @@ describe('classifyProbeResponse', () => {
       'error'
     );
   });
+
+  it('treats a vcr1 login probe error as an expired session', () => {
+    assert.equal(
+      classifyThrownProbe(new Error('vcr1 Partners/Get returned login/HTML (session expired)')),
+      'expired'
+    );
+  });
 });
 
 describe('session keepalive worker', () => {

@@ -1,5 +1,6 @@
 import type { Unchecked } from '../types/unchecked';
 import { VCR1_BASE_URL } from './regos-auth';
+import { readVcr1ApiText } from './vcr1-http';
 
 const LICENSES_GET_URL = `${VCR1_BASE_URL}/Licenses/Get`;
 const LICENSES_REFERER = `${VCR1_BASE_URL}/Licenses/Index`;
@@ -75,14 +76,7 @@ async function fetchVcr1LicensesPage(
     timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   });
 
-  if (!response.ok()) {
-    throw new Error(`vcr1 Licenses/Get failed with status ${response.status()}`);
-  }
-
-  const text = await response.text();
-  if (text.trimStart().startsWith('<!')) {
-    throw new Error('vcr1 Licenses/Get returned login/HTML (session expired)');
-  }
+  const text = await readVcr1ApiText(request, response, 'Licenses/Get');
   return assertLicensesResponse(JSON.parse(text));
 }
 

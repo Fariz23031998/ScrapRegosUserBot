@@ -11,8 +11,16 @@ async function bootstrapRegosSession(accountLabel: any, { headless = true }: Unc
   const page = await context.newPage();
   try {
     await ensureRegosSession(context, page, { ...credentials, accountLabel });
-    await ensureEasyTradeSession(page).catch(() => {});
-    await ensureVcr1PartnersIndex(page, accountLabel).catch(() => {});
+    await ensureEasyTradeSession(page).catch((err: any) => {
+      console.error(
+        `[bootstrap] ${accountLabel} EasyTrade session skipped: ${String(err?.message || err).split('\n')[0]}`
+      );
+    });
+    await ensureVcr1PartnersIndex(page, accountLabel).catch((err: any) => {
+      console.error(
+        `[bootstrap] ${accountLabel} vcr1 session skipped: ${String(err?.message || err).split('\n')[0]}`
+      );
+    });
     const statePath = await persistRegosAuthState(context, accountLabel);
     const storageState = await context.storageState();
     return { statePath, storageState };
