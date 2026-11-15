@@ -94,13 +94,17 @@ export function registerBotAdminSessionRoutes(router: any, deps: { db: Db }) {
   });
 
   router.get('/api/session', (req: Request, res: Response) => {
-    if (!getAdminCredentials()) {
+    const creds = getAdminCredentials();
+    if (!creds) {
       return res.status(503).json({ message: 'Admin credentials are not configured.' });
     }
     const actor = getSessionActor(req);
     if (!actor) {
       return res.status(401).json({ message: 'Требуется вход в систему.' });
     }
+
+    // Re-issue cookie so media elements keep working even if the tab only had Bearer.
+    setSessionCookie(res, creds, actor);
 
     let botUser: any = null;
     if (actor.type === 'telegram') {

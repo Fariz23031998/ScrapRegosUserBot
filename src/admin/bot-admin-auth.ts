@@ -121,7 +121,15 @@ function getSessionToken(req: Request) {
 
   const cookieHeader = req.headers.cookie || '';
   const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
-  return match ? decodeSessionTokenValue(match[1]) : null;
+  if (match) return decodeSessionTokenValue(match[1]);
+
+  // <audio>/<video>/<img> cannot send Authorization; media URLs may carry the
+  // same session token as a query param when the HttpOnly cookie is missing.
+  const queryToken = (req.query as Unchecked)?.access_token;
+  if (typeof queryToken === 'string' && queryToken.trim()) {
+    return decodeSessionTokenValue(queryToken.trim());
+  }
+  return null;
 }
 
 function getSessionActor(req: Request) {
@@ -231,16 +239,26 @@ function getSessionPermissions(db: Db, actor?: any) {
   return permissions;
 }
 
+function refreshSessionCookie(res: Response, actor?: any) {
+  const creds = getAdminCredentials();
+  if (!creds || !actor) return;
+  setSessionCookie(res, creds, actor);
+}
+
 function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
   const creds = getAdminCredentials();
   if (!creds) {
     return respondMissingCredentials(req, res);
   }
 
-  if (!isAuthenticated(req)) {
+  const actor = getSessionActor(req);
+  if (!actor) {
     return respondUnauthorized(req, res);
   }
 
+  // Keep HttpOnly cookie in sync with Bearer/sessionStorage so <audio>/<img>
+  // media requests (which cannot send Authorization) keep working after Max-Age.
+  refreshSessionCookie(res, actor);
   return next();
 }
 
@@ -260,6 +278,7 @@ function requireRight(db: Db, rightKey?: any) {
       return respondForbidden(req, res);
     }
 
+    refreshSessionCookie(res, actor);
     return next();
   };
 }
@@ -281,6 +300,7 @@ function requireAnyRight(db: Db, rightKeys?: any) {
       return respondForbidden(req, res);
     }
 
+    refreshSessionCookie(res, actor);
     return next();
   };
 }

@@ -1,3 +1,4 @@
+import { withSessionAccessToken } from "../api/session-token";
 import { apiUrl } from "./api-url";
 import type { Ticket, TicketFirmLink, TicketLocalData } from "./types";
 import { formatDateObject, loadTicketPeriodDays, normalizeTicketPeriodDays } from "./ui-preferences";
@@ -318,7 +319,9 @@ export function loadRecordingDuration(ticketId: number): Promise<number | null> 
 
     audio.addEventListener("loadedmetadata", onLoaded, { once: true });
     audio.addEventListener("error", onError, { once: true });
-    audio.src = apiUrl(`/bot-admin/api/tickets/${encodeURIComponent(key)}/recording`);
+    audio.src = withSessionAccessToken(
+      apiUrl(`/bot-admin/api/tickets/${encodeURIComponent(key)}/recording`),
+    );
   }).finally(() => {
     recordingDurationPromises.delete(key);
   });

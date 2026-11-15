@@ -16,3 +16,11 @@ export function setStoredSessionToken(token: string | null | undefined) {
     // private mode / quota
   }
 }
+
+/** For <audio>/<img> media that cannot send Authorization after the cookie expires. */
+export function withSessionAccessToken(url: string): string {
+  const token = getStoredSessionToken();
+  if (!token) return url;
+  const join = url.includes("?") ? "&" : "?";
+  return `${url}${join}access_token=${encodeURIComponent(token)}`;
+}

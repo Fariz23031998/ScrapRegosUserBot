@@ -1,5 +1,6 @@
 import { apiUrl } from "../lib/api-url";
 import { apiFetch } from "./client";
+import { withSessionAccessToken } from "./session-token";
 import type {
   Ticket,
   TicketDetail,
@@ -215,12 +216,16 @@ export function saveChannelSettings(channels: Array<{ id: number; interaction_mo
 }
 
 export function ticketRecordingUrl(id: number) {
-  return apiUrl(`/bot-admin/api/tickets/${encodeURIComponent(String(id))}/recording`);
+  return withSessionAccessToken(
+    apiUrl(`/bot-admin/api/tickets/${encodeURIComponent(String(id))}/recording`),
+  );
 }
 
 export function ticketFileUrl(ticketId: number | string, fileId: number | string) {
-  return apiUrl(
-    `/bot-admin/api/tickets/${encodeURIComponent(String(ticketId))}/files/${encodeURIComponent(String(fileId))}`,
+  return withSessionAccessToken(
+    apiUrl(
+      `/bot-admin/api/tickets/${encodeURIComponent(String(ticketId))}/files/${encodeURIComponent(String(fileId))}`,
+    ),
   );
 }
 
