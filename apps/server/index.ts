@@ -10,6 +10,8 @@ import { verifyClickSignature, isClickPaymentEnabled } from '../../src/payments/
 import { syncPaymeReceiptStatus } from '../../src/payments/payme-receipts';
 import { startPaymeReceiptReconciler } from '../../src/payments/payme-reconcile';
 import { startTaskReminderWorker } from '../../src/bot/task-reminder';
+import { getVideoTimelineWorker } from '../../src/ai/video-timeline-worker';
+import { getChatFilesByIds } from '../../src/integrations/regos-crm';
 import { getPaymentOptionsForOrder, getPublicDir, isOrderId } from '../../src/payments/payments-api';
 import { createBotAdminRouter } from '../../src/admin/bot-admin';
 import { attachSmsGateway } from '../../src/sms/sms-gateway-ws';
@@ -219,6 +221,8 @@ attachPrintGateway(server, { db });
 
 const paymeReconciler = startPaymeReceiptReconciler(db);
 const taskReminderWorker = startTaskReminderWorker(db);
+const videoTimelineWorker = getVideoTimelineWorker(db, { getChatFilesByIds });
+videoTimelineWorker.resume();
 
 server.listen(port, () => {
   const adminConfigured = Boolean(

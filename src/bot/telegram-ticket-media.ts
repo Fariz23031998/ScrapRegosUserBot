@@ -1,6 +1,14 @@
 import type { Unchecked } from '../types/unchecked';
 import type TelegramBot from 'node-telegram-bot-api';
-import { isChatImage, isChatAudio, isChatVideo, MAX_FILE_BYTES, MAX_AUDIO_FILE_BYTES, DOWNLOAD_TIMEOUT_MS } from '../ai/chat-media';
+import {
+  isChatImage,
+  isChatAudio,
+  isChatVideo,
+  MAX_FILE_BYTES,
+  MAX_AUDIO_FILE_BYTES,
+  MAX_VIDEO_FILE_BYTES,
+  DOWNLOAD_TIMEOUT_MS,
+} from '../ai/chat-media';
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -18,10 +26,14 @@ const MIME_EXTENSIONS: Record<string, string> = {
   'audio/wav': 'wav',
   'audio/x-wav': 'wav',
   'audio/webm': 'weba',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'video/quicktime': 'mov',
 };
 
 const IMAGE_FALLBACK_TEXT = 'Фото из Telegram';
 const AUDIO_FALLBACK_TEXT = 'Голосовое сообщение из Telegram';
+const VIDEO_FALLBACK_TEXT = 'Видео из Telegram';
 
 function extensionFromName(name?: any) {
   const base = String(name || '').split(/[\\/]/).pop() || '';
@@ -67,12 +79,14 @@ function pickLargestPhoto(photos: any, maxBytes: any = MAX_FILE_BYTES) {
 }
 
 function maxBytesForKind(kind?: any) {
-  return kind === 'audio' ? MAX_AUDIO_FILE_BYTES : MAX_FILE_BYTES;
+  if (kind === 'audio') return MAX_AUDIO_FILE_BYTES;
+  if (kind === 'video') return MAX_VIDEO_FILE_BYTES;
+  return MAX_FILE_BYTES;
 }
 
 function classifyTelegramMedia(msg?: any) {
-  if (msg?.video || msg?.video_note || msg?.animation) {
-    return { status: 'video', attachments: [], text: '' };
+  if (msg?.animation) {
+    return { status: 'unsupported', attachments: [], text: '' };
   }
 
   if (msg?.sticker) {
@@ -80,6 +94,40 @@ function classifyTelegramMedia(msg?: any) {
   }
 
   const attachments: any[] = [];
+
+  if (msg?.video?.file_id) {
+    const name = String(msg.video.file_name || '').trim() || 'video.mp4';
+    const extension = resolveExtension({
+      name,
+      mimeType: msg.video.mime_type,
+      fallback: 'mp4',
+    });
+    attachments.push({
+      kind: 'video',
+      fileId: msg.video.file_id,
+      name: extensionFromName(name) ? name : `video.${extension}`,
+      extension,
+      mime_type: msg.video.mime_type || 'video/mp4',
+      width: msg.video.width,
+      height: msg.video.height,
+      durationMs: msg.video.duration != null ? Number(msg.video.duration) * 1000 : undefined,
+      fileSize: msg.video.file_size,
+      fallbackText: VIDEO_FALLBACK_TEXT,
+    });
+  }
+
+  if (msg?.video_note?.file_id) {
+    attachments.push({
+      kind: 'video',
+      fileId: msg.video_note.file_id,
+      name: 'video_note.mp4',
+      extension: 'mp4',
+      mime_type: 'video/mp4',
+      durationMs: msg.video_note.duration != null ? Number(msg.video_note.duration) * 1000 : undefined,
+      fileSize: msg.video_note.file_size,
+      fallbackText: VIDEO_FALLBACK_TEXT,
+    });
+  }
 
   if (Array.isArray(msg?.photo) && msg.photo.length) {
     const photo = pickLargestPhoto(msg.photo);
@@ -133,9 +181,16 @@ function classifyTelegramMedia(msg?: any) {
   if (msg?.document) {
     const file = documentDescriptor(msg.document);
     if (isChatVideo(file) || String(file.mime_type || '').startsWith('video/')) {
-      return { status: 'video', attachments: [], text: '' };
-    }
-    if (isChatImage(file)) {
+      attachments.push({
+        kind: 'video',
+        fileId: msg.document.file_id,
+        name: file.name || 'video.mp4',
+        extension: file.extension || 'mp4',
+        mime_type: file.mime_type || 'video/mp4',
+        fileSize: msg.document.file_size,
+        fallbackText: VIDEO_FALLBACK_TEXT,
+      });
+    } else if (isChatImage(file)) {
       attachments.push({
         kind: 'image',
         fileId: msg.document.file_id,
@@ -263,6 +318,7 @@ async function uploadTelegramAttachments({ bot, chatId, attachments, deps = {} }
 export {
   IMAGE_FALLBACK_TEXT,
   AUDIO_FALLBACK_TEXT,
+  VIDEO_FALLBACK_TEXT,
   classifyTelegramMedia,
   pickLargestPhoto,
   downloadTelegramFile,

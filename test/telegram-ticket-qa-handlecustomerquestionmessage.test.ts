@@ -7,7 +7,7 @@ import { openDb } from '../src/db/partners-db';
 import { loadTelegramTicketSettings, saveTelegramTicketSettings, serializeTelegramTicketSettings, isTelegramTicketConfigured } from '../src/bot/telegram-ticket-settings';
 import { getTelegramTicketSession, upsertTelegramTicketSession, clearTelegramTicketSession, getTelegramTicketSessionByTicketId, getTelegramTicketSessionByChatId } from '../src/db/telegram-ticket-sessions';
 import { createClient, findClientByPhone, phonesEqual } from '../src/integrations/regos-crm';
-import { handleCustomerQuestionMessage, ensureOpenTicket, VIDEO_NOT_SUPPORTED_TEXT } from '../src/bot/customer-question-bot';
+import { handleCustomerQuestionMessage, ensureOpenTicket } from '../src/bot/customer-question-bot';
 import { classifyTelegramMedia, IMAGE_FALLBACK_TEXT, AUDIO_FALLBACK_TEXT } from '../src/bot/telegram-ticket-media';
 import { resolveRegosClient } from '../src/bot/regos-client-resolve';
 import { ensureCustomerRegosOnStart, MSG_CLIENT_FOUND, MSG_CLIENT_ALREADY_REGISTERED, MSG_CLIENT_CREATED, MSG_CLIENT_FALLBACK, MSG_CLIENT_FAILED, MSG_CLIENT_NOT_REGISTERED } from '../src/bot/customer-start-bot';
@@ -422,7 +422,7 @@ describe('handleCustomerQuestionMessage', () => {
     assert.equal(sent[0].text, 'Услышал вопрос по кассе.');
   });
 
-  it('rejects video and video_note without creating a ticket', async () => {
+  it('accepts video and enqueues timeline processing', async () => {
     createDb();
     saveTelegramTicketSettings(db, {
       enabled: true,
@@ -430,35 +430,74 @@ describe('handleCustomerQuestionMessage', () => {
       subject: 'Вопрос из Telegram',
     });
 
-    for (const extra of [{ video: { file_id: 'vid' } }, { video_note: { file_id: 'round' } }]) {
-      const sent: any[] = [];
-      let created = false;
-      let uploaded = false;
-      const bot = {
-        sendMessage: async (_chatId?: any, text?: any) => {
-          sent.push(text);
+    const sent: any[] = [];
+    const uploaded: any[] = [];
+    const enqueued: any[] = [];
+    const bot = {
+      sendMessage: async (chatId?: any, text?: any) => {
+        sent.push({ chatId, text });
+      },
+      sendChatAction: async () => {},
+    };
+
+    const consumed = await handleCustomerQuestionMessage(
+      (bot as any),
+      {
+        chat: { id: 504 },
+        from: { id: 504 },
+        caption: 'ошибка на экране',
+        video: {
+          file_id: 'vid-1',
+          duration: 8,
+          mime_type: 'video/mp4',
+          file_size: 5000,
         },
-      };
-      const consumed = await handleCustomerQuestionMessage(
-        (bot as any),
-        { chat: { id: 504 }, from: { id: 504 }, ...extra },
-        { phone: '998901112233' },
-        db,
-        {
-          createTicket: async () => {
-            created = true;
-            return { id: 1 };
+      },
+      { phone: '998901112233' },
+      db,
+      {
+        findClientByPhone: async () => ({
+          status: 'matched',
+          client: { id: 9, phone: '998901112233' },
+        }),
+        createTicket: async () => ({ id: 94 }),
+        findTicketById: async () => ({
+          id: 94,
+          status: 'Open',
+          chat_id: 'chat-94',
+          client_id: 9,
+        }),
+        setTicketParticipants: async () => ({}),
+        downloadTelegramFile: async (attachment?: any) => {
+          assert.equal(attachment.fileId, 'vid-1');
+          assert.equal(attachment.kind, 'video');
+          return Buffer.from('fake-mp4');
+        },
+        addChatFile: async (payload?: any) => {
+          uploaded.push(payload);
+          return { ok: true, file_id: 101 };
+        },
+        addTicketMessage: async () => ({ ok: true, id: 'msg-video' }),
+        handleCustomerChatMessage: async () => ({
+          handled: true,
+          reply: 'Смотрю ваше видео.',
+        }),
+        resolveAiAuthorUserId: () => 31,
+        getVideoTimelineWorker: () => ({
+          enqueue: (fileId?: any, meta?: any) => {
+            enqueued.push({ fileId, meta });
+            return { file_id: fileId, status: 'pending' };
           },
-          addChatFile: async () => {
-            uploaded = true;
-            return { ok: true, file_id: 1 };
-          },
-        }
-      );
-      assert.equal(consumed, true);
-      assert.equal(sent[0], VIDEO_NOT_SUPPORTED_TEXT);
-      assert.equal(created, false);
-      assert.equal(uploaded, false);
-    }
+        }),
+      }
+    );
+
+    assert.equal(consumed, true);
+    assert.equal(uploaded[0].name, 'video.mp4');
+    assert.equal(uploaded[0].extension, 'mp4');
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].fileId, 101);
+    assert.equal(enqueued[0].meta.ticketId, 94);
+    assert.equal(sent[0].text, 'Смотрю ваше видео.');
   });
 });

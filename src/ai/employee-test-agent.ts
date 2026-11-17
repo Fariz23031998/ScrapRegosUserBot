@@ -176,13 +176,14 @@ async function runEmployeeTestAgent({
     let chatSnapshot = '';
     if (ticket?.chat_id) {
       const context = await loadCustomerAgentChatContext({
+        db,
         chatId: String(ticket.chat_id),
         historyLimit: settings.historyLimit,
         ticket,
         deps,
       });
       filesById = context.filesById || new Map();
-      chatSnapshot = formatTicketChatSnapshot(context.messages, filesById);
+      chatSnapshot = formatTicketChatSnapshot(context.messages, filesById, db);
     } else {
       chatSnapshot = formatTicketChatSnapshot(
         sessionMessagesAsChat(listCustomerTestMessages(db, session.id)),

@@ -6,6 +6,8 @@ import { listEmployeeUsers } from '../db/bot-users-db';
 import { buildAuditDetails } from '../db/admin-audit-logs';
 import { getSessionActor, actorHasPermission, requireRight, requireAnyRight } from './bot-admin-auth';
 import { createOrder, listOrders, getOrderById, deletePendingOrder, deletePaidCashOrder, markPendingOrderPaidCash } from '../db/partners-db';
+import { isOnlineOrderPaymentTypeCode } from '../db/order-account-credits';
+import { listPaymentTypes } from '../db/payment-types';
 import { addLink as addClientFirmLink } from '../db/client-firm-links';
 import { looksLikePhone, normalizePhone, searchFirmAdmin, getFirmCardByTypeAndId } from '../bot/search-user';
 import { parsePositiveAmount, formatOrderPaymentMessage, afterOrderCreated, createOrderFromContext } from '../bot/service-bot';
@@ -162,6 +164,15 @@ export function registerBotAdminOrderRoutes(router: any, deps: { db: Db }) {
     });
   });
 
+  router.get('/api/orders/payment-types', requireRight(db, 'mark_paid_cash'), (_req: any, res: Response) => {
+    const paymentTypes = listPaymentTypes(db).filter(
+      (item?: any) =>
+        String(item.currency || '').trim().toUpperCase() === 'UZS' &&
+        !isOnlineOrderPaymentTypeCode(item.code)
+    );
+    return res.json({ payment_types: paymentTypes });
+  });
+
   router.get('/api/orders/employees', requireRight(db, 'orders_read'), (_req: any, res: Response) => {
     const employees = listEmployeeUsers(db)
       .filter((user?: any) => user.telegram_id != null)
@@ -220,29 +231,50 @@ export function registerBotAdminOrderRoutes(router: any, deps: { db: Db }) {
     const deleted = deletePaidCashOrder(db, orderId, resolveActorTelegramId(db, req));
     if (!deleted) {
       return res.status(409).json({
-        message: 'Не удалось удалить заказ. Возможно, он не оплачен наличными или уже удалён.',
+        message: 'Не удалось удалить заказ. Возможно, он не оплачен вручную или уже удалён.',
       });
     }
     auditAdminChange(db, req, {
       entityType: 'order',
       entityId: orderId,
       action: 'delete_cash',
-      summary: `Удалён заказ „Наличные“ ${orderId}`,
+      summary: `Удалён заказ с ручной оплатой ${orderId}`,
       details: buildAuditDetails({
         before: snapshotOrderForAudit(existing),
         after: null,
       }),
     });
-    return res.json({ ok: true, message: 'Заказ „Наличные“ удалён.' });
+    return res.json({ ok: true, message: 'Заказ с ручной оплатой удалён.' });
   });
 
-  router.post('/api/orders/:id/paid-cash', requireRight(db, 'mark_paid_cash'), (req: Request, res: Response) => {
+  router.post(
+    '/api/orders/:id/paid-cash',
+    requireRight(db, 'mark_paid_cash'),
+    express.json(),
+    (req: Request, res: Response) => {
     const orderId = String(req.params.id || '').trim();
     if (!orderId) {
       return res.status(400).json({ message: 'Не указан ID заказа.' });
     }
+    const paymentTypeId = req.body?.payment_type_id;
+    if (paymentTypeId == null || paymentTypeId === '') {
+      return res.status(400).json({ message: 'Выберите тип оплаты.' });
+    }
     const existing = getOrderById(db, orderId);
-    const closed = markPendingOrderPaidCash(db, orderId, resolveActorTelegramId(db, req));
+    let closed: boolean;
+    try {
+      closed = markPendingOrderPaidCash(db, orderId, resolveActorTelegramId(db, req), {
+        paymentTypeId,
+      });
+    } catch (error: any) {
+      if (error?.message === 'INVALID_ORDER_PAYMENT_TYPE') {
+        return res.status(400).json({ message: 'Укажите корректный тип оплаты.' });
+      }
+      if (error?.message === 'INVALID_ORDER_PAYMENT_TYPE_CURRENCY') {
+        return res.status(400).json({ message: 'Для ручной оплаты доступны только типы в UZS.' });
+      }
+      throw error;
+    }
     if (!closed) {
       return res.status(409).json({
         message: 'Не удалось закрыть заказ. Возможно, он уже оплачен или удалён.',
@@ -253,13 +285,14 @@ export function registerBotAdminOrderRoutes(router: any, deps: { db: Db }) {
       entityType: 'order',
       entityId: orderId,
       action: 'paid_cash',
-      summary: `Заказ ${orderId} отмечен как оплаченный наличными`,
+      summary: `Заказ ${orderId} отмечен как оплаченный вручную`,
       details: buildAuditDetails({
         before: snapshotOrderForAudit(existing),
         after: snapshotOrderForAudit(updated || { ...existing, status: 'paid', payment_provider: 'cash' }),
+        payment_type_id: Number(paymentTypeId) || paymentTypeId,
       }),
     });
-    return res.json({ ok: true, message: 'Заказ закрыт: оплачено наличными.' });
+    return res.json({ ok: true, message: 'Заказ закрыт: ручная оплата.' });
   });
 
   router.post(

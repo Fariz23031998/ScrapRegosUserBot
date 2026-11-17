@@ -8,16 +8,42 @@ import { getResolvedPrompt } from '../db/ai-prompts';
 import { promptContextFromTicket } from '../db/ai-prompt-variables';
 import { getTicketSummary, listClientTicketSummaries } from '../db/ticket-summaries';
 import { formatPriorSummariesForPrompt, fetchChatMessagesInPeriod, resolveTicketClientId, resolveTicketMessagePeriod } from './ticket-period';
-import { MAX_INLINE_AUDIO, MAX_INLINE_IMAGES, collectMessageFileIds, downloadChatFile, fileDisplayName, formatFileStub, isChatAudio, isVisionImage, messageFileIds, toImageUrlPart } from './chat-media';
+import {
+  MAX_INLINE_AUDIO,
+  MAX_INLINE_IMAGES,
+  collectMessageFileIds,
+  downloadChatFile,
+  fileDisplayName,
+  formatFileStub,
+  isChatAudio,
+  isChatVideo,
+  isVisionImage,
+  messageFileIds,
+  toImageUrlPart,
+} from './chat-media';
 import { formatAudioTranscript, transcribeChatAudio } from './transcribe';
 import { formatImageCaption } from './image-caption';
 import { extractionsByFileId } from '../db/chat-file-extractions';
+import { getVideoJob, videoTimelineStatusStub } from '../db/chat-video-timelines';
+import { enqueueTicketVideos } from './video-timeline-worker';
 import { evaluateCustomerMessageGateWithDb, resolveCustomerTrigger } from './customer-agent-gates';
 
 function filesForMessage(item?: any, filesById?: any) {
   return messageFileIds(item)
     .map((id?: any) => filesById.get(id) || { id })
     .filter(Boolean);
+}
+
+function formatVideoFileStub(file?: any, db?: any) {
+  const stub = formatFileStub(file);
+  if (!db || !isChatVideo(file)) return stub;
+  try {
+    const status = videoTimelineStatusStub(getVideoJob(db, file?.id));
+    if (!status) return stub;
+    return `${stub} (${status})`;
+  } catch {
+    return stub;
+  }
 }
 
 function formatExtractionExtras(files?: any, extractionsById?: any) {
@@ -39,12 +65,25 @@ function formatExtractionExtras(files?: any, extractionsById?: any) {
   return extras;
 }
 
-function formatMessageText(item: any, filesById: any, extractionsById: any = null) {
+function formatMessageText(item: any, filesById: any, extractionsById: any = null, db: any = null) {
   const text = String(item.display_text || item.text || '').trim();
   const files = filesForMessage(item, filesById);
-  const stubs = files.map(formatFileStub);
+  const stubs = files.map((file?: any) => formatVideoFileStub(file, db));
   const extras = formatExtractionExtras(files, extractionsById);
-  return [text, ...stubs, ...extras].filter(Boolean).join('\n');
+  const videoNotes: any[] = [];
+  for (const file of files) {
+    if (!isChatVideo(file) || !db) continue;
+    try {
+      const job = getVideoJob(db, file.id);
+      if (job && (job.status === 'pending' || job.status === 'running')) {
+        videoNotes.push('Видео обрабатывается (таймлайн ещё не готов).');
+        break;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return [text, ...stubs, ...extras, ...videoNotes].filter(Boolean).join('\n');
 }
 
 function toVisionPlaceholder(file?: any) {
@@ -129,7 +168,7 @@ async function buildCustomerModelMessages({
   for (const item of regular) {
     const role = String(item.author_entity_type || '') === 'Client' ? 'user' : 'assistant';
     const isTrigger = trigger && String(item.id) === String(trigger.id);
-    let text = formatMessageText(item, filesById, isTrigger ? null : cache);
+    let text = formatMessageText(item, filesById, isTrigger ? null : cache, db);
 
     if (isTrigger && role === 'user') {
       if (visionMode !== 'placeholder') {
@@ -196,6 +235,7 @@ function buildCustomerContextContent(db: Db, ticket: any, { budgetTokens = SUMMA
 }
 
 async function loadCustomerAgentChatContext({
+  db = null,
   chatId,
   messageId,
   payload,
@@ -227,6 +267,20 @@ async function loadCustomerAgentChatContext({
   const fileIds = collectMessageFileIds(messages);
   const files = fileIds.length ? await getChatFilesByIds(chatId, fileIds) : [];
   const filesById: Map<any, any> = new Map((files || []).map((file?: any) => [Number(file.id), file]));
+
+  const database = db || deps.db || null;
+  if (database && ticket?.id) {
+    try {
+      enqueueTicketVideos(database, {
+        ticketId: ticket.id,
+        chatId,
+        filesById,
+        worker: deps.videoTimelineWorker || null,
+      });
+    } catch (error: any) {
+      console.warn('[ai] Failed to enqueue ticket videos:', error.message || error);
+    }
+  }
 
   return { messages, trigger, filesById, period };
 }
@@ -294,6 +348,7 @@ async function previewCustomerAgentPrompt({ db, ticketId, messageId, deps = {} }
   }
 
   const { messages, trigger, filesById } = await loadCustomerAgentChatContext({
+    db,
     chatId,
     messageId,
     historyLimit: settings.historyLimit,

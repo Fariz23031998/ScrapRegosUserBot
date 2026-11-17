@@ -29,11 +29,11 @@ function authorLabel(item?: any) {
   return type || 'Система';
 }
 
-function formatTicketChatSnapshot(messages?: any, filesById?: any) {
+function formatTicketChatSnapshot(messages?: any, filesById?: any, db: any = null) {
   const lines: any[] = [];
   for (const item of messages || []) {
     if (String(item.message_type || 'Regular') !== 'Regular') continue;
-    const text = formatMessageText(item, filesById);
+    const text = formatMessageText(item, filesById, null, db);
     if (!text) continue;
     lines.push(`${authorLabel(item)}: ${text}`);
   }
@@ -106,13 +106,14 @@ async function assembleTicketAssistPrompt({
   let chatSnapshot = '';
   if (chatId) {
     const context = await loadCustomerAgentChatContext({
+      db,
       chatId,
       historyLimit: settings.historyLimit,
       ticket,
       deps,
     });
     filesById = context.filesById || new Map();
-    chatSnapshot = formatTicketChatSnapshot(context.messages, filesById);
+    chatSnapshot = formatTicketChatSnapshot(context.messages, filesById, db);
   }
   const tools = prepareAgentTools(
     [

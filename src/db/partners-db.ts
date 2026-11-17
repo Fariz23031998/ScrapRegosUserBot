@@ -1,6 +1,7 @@
 import type { Unchecked } from '../types/unchecked';
 import type { Db } from '../types/db';
 import { logOrderEvent } from './order-logs';
+import { creditOrderByPaymentProvider } from './order-account-credits';
 import { resolveListOrderBy } from './list-sort';
 import { getBotUser, getBotUserByTelegramId, getBotUserById, getEmployeeByPhone, findUserByPhone, getBotUsersByPhone, linkEmployeeTelegram, registerCustomer, createEmployeeUser, updateEmployeeUser, deleteEmployeeUser, listEmployeeUsers, getEmployeeWithRights, getUserRights, upsertUserRights, countBotUsers, isLinkedEmployee, getAllUnpaidOrders, deletePendingOrder, deletePaidCashOrder, markPendingOrderPaidCash, getEarningsRows } from './bot-users-db';
 import { partnerFromApiRow, partnerAccountFromApiRow, licenseFromApiRow, vcr1PartnerFromApiRow, vcr1LicenseFromApiRow, partnerFromTableRow, partnerAccountFromTableRow, licenseFromTableRow, rposClientFromRow, rposAccountFromRow } from '../live/mappers';
@@ -307,6 +308,15 @@ function markOrderPaid(
 
     const order = getOrderById(db, orderId);
     if (result.changes > 0 && order) {
+      const paymentProvider = order.payment_provider || provider || null;
+      if (paymentProvider === 'payme' || paymentProvider === 'click') {
+        creditOrderByPaymentProvider(db, {
+          orderId,
+          amount: order.amount,
+          provider: paymentProvider,
+          currency: order.currency || 'UZS',
+        });
+      }
       activateTechnicalSupportFromOrder(db, order, { paidAt: order.paid_at });
       logOrderEvent(db, {
         orderId,
@@ -315,7 +325,7 @@ function markOrderPaid(
         orderAmount: order.amount,
         clientPhone: order.client_phone,
         additionalPhone: order.additional_phone,
-        paymentProvider: order.payment_provider || provider || null,
+        paymentProvider,
       });
     }
 

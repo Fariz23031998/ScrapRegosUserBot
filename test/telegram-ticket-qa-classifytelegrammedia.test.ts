@@ -7,8 +7,8 @@ import { openDb } from '../src/db/partners-db';
 import { loadTelegramTicketSettings, saveTelegramTicketSettings, serializeTelegramTicketSettings, isTelegramTicketConfigured } from '../src/bot/telegram-ticket-settings';
 import { getTelegramTicketSession, upsertTelegramTicketSession, clearTelegramTicketSession, getTelegramTicketSessionByTicketId, getTelegramTicketSessionByChatId } from '../src/db/telegram-ticket-sessions';
 import { createClient, findClientByPhone, phonesEqual } from '../src/integrations/regos-crm';
-import { handleCustomerQuestionMessage, ensureOpenTicket, VIDEO_NOT_SUPPORTED_TEXT } from '../src/bot/customer-question-bot';
-import { classifyTelegramMedia, IMAGE_FALLBACK_TEXT, AUDIO_FALLBACK_TEXT } from '../src/bot/telegram-ticket-media';
+import { handleCustomerQuestionMessage, ensureOpenTicket } from '../src/bot/customer-question-bot';
+import { classifyTelegramMedia, IMAGE_FALLBACK_TEXT, AUDIO_FALLBACK_TEXT, VIDEO_FALLBACK_TEXT } from '../src/bot/telegram-ticket-media';
 import { resolveRegosClient } from '../src/bot/regos-client-resolve';
 import { ensureCustomerRegosOnStart, MSG_CLIENT_FOUND, MSG_CLIENT_ALREADY_REGISTERED, MSG_CLIENT_CREATED, MSG_CLIENT_FALLBACK, MSG_CLIENT_FAILED, MSG_CLIENT_NOT_REGISTERED } from '../src/bot/customer-start-bot';
 import { registerCustomer } from '../src/db/bot-users-db';
@@ -74,16 +74,29 @@ describe('classifyTelegramMedia', () => {
     assert.equal(audioDoc.attachments[0].kind, 'audio');
   });
 
-  it('rejects video, animation, stickers, and other files', () => {
-    assert.equal(classifyTelegramMedia({ video: { file_id: 'x' } }).status, 'video');
-    assert.equal(classifyTelegramMedia({ video_note: { file_id: 'x' } }).status, 'video');
-    assert.equal(classifyTelegramMedia({ animation: { file_id: 'x' } }).status, 'video');
-    assert.equal(
-      classifyTelegramMedia({
-        document: { file_id: 'x', file_name: 'clip.mp4', mime_type: 'video/mp4' },
-      }).status,
-      'video'
-    );
+  it('accepts video, video_note, and video documents; rejects animation/stickers/other', () => {
+    const video = classifyTelegramMedia({
+      caption: 'экран',
+      video: { file_id: 'x', duration: 12, mime_type: 'video/mp4', file_size: 1000 },
+    });
+    assert.equal(video.status, 'media');
+    assert.equal(video.attachments[0].kind, 'video');
+    assert.equal(video.attachments[0].durationMs, 12000);
+    assert.equal(video.fallbackText, VIDEO_FALLBACK_TEXT);
+    assert.equal(video.text, 'экран');
+
+    const note = classifyTelegramMedia({ video_note: { file_id: 'round', duration: 5 } });
+    assert.equal(note.status, 'media');
+    assert.equal(note.attachments[0].kind, 'video');
+    assert.equal(note.attachments[0].name, 'video_note.mp4');
+
+    const videoDoc = classifyTelegramMedia({
+      document: { file_id: 'x', file_name: 'clip.mp4', mime_type: 'video/mp4' },
+    });
+    assert.equal(videoDoc.status, 'media');
+    assert.equal(videoDoc.attachments[0].kind, 'video');
+
+    assert.equal(classifyTelegramMedia({ animation: { file_id: 'x' } }).status, 'unsupported');
     assert.equal(classifyTelegramMedia({ sticker: { file_id: 's' } }).status, 'unsupported');
     assert.equal(
       classifyTelegramMedia({

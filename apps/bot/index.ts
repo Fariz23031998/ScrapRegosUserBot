@@ -22,6 +22,8 @@ import { enrichOrderParties } from '../../src/bot/order-parties';
 import { sendChatActionSafe } from '../../src/bot/telegram-safe';
 import { startSessionKeepalive } from '../../src/live/session-keepalive';
 import { withHtml } from '../../src/bot/telegram-html';
+import { getVideoTimelineWorker } from '../../src/ai/video-timeline-worker';
+import { getChatFilesByIds } from '../../src/integrations/regos-crm';
 
 dotenv.config({ path: envPath() });
 
@@ -33,6 +35,8 @@ if (!token) {
 
 const db = openDb();
 const bot = new TelegramBot(token, { polling: true });
+const videoTimelineWorker = getVideoTimelineWorker(db, { getChatFilesByIds });
+videoTimelineWorker.resume();
 
 const SEARCH_HELP = [
   'Отправьте номер телефона, код лицензии или API-логин для поиска.',

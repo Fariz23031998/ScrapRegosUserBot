@@ -141,6 +141,7 @@ async function handleCustomerChatMessage({
       transcribeFn(file, { db, ticketId: ticket.id, source: 'transcribe', ...options });
 
     const { messages, trigger, filesById } = await loadCustomerAgentChatContext({
+      db,
       chatId: id,
       messageId,
       payload,

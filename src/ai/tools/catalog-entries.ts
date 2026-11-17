@@ -165,6 +165,30 @@ export const AGENT_TOOL_CATALOG = [
     agents: ['customer', 'customer_assist'],
   },
   {
+    name: 'get_video_timeline',
+    title: 'Таймлайн видео',
+    description: 'Статус обработки видео из чата: длительность, число сегментов речи и кадров.',
+    agents: ['customer', 'customer_assist'],
+  },
+  {
+    name: 'search_video_transcript',
+    title: 'Поиск в расшифровке видео',
+    description: 'Найти фрагменты речи в таймлайне видео по подстроке.',
+    agents: ['customer', 'customer_assist'],
+  },
+  {
+    name: 'get_video_window',
+    title: 'Окно видео',
+    description: 'Сегменты речи и ближайшие уникальные кадры за указанный интервал видео.',
+    agents: ['customer', 'customer_assist'],
+  },
+  {
+    name: 'get_video_frame',
+    title: 'Кадр видео',
+    description: 'Загрузить уникальный скриншот из видео по frame_id или времени.',
+    agents: ['customer', 'customer_assist'],
+  },
+  {
     name: 'reply_to_customer',
     title: 'Ответ клиенту',
     description: 'Отправить сообщение клиенту в чат тикета (агент поддержки для сотрудников).',

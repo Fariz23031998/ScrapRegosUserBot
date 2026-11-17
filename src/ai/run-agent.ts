@@ -148,11 +148,20 @@ async function executeTool(tool?: any, args?: any) {
       return { content: result, visionParts: null };
     }
     const visionParts = Array.isArray(result?._visionParts) ? result._visionParts.filter(Boolean) : null;
+    const visionLabel =
+      typeof result?._visionLabel === 'string' && result._visionLabel.trim()
+        ? String(result._visionLabel).trim()
+        : null;
     const rest = result && typeof result === 'object' ? { ...result } : { ok: true };
     delete rest._visionParts;
-    return { content: JSON.stringify(rest), visionParts };
+    delete rest._visionLabel;
+    return { content: JSON.stringify(rest), visionParts, visionLabel };
   } catch (error: any) {
-    return { content: JSON.stringify({ ok: false, error: error.message || 'tool_failed' }), visionParts: null };
+    return {
+      content: JSON.stringify({ ok: false, error: error.message || 'tool_failed' }),
+      visionParts: null,
+      visionLabel: null,
+    };
   }
 }
 
@@ -266,7 +275,10 @@ async function runAgent({
           history.push({
             role: 'user',
             content: [
-              { type: 'text', text: 'Изображение из read_chat_image.' },
+              {
+                type: 'text',
+                text: executed.visionLabel || `Изображение из ${call.name || 'tool'}.`,
+              },
               ...executed.visionParts,
             ],
           });

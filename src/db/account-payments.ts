@@ -11,7 +11,7 @@ const PAYMENT_DIRECTIONS = ['in', 'out'];
 const PAYMENT_SELECT = `
   p.id, p.account_id, p.direction, p.amount, p.currency,
   p.amount_uzs, p.amount_usd, p.usd_uzs_rate, p.note,
-  p.category_id, p.location_id, p.created_by_user_id, p.created_at,
+  p.category_id, p.location_id, p.order_id, p.created_by_user_id, p.created_at,
   a.name AS account_name, a.currency AS account_currency,
   c.name AS category_name,
   loc.name AS location_name,
@@ -60,7 +60,13 @@ function ensureAccountPaymentTables(db: Db) {
   if (!cols.some((col?: any) => col.name === 'location_id')) {
     db.exec('ALTER TABLE account_payments ADD COLUMN location_id INTEGER');
   }
+  if (!cols.some((col?: any) => col.name === 'order_id')) {
+    db.exec('ALTER TABLE account_payments ADD COLUMN order_id TEXT');
+  }
   db.exec('CREATE INDEX IF NOT EXISTS idx_account_payments_location_id ON account_payments(location_id)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_account_payments_order_id ON account_payments(order_id) WHERE order_id IS NOT NULL'
+  );
 }
 
 function authorLabel(row?: any) {
@@ -95,6 +101,7 @@ function mapAccountPayment(row?: any) {
     amount_usd: Number(row.amount_usd) || 0,
     usd_uzs_rate: Number(row.usd_uzs_rate) || 0,
     note: row.note || '',
+    order_id: row.order_id || null,
     ...mapCategoryFields(row),
     location_id: row.location_id ?? null,
     location: row.location_id
@@ -211,6 +218,12 @@ function listAccountPayments(db: Db, filters: any = {}) {
   return db.prepare(sql).all(...params).map(mapAccountPayment);
 }
 
+function normalizePaymentOrderId(value?: any) {
+  if (value == null || value === '') return null;
+  const orderId = String(value).trim();
+  return orderId || null;
+}
+
 function createAccountPayment(db: Db, input: any = {}, { viewer }: Unchecked = {}) {
   ensureAccountPaymentTables(db);
   const account = getAccount(db, input.account_id);
@@ -219,6 +232,7 @@ function createAccountPayment(db: Db, input: any = {}, { viewer }: Unchecked = {
   const amount = normalizePaymentAmount(input.amount);
   const currency = normalizePaymentCurrency(input.currency, account.currency);
   const note = normalizePaymentNote(input.note);
+  const orderId = normalizePaymentOrderId(input.order_id);
   const categoryId = resolveCatalogCategoryId(db, 'finance', input.category_id);
   const locationId = resolveFinanceLocationId(db, input.location_id, viewer);
   const createdAt = normalizePaymentCreatedAt(input.created_at) || sqliteUtcNow();
@@ -230,8 +244,8 @@ function createAccountPayment(db: Db, input: any = {}, { viewer }: Unchecked = {
       `INSERT INTO account_payments (
          account_id, direction, amount, currency,
          amount_uzs, amount_usd, usd_uzs_rate,
-         note, category_id, location_id, created_by_user_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         note, category_id, location_id, order_id, created_by_user_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       account.id,
@@ -244,6 +258,7 @@ function createAccountPayment(db: Db, input: any = {}, { viewer }: Unchecked = {
       note,
       categoryId,
       locationId,
+      orderId,
       Number.isFinite(createdBy) && createdBy > 0 ? createdBy : null,
       createdAt
     );
@@ -316,6 +331,20 @@ function deleteAccountPayment(db: Db, id?: any) {
   return true;
 }
 
+function deleteAccountPaymentsForOrder(db: Db, orderId?: any) {
+  ensureAccountPaymentTables(db);
+  const id = normalizePaymentOrderId(orderId);
+  if (!id) return 0;
+  const rows = db
+    .prepare('SELECT id, account_id FROM account_payments WHERE order_id = ?')
+    .all(id) as { id: number; account_id: number }[];
+  if (!rows.length) return 0;
+  db.prepare('DELETE FROM account_payments WHERE order_id = ?').run(id);
+  const accountIds = [...new Set(rows.map((row) => row.account_id).filter(Boolean))];
+  for (const accountId of accountIds) recalculateAccountValue(db, accountId);
+  return rows.length;
+}
+
 function countAccountPaymentsForAccount(db: Db, accountId?: any) {
   ensureAccountPaymentTables(db);
   if (!tableExists(db, 'account_payments')) return 0;
@@ -334,5 +363,6 @@ export {
   createAccountPayment,
   updateAccountPayment,
   deleteAccountPayment,
+  deleteAccountPaymentsForOrder,
   countAccountPaymentsForAccount,
 };

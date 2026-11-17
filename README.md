@@ -20,6 +20,7 @@ Support status ("Срок технической поддержки истёк")
 ## Requirements
 
 - **Node.js 22+** (the project uses the built-in `node:sqlite` module — no native build step)
+- **ffmpeg / ffprobe** on `PATH` (ticket video timelines: unique screenshots + timed speech for AI agents)
 - **Playwright Chromium** (used only to warm / refresh portal login cookies; not on the search hot path)
 - **Windows** for the bundled service scripts (the app itself is cross-platform; see [docs/server-deploy-linux.md](docs/server-deploy-linux.md) for Linux)
 - Optional: **Redis** if you enable the Android SMS gateway (GETSMS HTTP does not require it)

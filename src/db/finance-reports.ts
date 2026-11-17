@@ -192,6 +192,7 @@ function listAccountPaymentTotalsByLocation(
   }
   appendLocationAccessFilter(where, params, viewer, 'p');
   appendLocationChoiceFilter(where, params, locationId, 'p');
+  where.push('p.order_id IS NULL');
   const sql = `
     SELECT p.location_id, p.direction,
            SUM(p.amount_uzs) AS amount_uzs,

@@ -47,6 +47,14 @@ const DEFAULT_TOOL_DESCRIPTIONS = {
     'Load a chat image by file_id so you can see it. Use for older screenshots listed as [изображение: … #id]. Does not work for audio or video.',
   transcribe_chat_audio:
     'Transcribe a chat voice or audio file by file_id. Use for older voice notes listed as [аудио: … #id]. Does not work for images or video.',
+  get_video_timeline:
+    'Get processing status and counts for a ticket chat video timeline (duration, segment_count, frame_count). Use for [видео: … #id]. If status is processing, wait and retry later; do not invent what was on screen.',
+  search_video_transcript:
+    'Search the timed transcript of a chat video by file_id and query substring. Returns matching segments with start_ms/end_ms.',
+  get_video_window:
+    'Load speech segments and nearby unique screenshot metadata for a time window (start_ms, end_ms) of a chat video. Use get_video_frame to actually see a frame.',
+  get_video_frame:
+    'Load one unique screenshot from a chat video by frame_id or nearest t_ms so you can see it. Prefer frames listed by get_video_window.',
   reply_to_customer:
     'Post a message to the customer in the ticket chat. Use when the employee asked you to answer the client or gave enough guidance to send a customer-facing reply. Do not call this for private notes to the employee.',
   search_devices:

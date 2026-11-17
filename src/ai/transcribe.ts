@@ -106,6 +106,29 @@ function readStoredTranscript(db: Db, file?: any) {
   return null;
 }
 
+function normalizeTranscriptSegments(result?: any, { durationMs = null }: Unchecked = {}) {
+  const segments: any[] = [];
+  const rawSegments = Array.isArray(result?.segments) ? result.segments : [];
+  for (const item of rawSegments) {
+    const text = String(item?.text || '').trim();
+    if (!text) continue;
+    const startSec = Number(item?.start);
+    const endSec = Number(item?.end);
+    const startMs = Number.isFinite(startSec) ? Math.max(0, Math.round(startSec * 1000)) : 0;
+    let endMs = Number.isFinite(endSec) ? Math.max(startMs, Math.round(endSec * 1000)) : startMs;
+    segments.push({ start_ms: startMs, end_ms: endMs, text });
+  }
+  if (segments.length) return segments;
+
+  const text = String(result?.text || '').trim();
+  if (!text) return [];
+  const endMs =
+    durationMs != null && Number.isFinite(Number(durationMs))
+      ? Math.max(0, Math.round(Number(durationMs)))
+      : 0;
+  return [{ start_ms: 0, end_ms: endMs, text }];
+}
+
 async function transcribeAudioBuffer(
   buffer: any,
   { filename = 'audio.ogg', model = DEFAULT_TRANSCRIBE_MODEL, transcribeImpl }: Unchecked = {}
@@ -136,6 +159,77 @@ async function transcribeAudioBuffer(
     return transcript ? { text: transcript } : { skipped: true, reason: 'empty_transcript' };
   } catch (error: any) {
     console.warn('[ai] audio transcription failed:', error.message || error);
+    return { skipped: true, reason: 'transcribe_failed' };
+  }
+}
+
+async function transcribeAudioBufferTimed(
+  buffer: any,
+  {
+    filename = 'audio.wav',
+    model = DEFAULT_TRANSCRIBE_MODEL,
+    durationMs = null,
+    transcribeImpl,
+  }: Unchecked = {}
+) {
+  const data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+  if (!data.length) return { skipped: true, reason: 'empty' };
+  if (data.length > MAX_AUDIO_FILE_BYTES) return { skipped: true, reason: 'too_large' };
+
+  if (typeof transcribeImpl === 'function') {
+    const result = await transcribeImpl({ buffer: data, filename, model, timed: true });
+    if (result?.skipped) return result;
+    if (Array.isArray(result?.segments)) {
+      const segments = normalizeTranscriptSegments(
+        { segments: result.segments, text: result.text },
+        { durationMs }
+      );
+      return segments.length
+        ? { text: segments.map((s) => s.text).join(' ').trim(), segments }
+        : { skipped: true, reason: 'empty_transcript' };
+    }
+    const transcript = String(result?.text ?? result ?? '').trim();
+    if (!transcript) return { skipped: true, reason: 'empty_transcript' };
+    const segments = normalizeTranscriptSegments({ text: transcript }, { durationMs });
+    return { text: transcript, segments };
+  }
+
+  const { apiKey, baseURL } = getOpenAiConfig();
+  if (!apiKey) return { skipped: true, reason: 'no_api_key' };
+
+  try {
+    const OpenAI = require('openai');
+    const { toFile } = OpenAI;
+    const client = new OpenAI({ apiKey, baseURL });
+    const file = await toFile(data, filename);
+    const selectedModel = model || DEFAULT_TRANSCRIBE_MODEL;
+    let result: any;
+    try {
+      result = await client.audio.transcriptions.create({
+        file,
+        model: selectedModel,
+        response_format: 'verbose_json',
+      });
+    } catch (verboseError: any) {
+      // Some models only accept json/text — fall back and store one segment.
+      console.warn(
+        '[ai] verbose_json transcription failed, falling back to text:',
+        verboseError.message || verboseError
+      );
+      const plainFile = await toFile(data, filename);
+      result = await client.audio.transcriptions.create({
+        file: plainFile,
+        model: selectedModel,
+      });
+    }
+    const segments = normalizeTranscriptSegments(result, { durationMs });
+    if (!segments.length) return { skipped: true, reason: 'empty_transcript' };
+    return {
+      text: String(result?.text || segments.map((s) => s.text).join(' ')).trim(),
+      segments,
+    };
+  } catch (error: any) {
+    console.warn('[ai] timed audio transcription failed:', error.message || error);
     return { skipped: true, reason: 'transcribe_failed' };
   }
 }
@@ -199,6 +293,8 @@ function formatAudioTranscript(text?: any) {
 
 export {
   transcribeAudioBuffer,
+  transcribeAudioBufferTimed,
+  normalizeTranscriptSegments,
   transcribeChatAudio,
   formatAudioTranscript,
   clearTranscribeCache,

@@ -8,12 +8,12 @@ import {
   deleteOrder,
   listOrderEmployees,
   listOrders,
-  markPaidCash,
   renotifyOrder,
 } from "../api/admin";
 import EntityCards from "../components/EntityCards";
 import InfiniteScrollSentinel from "../components/InfiniteScrollSentinel";
 import ListFiltersChrome from "../components/ListFiltersChrome";
+import OrderManualPaymentModal from "../components/OrderManualPaymentModal";
 import SimpleTable from "../components/SimpleTable";
 import SummaryBar from "../components/SummaryBar";
 import { useServerTableSort } from "../lib/table-sort";
@@ -232,7 +232,7 @@ function orderActionButtons(
       actions.push({ key: "renotify", label: "Уведомить", icon: Bell });
     }
     if (hasPermission("mark_paid_cash")) {
-      actions.push({ key: "paid-cash", label: "Наличные", icon: Banknote });
+      actions.push({ key: "paid-cash", label: "Ручная оплата", icon: Banknote });
     }
     if (hasPermission("delete_unpaid_order")) {
       actions.push({ key: "delete", label: "Удалить", className: "btn-danger", icon: Trash2 });
@@ -269,6 +269,7 @@ export default function OrdersPage() {
   const [filters, setFilters] = useState(bootstrap);
   const [appliedFilters, setAppliedFilters] = useState(bootstrap);
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
+  const [manualPaymentOrder, setManualPaymentOrder] = useState<Order | null>(null);
 
   const employeesQuery = useQuery({
     queryKey: ["order-employees"],
@@ -302,7 +303,6 @@ export default function OrdersPage() {
     mutationFn: async ({ action, id }: { action: string; id: string }) => {
       if (action === "delete") return deleteOrder(id);
       if (action === "delete-cash") return deleteCashOrder(id);
-      if (action === "paid-cash") return markPaidCash(id);
       if (action === "renotify") return renotifyOrder(id);
       throw new Error("Unknown action");
     },
@@ -310,10 +310,14 @@ export default function OrdersPage() {
   });
 
   async function handleAction(action: string, id: string) {
+    if (action === "paid-cash") {
+      const order = ordersQuery.items.find((item) => item.id === id) || null;
+      setManualPaymentOrder(order);
+      return;
+    }
     const messages: Record<string, string> = {
       delete: "Удалить неоплаченный заказ?",
-      "delete-cash": "Удалить заказ, оплаченный наличными?",
-      "paid-cash": "Отметить заказ как оплаченный наличными?",
+      "delete-cash": "Удалить заказ, оплаченный вручную?",
       renotify: "Повторно отправить уведомление?",
     };
     const ok = await confirm({ message: messages[action] || "Продолжить?" });
@@ -406,6 +410,15 @@ export default function OrdersPage() {
 
   return (
     <section className="card">
+      <OrderManualPaymentModal
+        open={Boolean(manualPaymentOrder)}
+        order={manualPaymentOrder}
+        onClose={() => setManualPaymentOrder(null)}
+        onSaved={() => {
+          setManualPaymentOrder(null);
+          invalidate();
+        }}
+      />
       <SummaryBar
         placeholder={ordersQuery.isPending ? "Загрузка…" : undefined}
         items={

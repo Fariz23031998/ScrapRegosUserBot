@@ -153,6 +153,8 @@ function migrateSchema(db: Db) {
   ensureTicketSummariesTable(db);
   const { ensureChatFileExtractionsTable } = (require('./chat-file-extractions') as typeof import('./chat-file-extractions'));
   ensureChatFileExtractionsTable(db);
+  const { ensureChatVideoTimelineTables } = (require('./chat-video-timelines') as typeof import('./chat-video-timelines'));
+  ensureChatVideoTimelineTables(db);
   const { ensureTicketAiStateTable } = (require('./ticket-ai-state') as typeof import('./ticket-ai-state'));
   ensureTicketAiStateTable(db);
   const { ensureAiCustomerUsageTable } = (require('./ai-customer-usage') as typeof import('./ai-customer-usage'));

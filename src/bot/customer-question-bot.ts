@@ -9,6 +9,7 @@ import { handleCustomerChatMessage, markCustomerMessageProcessed, resolveAiAutho
 import { setBotUserRegosClientId } from '../db/bot-users-db';
 import { sendChatActionSafe } from './telegram-safe';
 import { classifyTelegramMedia, uploadTelegramAttachments } from './telegram-ticket-media';
+import { getVideoTimelineWorker } from '../ai/video-timeline-worker';
 
 const OPEN_TICKET_STATUSES: Set<any> = new Set(['Open', 'WaitingClient', 'WaitingStaff']);
 const SUPPORT_NOT_CONFIGURED_TEXT =
@@ -16,8 +17,6 @@ const SUPPORT_NOT_CONFIGURED_TEXT =
 const COULD_NOT_CREATE_APPEAL_TEXT =
   'Не удалось создать обращение. Попробуйте позже или отправьте /my_unpaid_orders для проверки заказов.';
 const ASK_TEXT_ONLY_TEXT = 'Пожалуйста, опишите вопрос текстом.';
-const VIDEO_NOT_SUPPORTED_TEXT =
-  'Видео не принимаются. Отправьте фото или голосовое сообщение.';
 const MEDIA_UPLOAD_FAILED_TEXT =
   'Не удалось загрузить файл. Попробуйте ещё раз или отправьте текст.';
 
@@ -214,10 +213,6 @@ async function handleCustomerQuestionMessage(bot: TelegramBot, msg: any, botUser
   if (!settings.enabled) {
     return false;
   }
-  if (media.status === 'video') {
-    await bot.sendMessage(msg.chat.id, VIDEO_NOT_SUPPORTED_TEXT);
-    return true;
-  }
   if (media.status === 'unsupported') {
     await bot.sendMessage(msg.chat.id, ASK_TEXT_ONLY_TEXT);
     return true;
@@ -275,6 +270,19 @@ async function handleCustomerQuestionMessage(bot: TelegramBot, msg: any, botUser
         });
         if (!fileIds.length) {
           throw new Error('no-file-ids');
+        }
+        try {
+          const worker = deps.getVideoTimelineWorker
+            ? deps.getVideoTimelineWorker(db)
+            : getVideoTimelineWorker(db);
+          const attachments = media.attachments || [];
+          for (let i = 0; i < attachments.length; i += 1) {
+            if (attachments[i]?.kind !== 'video') continue;
+            const fileId = fileIds[i];
+            if (fileId) worker.enqueue(fileId, { ticketId: ticket.id, chatId: ticket.chat_id });
+          }
+        } catch (error: any) {
+          console.warn('[telegram-ticket] video timeline enqueue failed:', error?.message || error);
         }
       } catch (error: any) {
         console.error('[telegram-ticket] media upload failed:', error);
@@ -366,7 +374,6 @@ export {
   SUPPORT_NOT_CONFIGURED_TEXT,
   COULD_NOT_CREATE_APPEAL_TEXT,
   ASK_TEXT_ONLY_TEXT,
-  VIDEO_NOT_SUPPORTED_TEXT,
   MEDIA_UPLOAD_FAILED_TEXT,
   trimSubject,
 };

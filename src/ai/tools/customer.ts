@@ -5,6 +5,7 @@ import { getServicePricesCatalog } from '../../db/service-prices';
 import { listTechnicalSupportPrices, getActiveTechnicalSupportSubscription } from '../../db/technical-support';
 import { findEmployeesForAgent } from './employees';
 import { customerTicketTools } from './customer-ticket-tools';
+import { customerVideoTools } from './customer-video-tools';
 import { createKnowledgeTools } from './knowledge';
 import { factoryToolDescription } from './descriptions';
 import { classifyChatFile, collectMessageFileIds, compactChatFile, downloadChatFile, downloadChatFileBytes, isChatAudio, isVisionImage, toImageUrlPart } from '../chat-media';
@@ -418,7 +419,14 @@ function createCustomerTools({
           file: compactChatFile(file),
         };
       },
-    }
+    },
+    ...customerVideoTools({
+      db,
+      ticket,
+      chatId,
+      filesById,
+      deps,
+    })
   );
 
   return tools;

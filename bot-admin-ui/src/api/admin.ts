@@ -1,5 +1,14 @@
 import { apiFetch } from "./client";
-import type { BotUser, Order, OrderLog, OrderSummary, AdminLog, RightMeta, RegosUser } from "../lib/types";
+import type {
+  BotUser,
+  Order,
+  OrderLog,
+  OrderSummary,
+  AdminLog,
+  PaymentType,
+  RightMeta,
+  RegosUser,
+} from "../lib/types";
 
 export function getRightsMeta() {
   return apiFetch<{ rights: RightMeta[] }>("/bot-admin/rights-meta");
@@ -84,9 +93,14 @@ export function deleteCashOrder(id: string) {
   });
 }
 
-export function markPaidCash(id: string) {
+export function listOrderPaymentTypes() {
+  return apiFetch<{ payment_types: PaymentType[] }>("/bot-admin/api/orders/payment-types");
+}
+
+export function markPaidCash(id: string, payload: { payment_type_id: number }) {
   return apiFetch<{ ok: boolean }>(`/bot-admin/api/orders/${encodeURIComponent(id)}/paid-cash`, {
     method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

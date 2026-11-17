@@ -32,7 +32,17 @@ CLICK_SERVER_PORT=3000
 
 ## Run the app
 
-HTTP server (payments, `/bot-admin/`, webhook) on port `3000`:
+One-shot local stack (Windows Terminal tabs for ngrok, server, bot, admin UI). Updates `PUBLIC_BASE_URL` from the ngrok HTTPS URL and prints the REGOS webhook URL:
+
+```powershell
+npm run dev
+```
+
+Or run `powershell -ExecutionPolicy Bypass -File scripts/dev.ps1`.
+
+Requires [Windows Terminal](https://aka.ms/terminal) (`wt.exe`) and `ngrok` on `PATH`. Sign in once if needed: `ngrok config add-authtoken YOUR_NGROK_AUTHTOKEN`.
+
+Manual alternative — HTTP server (payments, `/bot-admin/`, webhook) on port `3000`:
 
 ```powershell
 npm run server
@@ -55,6 +65,16 @@ Open http://localhost:5301/bot-admin/ while the server is running.
 ## REGOS webhook through ngrok
 
 REGOS calls a public HTTPS URL. Your machine is not reachable from the internet, so proxy the local server with ngrok.
+
+`npm run dev` starts `ngrok http <CLICK_SERVER_PORT>`, writes `PUBLIC_BASE_URL` in `.env`, and prints:
+
+```text
+https://YOUR-SUBDOMAIN.ngrok-free.app/api/regos/webhook
+```
+
+Set that URL in REGOS. Telegram payment/dashboard links use the same `PUBLIC_BASE_URL`.
+
+Manual steps if you are not using `npm run dev`:
 
 1. Sign in once (free account is enough):
 

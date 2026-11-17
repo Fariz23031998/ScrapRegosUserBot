@@ -8,10 +8,13 @@ import path from 'path';
 import http from 'http';
 import express from 'express';
 import crypto from 'crypto';
-import { openDb, createOrder, getOrderById, listOrders } from '../src/db/partners-db';
+import { openDb, createOrder, getOrderById, listOrders, markOrderPaid } from '../src/db/partners-db';
 import { createEmployeeUser, linkEmployeeTelegram, getUserRights, migrateBotUsersSchema } from '../src/db/bot-users-db';
 import { createBotAdminRouter } from '../src/admin/bot-admin';
 import { createDashboardLoginToken } from '../src/admin/dashboard-login-tokens';
+import { createAccount, getAccount } from '../src/db/accounts';
+import { listAccountPayments } from '../src/db/account-payments';
+import { createPaymentType, listPaymentTypes } from '../src/db/payment-types';
 
 function makeTempDbPath() {
   return path.join(
@@ -204,11 +207,15 @@ describe('admin orders API', () => {
           clientPhone: '998902222222',
           amount: 15000,
         });
+        const cashType = listPaymentTypes(db).find((item?: any) => item.code === 'cash');
         const response = await request(
           server,
           'POST',
           `/bot-admin/api/orders/${order!.id}/${action}`,
-          { headers: { Cookie: actor.cookie } }
+          {
+            headers: { Cookie: actor.cookie },
+            ...(action === 'paid-cash' ? { body: { payment_type_id: cashType!.id } } : {}),
+          }
         );
         assert.equal(
           response.statusCode,
@@ -403,11 +410,22 @@ describe('admin orders API', () => {
     assert.equal(deleted.statusCode, 200);
     assert.equal(getOrderById(db, pendingDelete!.id)!.status, 'deleted');
 
+    const cashType = listPaymentTypes(db).find((item?: any) => item.code === 'cash');
+    assert.ok(cashType);
+
+    const missingType = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${pendingCash!.id}/paid-cash`,
+      { headers: { Cookie: manager.cookie }, body: {} }
+    );
+    assert.equal(missingType.statusCode, 400);
+
     const cash = await request(
       server,
       'POST',
       `/bot-admin/api/orders/${pendingCash!.id}/paid-cash`,
-      { headers: { Cookie: manager.cookie } }
+      { headers: { Cookie: manager.cookie }, body: { payment_type_id: cashType!.id } }
     );
     assert.equal(cash.statusCode, 200);
     assert.equal(getOrderById(db, pendingCash!.id)!.status, 'paid_cash');
@@ -428,6 +446,7 @@ describe('admin orders API', () => {
     for (const action of ['delete', 'paid-cash', 'renotify', 'delete-cash']) {
       const fail = await request(server, 'POST', `/bot-admin/api/orders/${paid!.id}/${action}`, {
         headers: { Cookie: manager.cookie },
+        ...(action === 'paid-cash' ? { body: { payment_type_id: cashType!.id } } : {}),
       });
       assert.equal(fail.statusCode, 409, `${action} on paid should be 409`);
     }
@@ -465,5 +484,133 @@ describe('admin orders API', () => {
       { headers: { Cookie: manager.cookie } }
     );
     assert.equal(deleteCashAgain.statusCode, 409);
+  });
+
+  it('credits UZS payment-type account on paid-cash and reverses on delete-cash', async () => {
+    const manager = await loginEmployee({
+      orders_read: 1,
+      mark_paid_cash: 1,
+      delete_cash_order: 1,
+    });
+
+    const types = await request(server, 'GET', '/bot-admin/api/orders/payment-types', {
+      headers: { Cookie: manager.cookie },
+    });
+    assert.equal(types.statusCode, 200);
+    const typesBody = JSON.parse(types.body);
+    assert.ok(Array.isArray(typesBody.payment_types));
+    assert.ok(typesBody.payment_types.every((item?: any) => item.currency === 'UZS'));
+    assert.ok(
+      typesBody.payment_types.every(
+        (item?: any) => item.code !== 'payme' && item.code !== 'click'
+      )
+    );
+
+    const cashType = listPaymentTypes(db).find((item?: any) => item.code === 'cash');
+    assert.ok(cashType?.account_id);
+    const accountBefore = getAccount(db, cashType!.account_id);
+    assert.ok(accountBefore);
+
+    const pending = createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: manager.telegramId,
+      botUserPhone: '998901111111',
+      clientPhone: '998907777777',
+      amount: 25000,
+    });
+
+    const usdAccount = createAccount(db, { name: 'USD касса тест', currency: 'USD' });
+    const usdType = createPaymentType(db, { name: 'USD тип тест', account_id: usdAccount!.id });
+    const usdRejected = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${pending!.id}/paid-cash`,
+      { headers: { Cookie: manager.cookie }, body: { payment_type_id: usdType!.id } }
+    );
+    assert.equal(usdRejected.statusCode, 400);
+    assert.equal(getOrderById(db, pending!.id)!.status, 'pending');
+
+    const paid = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${pending!.id}/paid-cash`,
+      { headers: { Cookie: manager.cookie }, body: { payment_type_id: cashType!.id } }
+    );
+    assert.equal(paid.statusCode, 200);
+    assert.equal(getOrderById(db, pending!.id)!.status, 'paid_cash');
+
+    const accountAfterPay = getAccount(db, cashType!.account_id);
+    assert.equal(accountAfterPay!.value, accountBefore!.value + 25000);
+    const linked = listAccountPayments(db).filter((item?: any) => item.order_id === pending!.id);
+    assert.equal(linked.length, 1);
+    assert.equal(linked[0].direction, 'in');
+    assert.equal(linked[0].amount, 25000);
+
+    const deleted = await request(
+      server,
+      'POST',
+      `/bot-admin/api/orders/${pending!.id}/delete-cash`,
+      { headers: { Cookie: manager.cookie } }
+    );
+    assert.equal(deleted.statusCode, 200);
+    assert.equal(getOrderById(db, pending!.id)!.status, 'deleted');
+    assert.equal(listAccountPayments(db).filter((item?: any) => item.order_id === pending!.id).length, 0);
+    assert.equal(getAccount(db, cashType!.account_id)!.value, accountBefore!.value);
+  });
+
+  it('credits Payme and Click accounts when online orders are paid', () => {
+    const paymeType = listPaymentTypes(db).find((item?: any) => item.code === 'payme');
+    const clickType = listPaymentTypes(db).find((item?: any) => item.code === 'click');
+    assert.ok(paymeType?.account_id);
+    assert.ok(clickType?.account_id);
+
+    const paymeBefore = getAccount(db, paymeType!.account_id)!.value;
+    const clickBefore = getAccount(db, clickType!.account_id)!.value;
+
+    const paymeOrder = createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 9001,
+      botUserPhone: '998901111111',
+      clientPhone: '998908888888',
+      amount: 31000,
+      paymentProvider: 'payme',
+    });
+    const clickOrder = createOrder(db, {
+      id: crypto.randomUUID(),
+      telegramId: 9001,
+      botUserPhone: '998901111111',
+      clientPhone: '998909999999',
+      amount: 42000,
+      paymentProvider: 'click',
+    });
+
+    const paymePaid = markOrderPaid(db, paymeOrder!.id, {
+      provider: 'payme',
+      transactionId: 'payme-tx-1',
+    });
+    assert.equal(paymePaid.claimed, true);
+    assert.equal(getAccount(db, paymeType!.account_id)!.value, paymeBefore + 31000);
+    assert.equal(
+      listAccountPayments(db).filter((item?: any) => item.order_id === paymeOrder!.id).length,
+      1
+    );
+
+    const clickPaid = markOrderPaid(db, clickOrder!.id, {
+      provider: 'click',
+      clickTransId: 'click-tx-1',
+    });
+    assert.equal(clickPaid.claimed, true);
+    assert.equal(getAccount(db, clickType!.account_id)!.value, clickBefore + 42000);
+    assert.equal(
+      listAccountPayments(db).filter((item?: any) => item.order_id === clickOrder!.id).length,
+      1
+    );
+
+    const duplicate = markOrderPaid(db, paymeOrder!.id, {
+      provider: 'payme',
+      transactionId: 'payme-tx-1',
+    });
+    assert.equal(duplicate.claimed, false);
+    assert.equal(getAccount(db, paymeType!.account_id)!.value, paymeBefore + 31000);
   });
 });

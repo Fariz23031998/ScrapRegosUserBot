@@ -19,6 +19,7 @@
     "sync:rpos": "tsx cli/sync-rpos.ts",
     "sync:vcr1": "tsx cli/sync-vcr1.ts",
     "bot": "node apps/bot/index.js",
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/dev.ps1",
     "build:browser": "node scripts/check-browser.cjs --emit",
     "server": "npm run build:browser && node apps/server/index.js",
     "telegram:login": "tsx cli/telegram-mtproto-login.ts",
