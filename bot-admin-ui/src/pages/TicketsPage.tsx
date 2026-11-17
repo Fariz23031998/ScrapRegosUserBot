@@ -10,10 +10,8 @@ import {
   getFirm,
   linkClientFirm,
   listTicketChannels,
-  listTicketSummary,
   listTickets,
   listTicketUsers,
-  type TicketSummaryCounts,
   searchFirms,
   searchTicketClients,
   ticketRecordingUrl,
@@ -29,7 +27,6 @@ import Modal from "../components/Modal";
 import SearchField from "../components/SearchField";
 import PhoneCopyButton from "../components/PhoneCopyButton";
 import SimpleTable from "../components/SimpleTable";
-import SummaryBar from "../components/SummaryBar";
 import TicketBoard from "../components/TicketBoard";
 import TicketCards, { TicketRecordingControl } from "../components/TicketCards";
 import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
@@ -48,6 +45,14 @@ import {
   TICKET_BOARD_STATUSES,
   ticketBoardQueryKey,
 } from "../lib/ticket-board";
+import {
+  getTicketsPagePeriod,
+  periodToStore,
+  resolveTicketPeriod,
+  saveTicketsPagePeriod,
+  type StoredTicketPeriod,
+} from "../lib/ticket-period-db";
+import { openTicketDetails } from "../lib/ui-preferences";
 import {
   channelDisplayName,
   datetimeLocalToUnix,
@@ -97,7 +102,6 @@ type TicketListPage = {
   tickets?: Ticket[];
   total: number;
   page: number;
-  summary?: TicketSummaryCounts | null;
   active_ticket?: Ticket | null;
 };
 
@@ -127,9 +131,6 @@ type TicketFilters = {
   channels: string[];
   dateFrom: string;
   dateTo: string;
-  minDuration: string;
-  withoutDuplicates: boolean;
-  duplicateInterval: string;
 };
 
 function defaultFilters(periodDays?: number): TicketFilters {
@@ -141,9 +142,6 @@ function defaultFilters(periodDays?: number): TicketFilters {
     channels: [],
     dateFrom: period.from,
     dateTo: period.to,
-    minDuration: "",
-    withoutDuplicates: false,
-    duplicateInterval: "10",
   };
 }
 
@@ -169,15 +167,6 @@ function loadFilters(periodDays?: number): LoadedFilters {
         // Empty list is a valid persisted choice ("Все") — do not treat it as missing.
         users: parseTicketIds(parsed.responsibleUserId ?? parsed.user),
         channels: parseTicketIds(parsed.channelId ?? parsed.channel),
-        withoutDuplicates: Boolean(parsed.withoutDuplicates),
-        minDuration:
-          parsed.minimumCallDuration != null && parsed.minimumCallDuration !== ""
-            ? String(parsed.minimumCallDuration)
-            : typeof parsed.minDuration === "string"
-              ? parsed.minDuration
-              : base.minDuration,
-        duplicateInterval:
-          typeof parsed.duplicateInterval === "string" ? parsed.duplicateInterval : base.duplicateInterval,
       },
     };
   } catch {
@@ -193,8 +182,6 @@ function saveFilters(filters: TicketFilters) {
         status: filters.statuses,
         responsibleUserId: filters.users,
         channelId: filters.channels,
-        withoutDuplicates: filters.withoutDuplicates,
-        minimumCallDuration: filters.minDuration,
       }),
     );
   } catch {
@@ -240,29 +227,7 @@ function buildListParams(
   const toUnix = datetimeLocalToUnix(filters.dateTo);
   if (fromUnix != null) params.from_date = String(fromUnix);
   if (toUnix != null) params.to_date = String(toUnix);
-  if (filters.minDuration) params.minimum_call_duration_seconds = filters.minDuration;
-  if (filters.withoutDuplicates) {
-    params.without_duplicates = "1";
-    params.duplicate_interval_minutes = filters.duplicateInterval;
-  }
   return params;
-}
-
-function buildSummaryParams(filters: TicketFilters): Record<string, string> {
-  const params = buildListParams(1, 25, filters);
-  delete params.page;
-  delete params.limit;
-  delete params.sort;
-  return params;
-}
-
-function readEmbeddedSummary(summary: TicketListPage["summary"]): TicketSummaryCounts | null {
-  if (!summary || summary.count == null) return null;
-  return {
-    count: summary.count,
-    slaBreached: summary.slaBreached ?? 0,
-    rated: summary.rated ?? 0,
-  };
 }
 
 function regosUserLabel(user: { full_name?: string | null; login?: string | null; id: number }) {
@@ -276,9 +241,7 @@ function filtersHaveAdvancedValues(filters: TicketFilters, periodDays?: number) 
     Boolean(filters.users.length) ||
     Boolean(filters.channels.length) ||
     filters.dateFrom !== defaults.dateFrom ||
-    filters.dateTo !== defaults.dateTo ||
-    Boolean(filters.minDuration) ||
-    filters.withoutDuplicates
+    filters.dateTo !== defaults.dateTo
   );
 }
 
@@ -372,40 +335,6 @@ function TicketFilterFields({
           onClick={onOpenPeriod}
         />
       </label>
-      <label className="ticket-filters__field">
-        <span>Мин. длительность (с)</span>
-        <input
-          type="number"
-          min={0}
-          step={1}
-          value={filters.minDuration}
-          onChange={(e) => setFilters({ ...filters, minDuration: e.target.value })}
-          placeholder="Не учитывать"
-        />
-      </label>
-      <label className="ticket-filters__field ticket-filters__field--checkbox">
-        <span>Без дубликатов</span>
-        <input
-          type="checkbox"
-          checked={filters.withoutDuplicates}
-          onChange={(e) => setFilters({ ...filters, withoutDuplicates: e.target.checked })}
-        />
-      </label>
-      {filters.withoutDuplicates ? (
-        <label className="ticket-filters__field">
-          <span>Интервал (мин)</span>
-          <select
-            value={filters.duplicateInterval}
-            onChange={(e) => setFilters({ ...filters, duplicateInterval: e.target.value })}
-          >
-            {[5, 10, 15, 30, 60].map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
       {showActions ? (
         <div className="ticket-filters__actions">
           <button
@@ -434,7 +363,13 @@ export default function TicketsPage() {
   const stickyHeadRef = useRef<HTMLDivElement>(null);
   useStickyOffsetVar(stickyHeadRef);
   const { hasPermission, actor } = useAuth();
-  const { dateTimeFormat, ticketPeriodDays } = useUiPreferences();
+  const { dateTimeFormat, ticketPeriodDays, ticketOpenTarget } = useUiPreferences();
+  const openTicket = useCallback(
+    (ticketId: string | number) => {
+      openTicketDetails(ticketId, { target: ticketOpenTarget, navigate });
+    },
+    [navigate, ticketOpenTarget],
+  );
   const queryClient = useQueryClient();
   const [filterBootstrap] = useState(() => loadFilters(ticketPeriodDays));
   const [ticketView, setTicketView] = useState<TicketListView>(loadTicketListView);
@@ -447,7 +382,10 @@ export default function TicketsPage() {
     setTicketSorting(sorting);
   }, []);
   // Only auto-default Ответственный when nothing was persisted yet (matches legacy admin UI).
-  const [filtersReady, setFiltersReady] = useState(filterBootstrap.fromStorage);
+  const [actorFiltersReady, setActorFiltersReady] = useState(filterBootstrap.fromStorage);
+  const [periodReady, setPeriodReady] = useState(false);
+  const [periodMode, setPeriodMode] = useState<StoredTicketPeriod["mode"]>("preference");
+  const filtersReady = actorFiltersReady && periodReady;
   const [successMessage, setSuccessMessage] = useState("");
   const [boardError, setBoardError] = useState("");
 
@@ -470,7 +408,7 @@ export default function TicketsPage() {
     title: string;
     message?: string | null;
   } | null>(null);
-  const [orderOpen, setOrderOpen] = useState(false);
+  const [orderTicket, setOrderTicket] = useState<Ticket | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false);
 
   useTicketEvents(hasPermission("tickets_read"));
@@ -485,14 +423,54 @@ export default function TicketsPage() {
   }, [filters]);
 
   useEffect(() => {
-    if (filtersReady) return;
+    let cancelled = false;
+    void getTicketsPagePeriod()
+      .then((stored) => {
+        if (cancelled) return;
+        const resolved = resolveTicketPeriod(stored, ticketPeriodDays);
+        if (resolved) {
+          setPeriodMode(resolved.mode);
+          setFilters((current) => ({
+            ...current,
+            dateFrom: resolved.dateFrom,
+            dateTo: resolved.dateTo,
+          }));
+          setAppliedFilters((current) => ({
+            ...current,
+            dateFrom: resolved.dateFrom,
+            dateTo: resolved.dateTo,
+          }));
+        }
+        setPeriodReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setPeriodReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ticketPeriodDays]);
+
+  useEffect(() => {
+    if (!periodReady) return;
+    const stored =
+      periodMode === "preference" || periodMode === "today"
+        ? ({ mode: periodMode } as StoredTicketPeriod)
+        : periodToStore(filters.dateFrom, filters.dateTo, "custom", ticketPeriodDays);
+    void saveTicketsPagePeriod(stored).catch(() => {
+      /* ignore */
+    });
+  }, [filters.dateFrom, filters.dateTo, periodMode, periodReady, ticketPeriodDays]);
+
+  useEffect(() => {
+    if (actorFiltersReady) return;
     if (actor?.regosUserId != null) {
       const user = String(actor.regosUserId);
       setFilters((current) => ({ ...current, users: [user] }));
       setAppliedFilters((current) => ({ ...current, users: [user] }));
     }
-    setFiltersReady(true);
-  }, [actor?.regosUserId, filtersReady]);
+    setActorFiltersReady(true);
+  }, [actor?.regosUserId, actorFiltersReady]);
 
   const usersQuery = useQuery({ queryKey: ["ticket-users"], queryFn: listTicketUsers });
   const channelsQuery = useQuery({ queryKey: ["ticket-channels"], queryFn: listTicketChannels });
@@ -539,15 +517,6 @@ export default function TicketsPage() {
   const cardView = ticketView === "cards";
   const activeTicket = (cardView ? board.activeTicket : firstPage?.active_ticket) || null;
   const recordingDurations = useTicketRecordingDurations(cardView ? board.tickets : tickets);
-  const embeddedSummary = cardView ? null : readEmbeddedSummary(firstPage?.summary);
-  const firstPageReady = Boolean(ticketsQuery.data?.pages.length);
-  const summaryQuery = useQuery({
-    queryKey: ["tickets-summary", appliedFilters],
-    queryFn: () => listTicketSummary(buildSummaryParams(appliedFilters)),
-    enabled: filtersReady && (cardView || (firstPageReady && !embeddedSummary)),
-  });
-  const summary = embeddedSummary ?? summaryQuery.data?.summary ?? null;
-  const summaryPending = !summary && !summaryQuery.isError && (cardView || !ticketsQuery.isError);
   const listRefreshing = cardView
     ? board.isRefreshing
     : ticketsQuery.isFetching && !ticketsQuery.isFetchingNextPage;
@@ -575,11 +544,9 @@ export default function TicketsPage() {
   function refreshTicketList() {
     if (cardView) {
       void board.refetch();
-      void summaryQuery.refetch();
       return;
     }
     void ticketsQuery.refetch();
-    if (!embeddedSummary) void summaryQuery.refetch();
   }
 
   const statusMutation = useMutation({
@@ -633,7 +600,7 @@ export default function TicketsPage() {
     onSuccess: (data) => {
       setCreateOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
-      navigate(`/tickets/${data.ticket.id}`);
+      openTicket(data.ticket.id);
     },
     onError: (error: Error) => setCreateError(error.message),
   });
@@ -831,6 +798,24 @@ export default function TicketsPage() {
         accessorFn: (row) => row.rating ?? null,
         cell: ({ row }) => (row.original.rating != null ? row.original.rating : "—"),
       },
+      {
+        id: "create_order",
+        header: "",
+        enableSorting: false,
+        size: 140,
+        cell: ({ row }) => (
+          <button
+            type="button"
+            className="btn-primary btn-sm ticket-row-create-order"
+            onClick={(event) => {
+              event.stopPropagation();
+              setOrderTicket(row.original);
+            }}
+          >
+            Создать заказ
+          </button>
+        ),
+      },
     ],
     [canEditClients, canLinkClientFirms, channelNames, dateTimeFormat, recordingDurations, userNames],
   );
@@ -854,14 +839,6 @@ export default function TicketsPage() {
 
   return (
     <section className="card tickets-page">
-      {activeTicket ? (
-        <ActiveTicketBanner
-          ticket={activeTicket}
-          onOpen={() => navigate(`/tickets/${activeTicket.id}`)}
-          onCreateOrder={() => setOrderOpen(true)}
-        />
-      ) : null}
-
       {ticketView !== "cards" && ticketsQuery.error ? (
         <p className="message error">{(ticketsQuery.error as Error).message}</p>
       ) : null}
@@ -869,19 +846,6 @@ export default function TicketsPage() {
       {successMessage ? <p className="message success">{successMessage}</p> : null}
 
       <div className="tickets-sticky-head" ref={stickyHeadRef}>
-        <SummaryBar
-          placeholder={summaryPending ? "Расчёт итогов по длительности звонков…" : undefined}
-          items={
-            summary
-              ? [
-                  { label: "тикетов", value: summary.count, tone: "neutral", valueFirst: true },
-                  { label: "SLA нарушен", value: summary.slaBreached, tone: "danger" },
-                  { label: "С оценкой", value: summary.rated, tone: "ok" },
-                ]
-              : undefined
-          }
-        />
-
         <form
           className="ticket-filters"
           onSubmit={(event) => {
@@ -981,6 +945,7 @@ export default function TicketsPage() {
               className="btn-secondary"
               onClick={() => {
                 const next = defaultFilters(ticketPeriodDays);
+                setPeriodMode("preference");
                 setFilters((current) => ({ ...next, search: current.search, users: current.users }));
               }}
             >
@@ -998,7 +963,11 @@ export default function TicketsPage() {
         dateFrom={filters.dateFrom}
         dateTo={filters.dateTo}
         onClose={() => setPeriodOpen(false)}
-        onApply={(dateFrom, dateTo) => setFilters((current) => ({ ...current, dateFrom, dateTo }))}
+        onApply={(dateFrom, dateTo, meta) => {
+          const stored = periodToStore(dateFrom, dateTo, meta.preset, ticketPeriodDays);
+          setPeriodMode(stored.mode);
+          setFilters((current) => ({ ...current, dateFrom, dateTo }));
+        }}
       />
 
       <div className={`ticket-table-section${ticketView === "cards" ? " ticket-table-section--board" : ""}`}>
@@ -1010,7 +979,10 @@ export default function TicketsPage() {
             channelNames={channelNames}
             canEditTickets={canEditTickets}
             canEditClosedTickets={canEditClosedTickets}
+            canEditClients={canEditClients}
+            canLinkClientFirms={canLinkClientFirms}
             busyTicketId={statusMutation.isPending ? statusMutation.variables?.id ?? null : null}
+            highlightedTicketId={activeTicket?.id ?? null}
             recordingDurations={recordingDurations}
             onNearEnd={(status) => {
               const column = board.columns.find((item) => item.id === status);
@@ -1018,7 +990,9 @@ export default function TicketsPage() {
                 void column.fetchNextPage();
               }
             }}
-            onOpenTicket={(ticket) => navigate(`/tickets/${ticket.id}`)}
+            onOpenTicket={(ticket) => openTicket(ticket.id)}
+            onEditClient={setClientEditId}
+            onCreateOrder={setOrderTicket}
             onOpenRecording={setRecordingTicket}
             onStatusChange={(ticket, status) => {
               if (!canEditTickets) return;
@@ -1036,8 +1010,10 @@ export default function TicketsPage() {
             recordingDurations={recordingDurations}
             canEditClients={canEditClients}
             canLinkClientFirms={canLinkClientFirms}
-            onOpenTicket={(ticket) => navigate(`/tickets/${ticket.id}`)}
+            highlightedTicketId={activeTicket?.id ?? null}
+            onOpenTicket={(ticket) => openTicket(ticket.id)}
             onEditClient={setClientEditId}
+            onCreateOrder={setOrderTicket}
             onOpenFirm={(firm) =>
               setFirmDetail({
                 type: firm.firm_type,
@@ -1060,7 +1036,10 @@ export default function TicketsPage() {
             onSortingChange={handleTicketSortingChange}
             emptyMessage={ticketsEmptyMessage}
             getRowId={(row) => String(row.id)}
-            onRowClick={(row) => navigate(`/tickets/${row.id}`)}
+            getRowClassName={(row) =>
+              activeTicket && row.id === activeTicket.id ? "data-table__row--active" : undefined
+            }
+            onRowClick={(row) => openTicket(row.id)}
           />
         )}
         {ticketView === "cards" ? null : (
@@ -1112,13 +1091,13 @@ export default function TicketsPage() {
         />
       ) : null}
 
-      {orderOpen && activeTicket ? (
+      {orderTicket ? (
         <CreateOrderModal
-          ticket={activeTicket}
-          open={orderOpen}
-          onClose={() => setOrderOpen(false)}
+          ticket={orderTicket}
+          open
+          onClose={() => setOrderTicket(null)}
           onSuccess={(message) => {
-            setOrderOpen(false);
+            setOrderTicket(null);
             setSuccessMessage(message);
             void queryClient.invalidateQueries({ queryKey: ["tickets"] });
           }}
@@ -1148,77 +1127,6 @@ export default function TicketsPage() {
         ) : null}
       </div>
     </section>
-  );
-}
-
-function ActiveTicketBanner({
-  ticket,
-  onOpen,
-  onCreateOrder,
-}: {
-  ticket: Ticket;
-  onOpen: () => void;
-  onCreateOrder: () => void;
-}) {
-  const clientParts = [ticket.client?.name, ticket.client?.phone].filter(Boolean);
-  const clientText = clientParts.length ? clientParts.join(" · ") : "—";
-  const title = `#${ticket.id} — ${ticket.subject || "Без темы"}`;
-
-  return (
-    <div className="active-ticket-banner">
-      <button type="button" className="active-ticket__open" onClick={onOpen}>
-        <span className="active-ticket__label">Текущий активный тикет:</span>
-        <span className="active-ticket__title">{title}</span>
-        <span className="active-ticket__meta">
-          {clientText} · {formatUnix(ticket.created_date)}
-        </span>
-      </button>
-      <div className="active-ticket__extras">
-        <span className="active-ticket__extra">
-          <span className="active-ticket__extra-label">Неоплаченные:</span>{" "}
-          {hasLookupPhone(ticket) ? (
-            unpaidOrdersLabel(ticket) ? (
-              unpaidOrdersHref(ticket) ? (
-                <Link to={unpaidOrdersHref(ticket)!} className="ticket-unpaid-link">
-                  {unpaidOrdersLabel(ticket)}
-                </Link>
-              ) : (
-                unpaidOrdersLabel(ticket)
-              )
-            ) : (
-              <span className="badge badge--muted">Нет</span>
-            )
-          ) : (
-            "—"
-          )}
-        </span>
-        <span className="active-ticket__extra">
-          <span className="active-ticket__extra-label">ТП:</span>{" "}
-          {(() => {
-            const display = technicalSupportDisplay(ticket);
-            if (display.kind === "missing") return "—";
-            if (display.kind === "none") return <span className="badge badge--muted">Нет</span>;
-            if (display.kind === "active") {
-              return (
-                <span className="badge badge--ok" title={`Действует до ${display.dateLabel}`}>
-                  До {display.dateLabel}
-                </span>
-              );
-            }
-            return (
-              <span className="badge badge--warn" title={`Истекла ${display.dateLabel}`}>
-                Истекла {display.dateLabel}
-              </span>
-            );
-          })()}
-        </span>
-        <span className="active-ticket__actions">
-          <button type="button" className="btn-primary btn-sm" onClick={onCreateOrder}>
-            Создать заказ
-          </button>
-        </span>
-      </div>
-    </div>
   );
 }
 

@@ -18,6 +18,7 @@ import {
   channelDisplayName,
   formatUnix,
   getCachedRecordingDuration,
+  getTicketClientId,
   statusBadgeClass,
   statusLabel,
   unpaidOrdersHref,
@@ -28,6 +29,7 @@ import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import type { TicketBoardColumnState } from "../hooks/useTicketBoardColumns";
 import { visibleBoardStatuses } from "../lib/ticket-board";
 import type { Ticket } from "../lib/types";
+import EntityAvatar from "./EntityAvatar";
 import LoadingState from "./LoadingState";
 import PhoneCopyButton from "./PhoneCopyButton";
 import { TicketRecordingControl } from "./TicketCards";
@@ -93,10 +95,15 @@ export type TicketBoardProps = {
   channelNames: Record<string, string>;
   canEditTickets: boolean;
   canEditClosedTickets: boolean;
+  canEditClients?: boolean;
+  canLinkClientFirms?: boolean;
   busyTicketId?: number | null;
+  highlightedTicketId?: number | null;
   recordingDurations: Record<string, number | undefined>;
   onNearEnd: (status: string) => void;
   onOpenTicket: (ticket: Ticket) => void;
+  onEditClient?: (clientId: number) => void;
+  onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
   onStatusChange: (ticket: Ticket, status: string) => void;
 };
@@ -108,10 +115,15 @@ export default function TicketBoard({
   channelNames,
   canEditTickets,
   canEditClosedTickets,
+  canEditClients = false,
+  canLinkClientFirms = false,
   busyTicketId,
+  highlightedTicketId = null,
   recordingDurations,
   onNearEnd,
   onOpenTicket,
+  onEditClient,
+  onCreateOrder,
   onOpenRecording,
   onStatusChange,
 }: TicketBoardProps) {
@@ -214,11 +226,16 @@ export default function TicketBoard({
               channelNames={channelNames}
               canEditTickets={canEditTickets}
               canEditClosedTickets={canEditClosedTickets}
+              canEditClients={canEditClients}
+              canLinkClientFirms={canLinkClientFirms}
               busyTicketId={busyTicketId}
+              highlightedTicketId={highlightedTicketId}
               recordingDurations={recordingDurations}
               dragEnabled={!compact}
               suppressClickRef={suppressClickRef}
               onOpenTicket={onOpenTicket}
+              onEditClient={onEditClient}
+              onCreateOrder={onCreateOrder}
               onOpenRecording={onOpenRecording}
               onNearEnd={() => onNearEnd(column.id)}
             />
@@ -233,6 +250,10 @@ export default function TicketBoard({
               userNames={userNames}
               channelNames={channelNames}
               recordingDurations={recordingDurations}
+              canEditClients={canEditClients}
+              canLinkClientFirms={canLinkClientFirms}
+              onEditClient={onEditClient}
+              onCreateOrder={onCreateOrder}
               onOpenRecording={onOpenRecording}
             />
           </article>
@@ -248,11 +269,16 @@ function TicketBoardColumn({
   channelNames,
   canEditTickets,
   canEditClosedTickets,
+  canEditClients,
+  canLinkClientFirms,
   busyTicketId,
+  highlightedTicketId,
   recordingDurations,
   dragEnabled,
   suppressClickRef,
   onOpenTicket,
+  onEditClient,
+  onCreateOrder,
   onOpenRecording,
   onNearEnd,
 }: {
@@ -261,11 +287,16 @@ function TicketBoardColumn({
   channelNames: Record<string, string>;
   canEditTickets: boolean;
   canEditClosedTickets: boolean;
+  canEditClients: boolean;
+  canLinkClientFirms: boolean;
   busyTicketId?: number | null;
+  highlightedTicketId?: number | null;
   recordingDurations: Record<string, number | undefined>;
   dragEnabled: boolean;
   suppressClickRef: RefObject<boolean>;
   onOpenTicket: (ticket: Ticket) => void;
+  onEditClient?: (clientId: number) => void;
+  onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
   onNearEnd: () => void;
 }) {
@@ -321,6 +352,9 @@ function TicketBoardColumn({
               userNames={userNames}
               channelNames={channelNames}
               recordingDurations={recordingDurations}
+              highlighted={highlightedTicketId != null && ticket.id === highlightedTicketId}
+              canEditClients={canEditClients}
+              canLinkClientFirms={canLinkClientFirms}
               draggable={
                 dragEnabled &&
                 canDragTicket(ticket, canEditTickets, canEditClosedTickets) &&
@@ -328,6 +362,8 @@ function TicketBoardColumn({
               }
               suppressClickRef={suppressClickRef}
               onOpen={() => onOpenTicket(ticket)}
+              onEditClient={onEditClient}
+              onCreateOrder={onCreateOrder}
               onOpenRecording={onOpenRecording}
             />
           ))
@@ -348,18 +384,28 @@ function TicketBoardCard({
   userNames,
   channelNames,
   recordingDurations,
+  highlighted,
+  canEditClients,
+  canLinkClientFirms,
   draggable,
   suppressClickRef,
   onOpen,
+  onEditClient,
+  onCreateOrder,
   onOpenRecording,
 }: {
   ticket: Ticket;
   userNames: Record<string, string>;
   channelNames: Record<string, string>;
   recordingDurations: Record<string, number | undefined>;
+  highlighted: boolean;
+  canEditClients: boolean;
+  canLinkClientFirms: boolean;
   draggable: boolean;
   suppressClickRef: RefObject<boolean>;
   onOpen: () => void;
+  onEditClient?: (clientId: number) => void;
+  onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -370,7 +416,7 @@ function TicketBoardCard({
   return (
     <article
       ref={setNodeRef}
-      className={`ticket-board-card${draggable ? "" : " ticket-board-card--locked"}${isDragging ? " ticket-board-card--dragging" : ""}`}
+      className={`ticket-board-card${draggable ? "" : " ticket-board-card--locked"}${isDragging ? " ticket-board-card--dragging" : ""}${highlighted ? " ticket-board-card--active" : ""}`}
       {...attributes}
       {...listeners}
       onClick={() => {
@@ -388,6 +434,10 @@ function TicketBoardCard({
         userNames={userNames}
         channelNames={channelNames}
         recordingDurations={recordingDurations}
+        canEditClients={canEditClients}
+        canLinkClientFirms={canLinkClientFirms}
+        onEditClient={onEditClient}
+        onCreateOrder={onCreateOrder}
         onOpenRecording={onOpenRecording}
       />
     </article>
@@ -399,16 +449,30 @@ function TicketBoardCardBody({
   userNames,
   channelNames,
   recordingDurations,
+  canEditClients = false,
+  canLinkClientFirms = false,
+  onEditClient,
+  onCreateOrder,
   onOpenRecording,
 }: {
   ticket: Ticket;
   userNames: Record<string, string>;
   channelNames: Record<string, string>;
   recordingDurations: Record<string, number | undefined>;
+  canEditClients?: boolean;
+  canLinkClientFirms?: boolean;
+  onEditClient?: (clientId: number) => void;
+  onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
 }) {
   const clientName = ticket.client?.name || ticket.client_name || "—";
   const phone = ticket.client?.phone || ticket.client_phone || "";
+  const clientId = getTicketClientId(ticket);
+  const hasClient = Boolean(clientId || ticket.client?.name || ticket.client_name);
+  const canOpenClient = Boolean(clientId && onEditClient && (canEditClients || canLinkClientFirms));
+  const avatar = (
+    <EntityAvatar src={ticket.client?.photo_url} name={ticket.client?.name || clientName} size="sm" />
+  );
   const unpaidLabel = unpaidOrdersLabel(ticket);
   const unpaidHref = unpaidLabel ? unpaidOrdersHref(ticket) : null;
   const duration = getCachedRecordingDuration(ticket) ?? recordingDurations[String(ticket.id)];
@@ -425,6 +489,26 @@ function TicketBoardCardBody({
       </div>
       <h3 className="ticket-board-card__subject">{ticket.subject || "Без темы"}</h3>
       <p className="ticket-board-card__line ticket-board-card__client">
+        {hasClient ? (
+          canOpenClient ? (
+            <button
+              type="button"
+              className="ticket-client-avatar-btn"
+              aria-label={`Редактировать клиента ${clientName}`}
+              title="Редактировать клиента"
+              onPointerDown={stopCardAction}
+              onClick={(event) => {
+                stopCardAction(event);
+                onEditClient?.(clientId!);
+              }}
+              onKeyDown={stopCardAction}
+            >
+              {avatar}
+            </button>
+          ) : (
+            <span className="ticket-client-avatar-static">{avatar}</span>
+          )
+        ) : null}
         <span>{clientName}</span>
         {phone ? <PhoneCopyButton phone={phone} /> : null}
       </p>
@@ -459,6 +543,22 @@ function TicketBoardCardBody({
         >
           <span className="ticket-board-card__extra-label">Запись:</span>
           <TicketRecordingControl ticket={ticket} duration={duration} onOpen={onOpenRecording} />
+        </div>
+      ) : null}
+      {onCreateOrder ? (
+        <div className="ticket-card__actions ticket-board-card__actions">
+          <button
+            type="button"
+            className="btn-primary btn-sm ticket-create-order-btn"
+            onPointerDown={stopCardAction}
+            onClick={(event) => {
+              stopCardAction(event);
+              onCreateOrder(ticket);
+            }}
+            onKeyDown={stopCardAction}
+          >
+            Создать заказ
+          </button>
         </div>
       ) : null}
     </>

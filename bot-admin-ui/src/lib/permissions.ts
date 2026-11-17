@@ -15,6 +15,7 @@ const FIRMS_NAV: NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   FIRMS_NAV,
   { to: "/tickets", label: "Тикеты", permission: "tickets_read" },
+  { to: "/rating", label: "Рейтинг", permission: "tickets_read" },
   { to: "/tasks", label: "Задачи", permission: "tasks_read" },
   { to: "/finances", label: "Финансы", permission: "finances_read" },
   { to: "/repair-returns", label: "Возврат устройств", permission: "tasks_read" },

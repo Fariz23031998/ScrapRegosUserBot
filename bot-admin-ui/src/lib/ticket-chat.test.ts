@@ -23,6 +23,10 @@ describe("ticket chat paging", () => {
     expect(nextOlderMessagesOffset({ messages: [] }, 0)).toBe(0);
   });
 
+  it("advances past a stuck CRM next_offset on a short final page", () => {
+    expect(nextOlderMessagesOffset({ next_offset: 50, offset: 50, messages: new Array(3) })).toBe(53);
+  });
+
   it("keeps already loaded history when merging a newer tail page", () => {
     const existing = [msg("old", 1), msg("mid", 2), msg("new", 3)];
     const tail = [msg("mid", 2), msg("new", 3), msg("newer", 4)];

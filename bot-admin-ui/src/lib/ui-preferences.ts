@@ -4,14 +4,18 @@ export type DateTimeFormatId = "ru-short" | "ru-long" | "iso" | "us";
 
 export type PhoneAction = "copy" | "microsip";
 
+export type TicketOpenTarget = "same" | "new";
+
 export const THEME_STORAGE_KEY = "bot_admin_theme";
 export const DATETIME_FORMAT_STORAGE_KEY = "bot_admin_datetime_format";
 export const TICKET_PERIOD_DAYS_STORAGE_KEY = "bot_admin_ticket_period_days";
 export const PHONE_ACTION_STORAGE_KEY = "bot_admin_phone_action";
+export const TICKET_OPEN_TARGET_STORAGE_KEY = "bot_admin_ticket_open_target";
+export const AI_ASSIST_CONFIRM_REPLY_STORAGE_KEY = "bot_admin_ai_assist_confirm_reply";
 
 export const MIN_TICKET_PERIOD_DAYS = 1;
 export const MAX_TICKET_PERIOD_DAYS = 30;
-export const DEFAULT_TICKET_PERIOD_DAYS = 1;
+export const DEFAULT_TICKET_PERIOD_DAYS = 30;
 
 export const DATETIME_FORMAT_OPTIONS: Array<{ id: DateTimeFormatId; label: string; example: string }> = [
   { id: "ru-short", label: "ДД.ММ.ГГГГ ЧЧ:ММ", example: "12.08.2026 20:15" },
@@ -94,6 +98,66 @@ export function loadPhoneAction(): PhoneAction {
 export function savePhoneAction(action: PhoneAction): void {
   try {
     localStorage.setItem(PHONE_ACTION_STORAGE_KEY, action);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadTicketOpenTarget(): TicketOpenTarget {
+  try {
+    const raw = localStorage.getItem(TICKET_OPEN_TARGET_STORAGE_KEY);
+    if (raw === "same" || raw === "new") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "same";
+}
+
+export function saveTicketOpenTarget(target: TicketOpenTarget): void {
+  try {
+    localStorage.setItem(TICKET_OPEN_TARGET_STORAGE_KEY, target);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function ticketDetailHref(ticketId: string | number): string {
+  const base = String(import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
+  return `${base}/tickets/${encodeURIComponent(String(ticketId))}`;
+}
+
+export function ticketDetailPath(ticketId: string | number): string {
+  return `/tickets/${ticketId}`;
+}
+
+export function openTicketDetails(
+  ticketId: string | number,
+  options: {
+    target: TicketOpenTarget;
+    navigate: (to: string) => void;
+  },
+): void {
+  if (options.target === "new") {
+    window.open(ticketDetailHref(ticketId), "_blank", "noopener,noreferrer");
+    return;
+  }
+  options.navigate(ticketDetailPath(ticketId));
+}
+
+export function loadAiAssistConfirmReply(): boolean {
+  try {
+    const raw = localStorage.getItem(AI_ASSIST_CONFIRM_REPLY_STORAGE_KEY);
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+export function saveAiAssistConfirmReply(enabled: boolean): void {
+  try {
+    localStorage.setItem(AI_ASSIST_CONFIRM_REPLY_STORAGE_KEY, enabled ? "1" : "0");
   } catch {
     /* ignore */
   }

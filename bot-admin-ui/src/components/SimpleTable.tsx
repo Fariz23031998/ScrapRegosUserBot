@@ -57,6 +57,7 @@ type SimpleTableProps<T> = {
   searchPlaceholder?: string;
   toolbar?: ReactNode;
   getRowId?: (row: T) => string;
+  getRowClassName?: (row: T) => string | undefined;
   onRowClick?: (row: T) => void;
   serverSideSearch?: boolean;
   footerData?: T | T[];
@@ -177,6 +178,7 @@ export default function SimpleTable<T>({
   searchPlaceholder,
   toolbar,
   getRowId,
+  getRowClassName,
   onRowClick,
   serverSideSearch = false,
   footerData,
@@ -444,10 +446,15 @@ export default function SimpleTable<T>({
                 </SortableContext>
               </thead>
               <tbody>
-                {table.getRowModel().rows.map((row) => (
+                {table.getRowModel().rows.map((row) => {
+                  const extraClass = getRowClassName?.(row.original);
+                  const rowClass = [onRowClick ? "data-table__row--clickable" : "", extraClass || ""]
+                    .filter(Boolean)
+                    .join(" ");
+                  return (
                   <tr
                     key={row.id}
-                    className={onRowClick ? "data-table__row--clickable" : undefined}
+                    className={rowClass || undefined}
                     onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                   >
                     {row.getVisibleCells().map((cell) => (
@@ -460,7 +467,8 @@ export default function SimpleTable<T>({
                       </td>
                     ))}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               {footerRows.length || extraFooter ? (
                 <tfoot>

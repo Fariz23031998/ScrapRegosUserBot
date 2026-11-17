@@ -16,6 +16,7 @@ import {
   Receipt,
   Settings,
   Ticket,
+  Trophy,
   Undo2,
   Users,
   Wallet,
@@ -46,6 +47,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "/orders": Receipt,
   "/order-logs": ClipboardList,
   "/tickets": Ticket,
+  "/rating": Trophy,
   "/tasks": ListTodo,
   "/finances": Wallet,
   "/repair-returns": Undo2,
@@ -75,8 +77,18 @@ function ReportNotifications() {
 
 export default function BotAdminLayout() {
   const { actor, profile, permissions, clearSession, refreshSession, hasPermission } = useAuth();
-  const { theme, dateTimeFormat, ticketPeriodDays, phoneAction, setTheme, setDateTimeFormat, setTicketPeriodDays, setPhoneAction } =
-    useUiPreferences();
+  const {
+    theme,
+    dateTimeFormat,
+    ticketPeriodDays,
+    phoneAction,
+    ticketOpenTarget,
+    setTheme,
+    setDateTimeFormat,
+    setTicketPeriodDays,
+    setPhoneAction,
+    setTicketOpenTarget,
+  } = useUiPreferences();
   const navigate = useNavigate();
   const location = useLocation();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
@@ -376,6 +388,16 @@ export default function BotAdminLayout() {
                       </select>
                     </label>
                     <p className="account-menu__hint">sip:909999999, без +998.</p>
+                    <label>
+                      Открытие тикета
+                      <select
+                        value={ticketOpenTarget}
+                        onChange={(event) => setTicketOpenTarget(event.target.value as "same" | "new")}
+                      >
+                        <option value="same">В текущей вкладке</option>
+                        <option value="new">В новой вкладке</option>
+                      </select>
+                    </label>
                   </section>
 
                   {profileError ? <p className="message error">{profileError}</p> : null}

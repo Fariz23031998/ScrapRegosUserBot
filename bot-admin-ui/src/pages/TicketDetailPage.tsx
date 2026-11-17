@@ -44,6 +44,7 @@ import ChatImagePreview from "../components/ChatImagePreview";
 import EntityAvatar from "../components/EntityAvatar";
 import LoadingState from "../components/LoadingState";
 import Modal from "../components/Modal";
+import QuickTextPicker from "../components/QuickTextPicker";
 import TicketAiAssistModal from "../components/TicketAiAssistModal";
 import TicketParticipantsPicker from "../components/TicketParticipantsPicker";
 import { useConfirm } from "../contexts/ConfirmContext";
@@ -1546,6 +1547,10 @@ export default function TicketDetailPage() {
     const requestId = ++chatRequestIdRef.current;
     const el = chatMessagesRef.current;
     const preserveOffset = el ? { height: el.scrollHeight, top: el.scrollTop } : undefined;
+    // Sync guards immediately — useEffect-backed refs lag one frame and allow
+    // scroll storms to start duplicate older-page fetches.
+    loadingOlderRef.current = true;
+    chatBusyRef.current = true;
     setLoadingOlder(true);
     setChatBusy(true);
     setChatStatus({ message: "Загрузка предыдущих сообщений…", loading: true });
@@ -1553,14 +1558,22 @@ export default function TicketDetailPage() {
       const data = await getTicketMessages(ticketId, { limit: CHAT_PAGE_LIMIT, offset: olderOffset });
       if (requestId !== chatRequestIdRef.current) return;
       const page = data.messages || [];
+      const beforeCount = chatMessagesStateRef.current.length;
       const merged = mergeMessages(chatMessagesStateRef.current, page, { prepend: true });
       const total = data.total ?? chatTotal;
+      const nextOffset = nextOlderMessagesOffset(data, olderOffset + page.length);
+      const added = merged.length - beforeCount;
+      // Defend against stuck CRM cursors: no progress → stop older paging.
+      const nextHasOlder =
+        Boolean(data.has_older) && page.length > 0 && added > 0 && nextOffset > olderOffset;
+      chatOffsetRef.current = nextOffset;
+      chatHasOlderRef.current = nextHasOlder;
       renderChatIntoState(
         merged,
         {
-          offset: nextOlderMessagesOffset(data, olderOffset + page.length),
+          offset: nextOffset,
           total,
-          hasOlder: Boolean(data.has_older),
+          hasOlder: nextHasOlder,
           chatIdValue: data.chat_id || chatIdRef.current,
         },
         { preserveOffset },
@@ -1574,6 +1587,8 @@ export default function TicketDetailPage() {
       });
     } finally {
       if (requestId === chatRequestIdRef.current) {
+        chatBusyRef.current = false;
+        loadingOlderRef.current = false;
         setChatBusy(false);
         setLoadingOlder(false);
       }
@@ -1993,6 +2008,15 @@ export default function TicketDetailPage() {
               }}
               extraActions={
                 <>
+                  <QuickTextPicker
+                    kind="chat_snippet"
+                    value={messageText}
+                    onChange={setMessageText}
+                    disabled={!composerEnabled || sendBusy}
+                    label="Шаблоны"
+                    manageLabel="Управление"
+                    emptyLabel="Пока нет сохранённых фраз."
+                  />
                   {canEditTickets ? (
                     <button
                       type="button"

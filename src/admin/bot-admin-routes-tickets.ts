@@ -3,11 +3,22 @@ import type { Request, Response } from 'express';
 import { requireRight } from './bot-admin-auth';
 import { enrichTicketsWithLocalData, resolveMissingTicketRecordings, scheduleTicketRecordingDurationBackfill } from './ticket-local-enrichment';
 import { listRegosChannelSettings } from '../db/regos-channel-settings';
-import { RegosCrmError, DEFAULT_DUPLICATE_INTERVAL_MINUTES, fetchAllTickets, dedupeTickets, summarizeTickets, buildTicketFilters, findLatestTicketForResponsibleUser, postTicketGet } from '../integrations/regos-crm';
-import { buildDurationSummary } from './ticket-duration';
+import {
+  RegosCrmError,
+  DEFAULT_DUPLICATE_INTERVAL_MINUTES,
+  fetchAllTickets,
+  fetchAllUsers,
+  dedupeTickets,
+  summarizeTickets,
+  buildTicketFilters,
+  findLatestTicketForResponsibleUser,
+  postTicketGet,
+} from '../integrations/regos-crm';
+import { buildDurationSummary, listCountedTickets, summarizeTicketsByResponsible } from './ticket-duration';
 import { summarizeByDuration, buildDurationsByTicketId } from '../../public/bot-admin/admin-ticket-summary';
 import { resolveSessionRegosUserId, parsePaginationQuery, mapEnrichedActiveTicket } from './bot-admin-shared';
 import { seedRecordingUrlCache } from './bot-admin-media';
+import { summarizeOrdersByRegosUserId } from '../db/partners-db';
 
 const INVALID_DURATION_MESSAGE = 'Минимальная длительность должна быть неотрицательной.';
 
@@ -54,7 +65,16 @@ export type TicketListQuery = {
   duplicateIntervalMinutes: number;
   durationFilterActive: boolean;
   minimumCallDuration: number;
+  fromUnix: number | null;
+  toUnix: number | null;
 };
+
+function parseUnixQueryParam(raw: string): number | null {
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return null;
+  return value;
+}
 
 export function parseTicketListQuery(req: Request): TicketListQuery {
   const { page, limit, offset } = parsePaginationQuery(req);
@@ -95,6 +115,8 @@ export function parseTicketListQuery(req: Request): TicketListQuery {
     duplicateIntervalMinutes,
     durationFilterActive,
     minimumCallDuration,
+    fromUnix: parseUnixQueryParam(fromDate),
+    toUnix: parseUnixQueryParam(toDate),
   };
 
   if (
@@ -125,6 +147,78 @@ function summarizeFilteredTickets(db: Db, tickets: any[], query: TicketListQuery
 export async function loadTicketSummary(db: Db, query: TicketListQuery) {
   const tickets = applyDuplicateFilter(await fetchAllTickets(query.regosRequest), query);
   return summarizeFilteredTickets(db, tickets, query);
+}
+
+function applyUserNamesToRatingEmployees(
+  employees: Array<{ user_id: number | null; name: string }>,
+  users: any[]
+) {
+  const nameById: Map<number, string> = new Map();
+  for (const user of users || []) {
+    const id = Number(user?.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    const label = String(user.full_name || user.login || '').trim();
+    if (label) nameById.set(id, label);
+  }
+  for (const row of employees) {
+    if (row.user_id == null) continue;
+    const named = nameById.get(row.user_id);
+    if (named) row.name = named;
+  }
+  return employees;
+}
+
+function applyOrderSumsToRating(
+  rating: {
+    summary: Record<string, number>;
+    employees: Array<Record<string, any>>;
+  },
+  ordersByRegosUserId: Map<number, { orders_amount: number; orders_paid_amount: number }>
+) {
+  let summaryOrdersAmount = 0;
+  let summaryOrdersPaidAmount = 0;
+  for (const row of rating.employees) {
+    const amounts =
+      row.user_id == null ? null : ordersByRegosUserId.get(Number(row.user_id)) || null;
+    const ordersAmount = Number(amounts?.orders_amount) || 0;
+    const ordersPaidAmount = Number(amounts?.orders_paid_amount) || 0;
+    row.orders_amount = ordersAmount;
+    row.orders_paid_amount = ordersPaidAmount;
+    summaryOrdersAmount += ordersAmount;
+    summaryOrdersPaidAmount += ordersPaidAmount;
+  }
+  rating.summary.orders_amount = summaryOrdersAmount;
+  rating.summary.orders_paid_amount = summaryOrdersPaidAmount;
+  return rating;
+}
+
+export async function loadTicketRating(db: Db, query: TicketListQuery) {
+  const tickets = await fetchAllTickets(query.regosRequest);
+  const { counted, countedCalls } = listCountedTickets(tickets, {
+    withoutDuplicates: query.withoutDuplicates,
+    duplicateIntervalMinutes: query.duplicateIntervalMinutes,
+    minimumCallDuration: query.durationFilterActive ? query.minimumCallDuration : null,
+    channelSettings: listRegosChannelSettings(db),
+    db,
+  });
+  const rating = summarizeTicketsByResponsible(counted, countedCalls);
+  try {
+    const users = await fetchAllUsers();
+    applyUserNamesToRatingEmployees(rating.employees, users);
+  } catch (error) {
+    console.warn('Ticket rating: failed to resolve REGOS user names', error);
+  }
+  applyOrderSumsToRating(
+    rating,
+    summarizeOrdersByRegosUserId(db, { fromUnix: query.fromUnix, toUnix: query.toUnix })
+  );
+  rating.employees.sort((a, b) => {
+    if (a.user_id == null && b.user_id != null) return 1;
+    if (a.user_id != null && b.user_id == null) return -1;
+    if (b.count !== a.count) return b.count - a.count;
+    return String(a.name).localeCompare(String(b.name), 'ru');
+  });
+  return rating;
 }
 
 async function enrichTicketPage(

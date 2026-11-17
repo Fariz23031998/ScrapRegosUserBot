@@ -1,5 +1,6 @@
-import { Pencil, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import { Link } from "react-router-dom";
+import EntityAvatar from "./EntityAvatar";
 import LoadingState from "./LoadingState";
 import PhoneCopyButton from "./PhoneCopyButton";
 import {
@@ -58,8 +59,10 @@ export type TicketCardsProps = {
   recordingDurations: Record<string, number | undefined>;
   canEditClients: boolean;
   canLinkClientFirms: boolean;
+  highlightedTicketId?: number | null;
   onOpenTicket: (ticket: Ticket) => void;
   onEditClient: (clientId: number) => void;
+  onCreateOrder: (ticket: Ticket) => void;
   onOpenFirm: (firm: TicketFirmLink) => void;
   onOpenRecording: (ticket: Ticket) => void;
 };
@@ -73,8 +76,10 @@ export default function TicketCards({
   recordingDurations,
   canEditClients,
   canLinkClientFirms,
+  highlightedTicketId = null,
   onOpenTicket,
   onEditClient,
+  onCreateOrder,
   onOpenFirm,
   onOpenRecording,
 }: TicketCardsProps) {
@@ -86,6 +91,7 @@ export default function TicketCards({
       {tickets.map((ticket) => {
         const clientName = ticket.client?.name || "—";
         const clientId = getTicketClientId(ticket);
+        const hasClient = Boolean(clientId || ticket.client?.name);
         const canOpenClient = Boolean(clientId && (canEditClients || canLinkClientFirms));
         const unpaidLabel = hasLookupPhone(ticket) ? unpaidOrdersLabel(ticket) : null;
         const unpaidHref = unpaidLabel ? unpaidOrdersHref(ticket) : null;
@@ -95,11 +101,13 @@ export default function TicketCards({
         const probed = recordingDurations[String(ticket.id)];
         const duration = cached ?? probed;
         const channelName = channelDisplayName(ticket.channel_id, channelNames);
+        const isActive = highlightedTicketId != null && ticket.id === highlightedTicketId;
+        const avatar = <EntityAvatar src={ticket.client?.photo_url} name={ticket.client?.name || clientName} size="sm" />;
 
         return (
           <article
             key={ticket.id}
-            className="ticket-card"
+            className={`ticket-card${isActive ? " ticket-card--active" : ""}`}
             role="button"
             tabIndex={0}
             onClick={() => onOpenTicket(ticket)}
@@ -120,19 +128,23 @@ export default function TicketCards({
             </header>
 
             <div className="ticket-card__client">
-              {canOpenClient ? (
-                <button
-                  type="button"
-                  className="ticket-client-edit"
-                  aria-label={`Редактировать клиента ${clientName}`}
-                  title="Редактировать клиента"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onEditClient(clientId!);
-                  }}
-                >
-                  <Pencil size={14} aria-hidden="true" />
-                </button>
+              {hasClient ? (
+                canOpenClient ? (
+                  <button
+                    type="button"
+                    className="ticket-client-avatar-btn"
+                    aria-label={`Редактировать клиента ${clientName}`}
+                    title="Редактировать клиента"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onEditClient(clientId!);
+                    }}
+                  >
+                    {avatar}
+                  </button>
+                ) : (
+                  <span className="ticket-client-avatar-static">{avatar}</span>
+                )
               ) : null}
               <span>{clientName}</span>
               {ticket.client?.phone ? <PhoneCopyButton phone={ticket.client.phone} /> : null}
@@ -210,6 +222,18 @@ export default function TicketCards({
             <footer className="ticket-card__foot">
               <TicketRecordingControl ticket={ticket} duration={duration} onOpen={onOpenRecording} />
             </footer>
+            <div className="ticket-card__actions">
+              <button
+                type="button"
+                className="btn-primary btn-sm ticket-create-order-btn"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCreateOrder(ticket);
+                }}
+              >
+                Создать заказ
+              </button>
+            </div>
           </article>
         );
       })}

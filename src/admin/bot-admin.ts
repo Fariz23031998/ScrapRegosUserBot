@@ -30,6 +30,7 @@ import { registerBotAdminOrderRoutes } from './bot-admin-routes-orders';
 import { registerBotAdminTicketsCollectionRoutes } from './bot-admin-routes-tickets';
 import { registerBotAdminSupportRoutes } from './bot-admin-routes-support';
 import { registerBotAdminUserRoutes } from './bot-admin-routes-users';
+import { registerBotAdminEmployeeQuickTextRoutes } from './bot-admin-routes-employee-quick-texts';
 import { registerBotAdminPageRoutes } from './bot-admin-routes-pages';
 
 function createBotAdminRouter(db: Db) {
@@ -159,6 +160,7 @@ function createBotAdminRouter(db: Db) {
   registerBotAdminTicketsCollectionRoutes(router, deps);
   registerBotAdminSupportRoutes(router, deps);
   registerBotAdminUserRoutes(router, deps);
+  registerBotAdminEmployeeQuickTextRoutes(router, deps);
   registerBotAdminPageRoutes(router, deps);
 
   return router;

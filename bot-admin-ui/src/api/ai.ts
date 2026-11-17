@@ -450,6 +450,7 @@ export function sendTicketAiAssistChat(
     session_id?: number;
     message: string;
     files?: Array<{ name: string; extension: string; data: string }>;
+    confirm_before_send?: boolean;
   },
   handlers?: AgentChatStreamHandlers,
 ) {
@@ -458,4 +459,17 @@ export function sendTicketAiAssistChat(
     payload,
     handlers,
   );
+}
+
+export function confirmTicketAiAssistReply(
+  ticketId: number,
+  payload: {
+    session_id?: number;
+    text: string;
+  },
+) {
+  return apiFetch<TicketAiAssistSession>(`/bot-admin/api/tickets/${ticketId}/ai-assist-confirm-reply`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

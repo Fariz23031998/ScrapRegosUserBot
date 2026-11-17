@@ -10,14 +10,14 @@ export type EntityCardsProps<T> = {
   items: T[];
   isLoading?: boolean;
   emptyMessage: string;
-  getKey: (item: T) => string;
-  getTitle: (item: T) => ReactNode;
-  getSubtitle?: (item: T) => ReactNode;
-  getFields?: (item: T) => EntityCardField[];
-  getBadges?: (item: T) => ReactNode;
-  getFooter?: (item: T) => ReactNode;
-  getActions?: (item: T) => ReactNode;
-  onOpen?: (item: T) => void;
+  getKey: (item: T, index: number) => string;
+  getTitle: (item: T, index: number) => ReactNode;
+  getSubtitle?: (item: T, index: number) => ReactNode;
+  getFields?: (item: T, index: number) => EntityCardField[];
+  getBadges?: (item: T, index: number) => ReactNode;
+  getFooter?: (item: T, index: number) => ReactNode;
+  getActions?: (item: T, index: number) => ReactNode;
+  onOpen?: (item: T, index: number) => void;
 };
 
 export default function EntityCards<T>({
@@ -38,34 +38,34 @@ export default function EntityCards<T>({
 
   return (
     <div className="ticket-cards">
-      {items.map((item) => {
-        const fields = getFields?.(item) || [];
-        const badges = getBadges?.(item);
-        const footer = getFooter?.(item);
-        const actions = getActions?.(item);
+      {items.map((item, index) => {
+        const fields = getFields?.(item, index) || [];
+        const badges = getBadges?.(item, index);
+        const footer = getFooter?.(item, index);
+        const actions = getActions?.(item, index);
         const interactive = Boolean(onOpen);
 
         return (
           <article
-            key={getKey(item)}
+            key={getKey(item, index)}
             className={`ticket-card${interactive ? "" : " ticket-card--static"}`}
             role={interactive ? "button" : undefined}
             tabIndex={interactive ? 0 : undefined}
-            onClick={interactive ? () => onOpen?.(item) : undefined}
+            onClick={interactive ? () => onOpen?.(item, index) : undefined}
             onKeyDown={
               interactive
                 ? (event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      onOpen?.(item);
+                      onOpen?.(item, index);
                     }
                   }
                 : undefined
             }
           >
             <header className="ticket-card__head">
-              <h2 className="ticket-card__subject">{getTitle(item)}</h2>
-              {getSubtitle ? <div className="ticket-card__client">{getSubtitle(item)}</div> : null}
+              <h2 className="ticket-card__subject">{getTitle(item, index)}</h2>
+              {getSubtitle ? <div className="ticket-card__client">{getSubtitle(item, index)}</div> : null}
             </header>
 
             {fields.length ? (

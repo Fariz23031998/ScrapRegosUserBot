@@ -26,7 +26,13 @@ import { evaluateCustomerMessageGate, evaluateCustomerMessageGateWithDb, handleC
 import { runKbAgent } from '../src/ai/kb-agent';
 import { loadCustomerTestSession, runCustomerTestAgent, resetCustomerTestLocks } from '../src/ai/customer-test-agent';
 import { loadEmployeeTestSession, runEmployeeTestAgent, resetEmployeeTestLocks } from '../src/ai/employee-test-agent';
-import { loadTicketAssistSession, runTicketAssistAgent, previewTicketAssistPrompt, resetTicketAssistLocks } from '../src/ai/customer-assist-agent';
+import {
+  loadTicketAssistSession,
+  runTicketAssistAgent,
+  previewTicketAssistPrompt,
+  confirmTicketAssistCustomerReply,
+  resetTicketAssistLocks,
+} from '../src/ai/customer-assist-agent';
 import { upsertTelegramTicketSession } from '../src/db/telegram-ticket-sessions';
 import { createRegosTicketWebhookHandler } from '../src/integrations/regos-ticket-webhook';
 import { upsertTicketSummary } from '../src/db/ticket-summaries';
@@ -313,6 +319,88 @@ describe('ticket AI assist agent', () => {
       assert.equal(posted.length, 1);
       assert.equal(posted[0].chatId, 'chat-42');
       assert.equal(posted[0].text, 'Лицензия стоит 450 000 сум.');
+      assert.equal(posted[0].authorEntityType, 'User');
+      assert.equal(posted[0].authorEntityId, 99);
+    } finally {
+      if (previousAuthor === undefined) delete process.env.AI_REGOS_AUTHOR_USER_ID;
+      else process.env.AI_REGOS_AUTHOR_USER_ID = previousAuthor;
+    }
+  });
+
+  it('defers reply_to_customer when confirm_before_send is enabled', async () => {
+    const database = createDb();
+    const previousAuthor = process.env.AI_REGOS_AUTHOR_USER_ID;
+    process.env.AI_REGOS_AUTHOR_USER_ID = '99';
+    let posted = 0;
+    try {
+      const result = await runTicketAssistAgent({
+        db: database,
+        userId: 3,
+        ticketId: 42,
+        message: 'Ответь клиенту, что лицензия 450 000 сум',
+        confirmBeforeSend: true,
+        deps: {
+          ...assistDeps({
+            addTicketMessage: async () => {
+              posted += 1;
+              return { ok: true };
+            },
+          }),
+          runAgent: async ({ tools }: Unchecked) => {
+            const replyTool = tools.find((tool?: any) => tool.name === 'reply_to_customer');
+            const pending = await replyTool.execute({ text: 'Лицензия стоит 450 000 сум.' });
+            assert.equal(pending.ok, true);
+            assert.equal(pending.pending_confirmation, true);
+            assert.equal(pending.sent, undefined);
+            return { content: 'Черновик готов к подтверждению.', steps: 2 };
+          },
+          provider: { async chat() { return { content: 'unused', toolCalls: [] }; } },
+        },
+      });
+
+      assert.equal(posted, 0);
+      assert.equal(result.replied_to_customer, false);
+      assert.equal(result.customer_reply, null);
+      assert.equal(result.pending_customer_reply, 'Лицензия стоит 450 000 сум.');
+      assert.equal(result.reply, 'Черновик готов к подтверждению.');
+    } finally {
+      if (previousAuthor === undefined) delete process.env.AI_REGOS_AUTHOR_USER_ID;
+      else process.env.AI_REGOS_AUTHOR_USER_ID = previousAuthor;
+    }
+  });
+
+  it('sends the confirmed assist reply to the customer chat', async () => {
+    const database = createDb();
+    const previousAuthor = process.env.AI_REGOS_AUTHOR_USER_ID;
+    process.env.AI_REGOS_AUTHOR_USER_ID = '99';
+    const posted: any[] = [];
+    try {
+      const session = await loadTicketAssistSession({
+        db: database,
+        userId: 3,
+        ticketId: 42,
+        deps: assistDeps(),
+      });
+      const result = await confirmTicketAssistCustomerReply({
+        db: database,
+        userId: 3,
+        ticketId: 42,
+        sessionId: session.session_id,
+        text: 'Итоговая цена: 450 000 сум.',
+        deps: assistDeps({
+          addTicketMessage: async (payload?: any) => {
+            posted.push(payload);
+            return { ok: true, id: 'sent-2' };
+          },
+        }),
+      });
+
+      assert.equal(result.replied_to_customer, true);
+      assert.equal(result.customer_reply, 'Итоговая цена: 450 000 сум.');
+      assert.equal(result.pending_customer_reply, null);
+      assert.equal(posted.length, 1);
+      assert.equal(posted[0].chatId, 'chat-42');
+      assert.equal(posted[0].text, 'Итоговая цена: 450 000 сум.');
       assert.equal(posted[0].authorEntityType, 'User');
       assert.equal(posted[0].authorEntityId, 99);
     } finally {

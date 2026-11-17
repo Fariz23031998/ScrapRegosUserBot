@@ -1,6 +1,10 @@
 import type { Unchecked } from '../types/unchecked';
 import type { Db } from '../types/db';
 import { isEmployeeClientPhone } from './tools/employees';
+import {
+  loadTelegramTicketSettings,
+  resolveCustomerAiEnabled,
+} from '../bot/telegram-ticket-settings';
 
 function resolveAiAuthorUserId() {
   const raw = Number(process.env.AI_REGOS_AUTHOR_USER_ID);
@@ -107,8 +111,17 @@ function isIgnoredCustomerMessage(text?: any, list?: any) {
   return items.some((item?: any) => String(item || '').trim().toLowerCase() === normalized);
 }
 
-function evaluateCustomerMessageGate({ settings, message, ticket, isEmployeePhone = false, aiStopped = false }: Unchecked = {}) {
-  if (!settings?.enabled) return { handle: false, reason: 'disabled' };
+function evaluateCustomerMessageGate({
+  settings,
+  message,
+  ticket,
+  isEmployeePhone = false,
+  aiStopped = false,
+  masterEnabled,
+  masterDisabledReason,
+}: Unchecked = {}) {
+  const enabled = masterEnabled != null ? Boolean(masterEnabled) : Boolean(settings?.enabled);
+  if (!enabled) return { handle: false, reason: masterDisabledReason || 'disabled' };
   // Per-ticket stop: blocks automatic customer replies only (not employee assist).
   if (aiStopped) return { handle: false, reason: 'stopped' };
   if (String(message?.message_type || 'Regular') !== 'Regular') {
@@ -152,14 +165,24 @@ function evaluateCustomerReplyQuota(db: Db, { settings, ticket, chatId }: Unchec
   return { handle: true, reason: null };
 }
 
-function evaluateCustomerMessageGateWithDb(db: Db, { settings, message, ticket, chatId }: Unchecked = {}) {
+function evaluateCustomerMessageGateWithDb(db: Db, { settings, message, ticket, chatId, telegramSettings }: Unchecked = {}) {
   const { isTicketAiStopped } = (require('../db/ticket-ai-state') as typeof import('../db/ticket-ai-state'));
+  const tgSettings =
+    telegramSettings ||
+    (db ? loadTelegramTicketSettings(db) : { aiEnabled: true, channelId: null });
+  const master = resolveCustomerAiEnabled({
+    settings,
+    ticket,
+    telegramSettings: tgSettings,
+  });
   const gate = evaluateCustomerMessageGate({
     settings,
     message,
     ticket,
     isEmployeePhone: isEmployeeClientPhone(db, ticket?.client?.phone),
     aiStopped: isTicketAiStopped(db, ticket?.id),
+    masterEnabled: master.enabled,
+    masterDisabledReason: master.reason,
   });
   if (!gate.handle) return gate;
   return evaluateCustomerReplyQuota(db, {

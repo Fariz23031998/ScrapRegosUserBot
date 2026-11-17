@@ -2,6 +2,7 @@ import { Sparkles } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
+  confirmTicketAiAssistReply,
   getTicketAiAssistPrompt,
   getTicketAiAssistSession,
   resetTicketAiAssistSession,
@@ -11,12 +12,17 @@ import { useAuth } from "../hooks/useAuth";
 import { useConfirm } from "../contexts/ConfirmContext";
 import { useAgentChatThread } from "../hooks/useAgentChatThread";
 import { filesFromDataTransfer, isFileDrag } from "../lib/ticket-chat";
+import {
+  loadAiAssistConfirmReply,
+  saveAiAssistConfirmReply,
+} from "../lib/ui-preferences";
 import type { TicketAiAssistSession } from "../lib/types";
 import AgentChatMessages from "./AgentChatMessages";
 import AgentPromptModal from "./AgentPromptModal";
 import ChatCompose, { type ChatComposeHandle } from "./ChatCompose";
 import LoadingState from "./LoadingState";
 import Modal from "./Modal";
+import QuickTextPicker from "./QuickTextPicker";
 
 type TicketAiAssistModalProps = {
   open: boolean;
@@ -40,6 +46,8 @@ export default function TicketAiAssistModal({
   const [dropActive, setDropActive] = useState(false);
   const [sentNotice, setSentNotice] = useState<string | null>(null);
   const [promptOpen, setPromptOpen] = useState(false);
+  const [confirmBeforeSend, setConfirmBeforeSend] = useState(() => loadAiAssistConfirmReply());
+  const [pendingReply, setPendingReply] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const composeRef = useRef<ChatComposeHandle>(null);
   const sessionKey = ["ticket-ai-assist", ticketId];
@@ -66,6 +74,7 @@ export default function TicketAiAssistModal({
     onSuccess: (data) => {
       setMessage("");
       setSentNotice(null);
+      setPendingReply(null);
       thread.finishTurn();
       applySession(data);
     },
@@ -79,12 +88,19 @@ export default function TicketAiAssistModal({
           session_id: sessionId,
           message: payload.message,
           files: payload.files,
+          confirm_before_send: confirmBeforeSend,
         },
         { onDelta: thread.appendDelta },
       ),
     onSuccess: (data) => {
       thread.finishTurn();
       applySession(data);
+      if (data.pending_customer_reply) {
+        setPendingReply(data.pending_customer_reply);
+        setSentNotice(null);
+        return;
+      }
+      setPendingReply(null);
       if (data.replied_to_customer) {
         setSentNotice("Ответ отправлен клиенту.");
         onCustomerReply?.();
@@ -95,15 +111,32 @@ export default function TicketAiAssistModal({
     },
   });
 
+  const confirmMutation = useMutation({
+    mutationFn: (text: string) =>
+      confirmTicketAiAssistReply(ticketId, {
+        session_id: sessionId,
+        text,
+      }),
+    onSuccess: (data) => {
+      applySession(data);
+      setPendingReply(null);
+      if (data.replied_to_customer) {
+        setSentNotice("Ответ отправлен клиенту.");
+        onCustomerReply?.();
+      }
+    },
+  });
+
   const messages = thread.messages;
-  const chatError = (chatMutation.error || resetMutation.error || sessionQuery.error) as Error | null;
-  const composerEnabled = !chatMutation.isPending;
+  const chatError = (chatMutation.error || resetMutation.error || sessionQuery.error || confirmMutation.error) as Error | null;
+  const busy = chatMutation.isPending || confirmMutation.isPending;
+  const composerEnabled = !busy;
 
   useEffect(() => {
     if (!open) return;
     const node = listRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [open, messages.length, thread.streamingAssistant?.content, chatMutation.isPending]);
+  }, [open, messages.length, thread.streamingAssistant?.content, chatMutation.isPending, pendingReply]);
 
   async function handleReset() {
     const ok = await confirm({
@@ -111,6 +144,11 @@ export default function TicketAiAssistModal({
       confirmLabel: "Новый чат",
     });
     if (ok) resetMutation.mutate();
+  }
+
+  function handleConfirmToggle(checked: boolean) {
+    setConfirmBeforeSend(checked);
+    saveAiAssistConfirmReply(checked);
   }
 
   function handlePanelDragEnter(event: DragEvent<HTMLElement>) {
@@ -166,6 +204,15 @@ export default function TicketAiAssistModal({
             сообщение в обращение.
           </p>
           <div className="ticket-ai-assist__toolbar-actions">
+            <label className="ticket-ai-assist__confirm-toggle">
+              <input
+                type="checkbox"
+                checked={confirmBeforeSend}
+                disabled={busy}
+                onChange={(event) => handleConfirmToggle(event.target.checked)}
+              />
+              <span>Подтверждать ответ клиенту</span>
+            </label>
             {canViewAiPrompt ? (
               <button
                 type="button"
@@ -181,7 +228,7 @@ export default function TicketAiAssistModal({
               type="button"
               className="btn-secondary btn-sm"
               onClick={() => void handleReset()}
-              disabled={resetMutation.isPending || !sessionQuery.data}
+              disabled={resetMutation.isPending || !sessionQuery.data || busy}
             >
               Новый чат
             </button>
@@ -197,6 +244,39 @@ export default function TicketAiAssistModal({
           ) : null}
           <AgentChatMessages messages={messages} />
         </div>
+        {pendingReply != null ? (
+          <div className="ticket-ai-assist__pending">
+            <p className="ticket-ai-assist__pending-title">Ответ клиенту (черновик)</p>
+            <textarea
+              className="ticket-ai-assist__pending-text"
+              value={pendingReply}
+              rows={4}
+              disabled={confirmMutation.isPending}
+              onChange={(event) => setPendingReply(event.target.value)}
+            />
+            <div className="ticket-ai-assist__pending-actions">
+              <button
+                type="button"
+                className="btn-primary btn-sm"
+                disabled={confirmMutation.isPending || !pendingReply.trim()}
+                onClick={() => confirmMutation.mutate(pendingReply.trim())}
+              >
+                Отправить клиенту
+              </button>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                disabled={confirmMutation.isPending}
+                onClick={() => {
+                  setPendingReply(null);
+                  confirmMutation.reset();
+                }}
+              >
+                Отменить
+              </button>
+            </div>
+          </div>
+        ) : null}
         {sentNotice ? <p className="message success">{sentNotice}</p> : null}
         <ChatCompose
           ref={composeRef}
@@ -211,7 +291,18 @@ export default function TicketAiAssistModal({
             await chatMutation.mutateAsync({ message: text.trim(), files });
           }}
           placeholder="Подсказка агенту или перетащите файл…"
-          busy={chatMutation.isPending}
+          busy={busy}
+          extraActions={
+            <QuickTextPicker
+              kind="ai_assist_prompt"
+              value={message}
+              onChange={setMessage}
+              disabled={busy}
+              label="Промпты"
+              manageLabel="Управление"
+              emptyLabel="Пока нет сохранённых промптов."
+            />
+          }
           footer={chatError ? <p className="message error">{chatError.message}</p> : null}
         />
       </div>

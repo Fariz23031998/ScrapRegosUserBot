@@ -140,6 +140,7 @@ export type AiSettings = {
 
 export type TelegramTicketSettings = {
   enabled: boolean;
+  ai_enabled: boolean;
   channel_id: number | null;
   direction: string;
   responsible_user_id: number | null;
@@ -411,7 +412,20 @@ export type TicketAiAssistSession = {
   reply?: string;
   replied_to_customer?: boolean;
   customer_reply?: string | null;
+  pending_customer_reply?: string | null;
 };
+
+export type EmployeeQuickText = {
+  id: number;
+  user_id: number | null;
+  title: string | null;
+  body: string;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type EmployeeQuickTextKind = "ai_assist_prompt" | "chat_snippet";
 
 export type RegosUser = {
   id: number;

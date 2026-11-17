@@ -154,6 +154,7 @@ export function registerBotAdminChannelSettingsRoutes(router: any, deps: { db: D
         const body = req.body && typeof req.body === 'object' ? req.body : {};
         const saved = saveTelegramTicketSettings(db, {
           enabled: body.enabled,
+          aiEnabled: body.ai_enabled ?? body.aiEnabled,
           channelId: body.channel_id ?? body.channelId,
           direction: body.direction,
           responsibleUserId: body.responsible_user_id ?? body.responsibleUserId,

@@ -10,7 +10,12 @@ import { setTicketAiStopped, isTicketAiStopped } from '../db/ticket-ai-state';
 import { RegosCrmError, findTicketById } from '../integrations/regos-crm';
 import { respondAgentChat } from '../http/agent-chat-sse';
 import { previewCustomerAgentPrompt } from '../ai/customer-agent';
-import { loadTicketAssistSession, runTicketAssistAgent, previewTicketAssistPrompt } from '../ai/customer-assist-agent';
+import {
+  loadTicketAssistSession,
+  runTicketAssistAgent,
+  previewTicketAssistPrompt,
+  confirmTicketAssistCustomerReply,
+} from '../ai/customer-assist-agent';
 import { CHAT_MESSAGE_JSON_LIMIT, parseChatUploadFiles } from '../ai/chat-uploads';
 import { getTicketSummary, saveTicketSummaryText, deleteTicketSummary } from '../db/ticket-summaries';
 import { resolveTicketClientId } from '../ai/ticket-period';
@@ -238,6 +243,18 @@ export function registerBotAdminTicketDetailRoutes(router: any, deps: { db: Db; 
     return mapAgentChatError(error, 'Не удалось получить ответ агента поддержки.');
   }
 
+  function mapTicketAssistConfirmError(error: any) {
+    if (error.message === 'EMPTY_MESSAGE') return 'Введите текст ответа клиенту.';
+    if (error.message === 'TICKET_NOT_FOUND' || error.message === 'INVALID_TICKET_ID') return 'Тикет не найден.';
+    if (error.assistSendError === 'no-chat') return 'У обращения нет чата.';
+    if (error.assistSendError === 'no-author') return 'Не настроен автор сообщений ИИ.';
+    if (error.assistSendError === 'missing_ticket') return 'Тикет не найден.';
+    if (error.assistSendError === 'empty_text') return 'Введите текст ответа клиенту.';
+    if (error instanceof RegosCrmError) return error.message;
+    if (error.assistSendError) return String(error.assistSendError);
+    return 'Не удалось отправить ответ клиенту.';
+  }
+
   router.get('/api/tickets/:id/ai-assist', requireRight(db, 'tickets_read'), async (req: Request, res: Response) => {
     try {
       const result = await loadTicketAssistSession({
@@ -285,6 +302,9 @@ export function registerBotAdminTicketDetailRoutes(router: any, deps: { db: Db; 
         if (!message && files.length === 0) {
           return res.status(400).json({ message: 'Введите текст сообщения или прикрепите файл.' });
         }
+        const confirmBeforeSend = Boolean(
+          req.body?.confirm_before_send ?? req.body?.confirmBeforeSend,
+        );
         return respondAgentChat(
           req,
           res,
@@ -296,12 +316,47 @@ export function registerBotAdminTicketDetailRoutes(router: any, deps: { db: Db; 
               sessionId: req.body?.session_id,
               message,
               files,
+              confirmBeforeSend,
               onDelta,
             }),
           { mapError: mapTicketAssistChatError }
         );
       } catch (error: any) {
         return sendTicketAssistError(res, error);
+      }
+    }
+  );
+
+  router.post(
+    '/api/tickets/:id/ai-assist-confirm-reply',
+    requireRight(db, 'tickets_read'),
+    express.json(),
+    async (req: Request, res: Response) => {
+      try {
+        const text = String(req.body?.text || '').trim();
+        if (!text) {
+          return res.status(400).json({ message: 'Введите текст ответа клиенту.' });
+        }
+        const result = await confirmTicketAssistCustomerReply({
+          db,
+          userId: resolveKnowledgeActorUserId(db, req),
+          ticketId: req.params.id,
+          sessionId: req.body?.session_id,
+          text,
+        });
+        return res.json(result);
+      } catch (error: any) {
+        if (error.message === 'TICKET_NOT_FOUND' || error.message === 'INVALID_TICKET_ID') {
+          return res.status(404).json({ message: mapTicketAssistConfirmError(error) });
+        }
+        if (error.message === 'EMPTY_MESSAGE' || error.assistSendError === 'empty_text') {
+          return res.status(400).json({ message: mapTicketAssistConfirmError(error) });
+        }
+        if (error instanceof RegosCrmError) {
+          return res.status(error.status || 502).json({ message: error.message });
+        }
+        console.error('Confirm ticket AI assist reply error:', error);
+        return res.status(500).json({ message: mapTicketAssistConfirmError(error) });
       }
     }
   );

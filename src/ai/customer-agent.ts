@@ -114,10 +114,6 @@ async function handleCustomerChatMessage({
   const loadSettings = deps.loadAiSettings || loadAiSettings;
   const settings = loadSettings(db);
   const model = resolveAgentModel(settings, 'customer');
-  if (!settings.enabled) {
-    console.info('[ai] skip customer message: disabled');
-    return { handled: false, reason: 'disabled' };
-  }
 
   inflightChats.add(id);
   let chatLocked = false;
@@ -164,6 +160,9 @@ async function handleCustomerChatMessage({
         : trigger,
       ticket,
       chatId: id,
+      telegramSettings: deps.loadTelegramTicketSettings
+        ? deps.loadTelegramTicketSettings(db)
+        : undefined,
     });
     if (!gate.handle) {
       if (gate.reason === 'ticket-cap') {

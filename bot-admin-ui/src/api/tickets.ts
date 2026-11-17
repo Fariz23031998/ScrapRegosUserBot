@@ -20,6 +20,9 @@ export type TicketSummaryCounts = {
   count: number;
   slaBreached: number;
   rated: number;
+  call_duration_seconds?: number;
+  orders_amount?: number;
+  orders_paid_amount?: number;
 };
 
 export function listTickets(params: Record<string, string>) {
@@ -38,6 +41,18 @@ export function listTickets(params: Record<string, string>) {
 export function listTicketSummary(params: Record<string, string>) {
   const search = new URLSearchParams(params);
   return apiFetch<{ summary: TicketSummaryCounts }>(`/bot-admin/api/tickets/summary?${search}`);
+}
+
+export type TicketRatingEmployee = TicketSummaryCounts & {
+  user_id: number | null;
+  name: string;
+};
+
+export function listTicketRating(params: Record<string, string>) {
+  const search = new URLSearchParams(params);
+  return apiFetch<{ summary: TicketSummaryCounts; employees: TicketRatingEmployee[] }>(
+    `/bot-admin/api/tickets/rating?${search}`,
+  );
 }
 
 export function getTicket(id: number) {
@@ -243,6 +258,7 @@ export function getTelegramTicketSettings() {
 
 export function saveTelegramTicketSettings(payload: {
   enabled: boolean;
+  ai_enabled?: boolean;
   channel_id?: number | null;
   direction?: string;
   responsible_user_id?: number | null;

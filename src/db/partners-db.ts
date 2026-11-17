@@ -85,6 +85,60 @@ function summarizeOrders(rows?: any) {
   return summary;
 }
 
+function unixSecondsToSqliteUtc(unix?: any) {
+  if (unix == null || unix === '') return null;
+  const n = Number(unix);
+  if (!Number.isFinite(n)) return null;
+  return new Date(n * 1000).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+/** Per-REGOS-user order amounts for rating (telegram_id → bot_users.regos_user_id). */
+function summarizeOrdersByRegosUserId(db: Db, { fromUnix = null, toUnix = null }: Unchecked = {}) {
+  const byRegosUserId: Map<number, { orders_amount: number; orders_paid_amount: number }> = new Map();
+  const hasOrders = db
+    .prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'orders' LIMIT 1`)
+    .get();
+  if (!hasOrders) return byRegosUserId;
+
+  const from = unixSecondsToSqliteUtc(fromUnix);
+  const to = unixSecondsToSqliteUtc(toUnix);
+  const where: string[] = ['bu.regos_user_id IS NOT NULL'];
+  const params: any[] = [];
+  if (from) {
+    where.push(`datetime(o.created_at) >= datetime(?)`);
+    params.push(from);
+  }
+  if (to) {
+    where.push(`datetime(o.created_at) <= datetime(?)`);
+    params.push(to);
+  }
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        bu.regos_user_id AS regos_user_id,
+        SUM(CASE WHEN o.status IN ('pending', 'paid', 'paid_cash') THEN o.amount ELSE 0 END) AS orders_amount,
+        SUM(CASE WHEN o.status IN ('paid', 'paid_cash') THEN o.amount ELSE 0 END) AS orders_paid_amount
+      FROM orders o
+      INNER JOIN bot_users bu ON bu.telegram_id = o.telegram_id
+      WHERE ${where.join(' AND ')}
+      GROUP BY bu.regos_user_id
+    `
+    )
+    .all(...params);
+
+  for (const row of rows || []) {
+    const id = Number(row?.regos_user_id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    byRegosUserId.set(id, {
+      orders_amount: Number(row?.orders_amount) || 0,
+      orders_paid_amount: Number(row?.orders_paid_amount) || 0,
+    });
+  }
+  return byRegosUserId;
+}
+
 function orderMatchesQuery(order?: any, query?: any) {
   const trimmed = String(query || '').trim();
   if (!trimmed) return true;
@@ -480,6 +534,7 @@ export {
   createOrder,
   getOrderById,
   listOrders,
+  summarizeOrdersByRegosUserId,
   setOrderPaymeReceiptId,
   markOrderPaid,
   createPayment,

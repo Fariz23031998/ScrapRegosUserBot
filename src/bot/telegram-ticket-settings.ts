@@ -4,6 +4,7 @@ import { normalizeParticipantUserIds } from '../integrations/regos-crm';
 
 const SETTING_KEYS = {
   enabled: 'telegram_ticket_enabled',
+  aiEnabled: 'telegram_ticket_ai_enabled',
   channelId: 'telegram_ticket_channel_id',
   direction: 'telegram_ticket_direction',
   responsibleUserId: 'telegram_ticket_responsible_user_id',
@@ -102,6 +103,7 @@ function loadTelegramTicketSettings(db: Db) {
   const stored = getSettings(db, Object.values(SETTING_KEYS));
   return {
     enabled: parseBooleanSetting(stored[SETTING_KEYS.enabled], false),
+    aiEnabled: parseBooleanSetting(stored[SETTING_KEYS.aiEnabled], true),
     channelId: parseOptionalPositiveId(stored[SETTING_KEYS.channelId]),
     direction: parseStoredDirection(stored[SETTING_KEYS.direction]),
     responsibleUserId: parseOptionalPositiveId(stored[SETTING_KEYS.responsibleUserId]),
@@ -115,6 +117,7 @@ function saveTelegramTicketSettings(db: Db, patch: any = {}) {
   const current = loadTelegramTicketSettings(db);
   const next = {
     enabled: patch.enabled != null ? Boolean(patch.enabled) : current.enabled,
+    aiEnabled: patch.aiEnabled != null ? Boolean(patch.aiEnabled) : current.aiEnabled,
     channelId:
       patch.channelId !== undefined
         ? normalizeOptionalPositiveId(patch.channelId, 'INVALID_TELEGRAM_TICKET_CHANNEL')
@@ -148,6 +151,7 @@ function saveTelegramTicketSettings(db: Db, patch: any = {}) {
 
   setSettings(db, {
     [SETTING_KEYS.enabled]: next.enabled ? '1' : '0',
+    [SETTING_KEYS.aiEnabled]: next.aiEnabled ? '1' : '0',
     [SETTING_KEYS.channelId]: next.channelId == null ? null : String(next.channelId),
     [SETTING_KEYS.direction]: next.direction,
     [SETTING_KEYS.responsibleUserId]:
@@ -164,6 +168,7 @@ function saveTelegramTicketSettings(db: Db, patch: any = {}) {
 function serializeTelegramTicketSettings(settings?: any) {
   return {
     enabled: Boolean(settings.enabled),
+    ai_enabled: settings.aiEnabled != null ? Boolean(settings.aiEnabled) : true,
     channel_id: settings.channelId ?? null,
     direction: settings.direction || DEFAULT_DIRECTION,
     responsible_user_id: settings.responsibleUserId ?? null,
@@ -179,6 +184,35 @@ function isTelegramTicketConfigured(settings?: any) {
   return Boolean(settings?.enabled && settings?.channelId);
 }
 
+function isTelegramTicketChannel(ticket?: any, settings?: any) {
+  const channelId = settings?.channelId;
+  if (channelId == null || channelId === '') return false;
+  const ticketChannelId = ticket?.channel_id;
+  if (ticketChannelId == null || ticketChannelId === '') return false;
+  return Number(ticketChannelId) === Number(channelId);
+}
+
+function resolveCustomerAiEnabled({
+  settings,
+  ticket,
+  telegramSettings,
+}: {
+  settings?: any;
+  ticket?: any;
+  telegramSettings?: any;
+} = {}) {
+  if (isTelegramTicketChannel(ticket, telegramSettings)) {
+    return {
+      enabled: Boolean(telegramSettings?.aiEnabled),
+      reason: telegramSettings?.aiEnabled ? null : 'telegram-ai-disabled',
+    };
+  }
+  return {
+    enabled: Boolean(settings?.enabled),
+    reason: settings?.enabled ? null : 'disabled',
+  };
+}
+
 export {
   SETTING_KEYS,
   ALLOWED_DIRECTIONS,
@@ -189,4 +223,6 @@ export {
   saveTelegramTicketSettings,
   serializeTelegramTicketSettings,
   isTelegramTicketConfigured,
+  isTelegramTicketChannel,
+  resolveCustomerAiEnabled,
 };

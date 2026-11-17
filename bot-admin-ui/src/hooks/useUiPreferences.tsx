@@ -3,14 +3,17 @@ import {
   type DateTimeFormatId,
   type PhoneAction,
   type ThemePreference,
+  type TicketOpenTarget,
   loadDateTimeFormat,
   loadPhoneAction,
   loadThemePreference,
+  loadTicketOpenTarget,
   loadTicketPeriodDays,
   normalizeTicketPeriodDays,
   saveDateTimeFormat,
   savePhoneAction,
   saveThemePreference,
+  saveTicketOpenTarget,
   saveTicketPeriodDays,
 } from "../lib/ui-preferences";
 import { applyTheme } from "../lib/utils";
@@ -20,10 +23,12 @@ type UiPreferencesContextValue = {
   dateTimeFormat: DateTimeFormatId;
   ticketPeriodDays: number;
   phoneAction: PhoneAction;
+  ticketOpenTarget: TicketOpenTarget;
   setTheme: (theme: ThemePreference) => void;
   setDateTimeFormat: (format: DateTimeFormatId) => void;
   setTicketPeriodDays: (days: number) => void;
   setPhoneAction: (action: PhoneAction) => void;
+  setTicketOpenTarget: (target: TicketOpenTarget) => void;
 };
 
 const UiPreferencesContext = createContext<UiPreferencesContextValue | null>(null);
@@ -33,6 +38,7 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
   const [dateTimeFormat, setDateTimeFormatState] = useState<DateTimeFormatId>(loadDateTimeFormat);
   const [ticketPeriodDays, setTicketPeriodDaysState] = useState<number>(loadTicketPeriodDays);
   const [phoneAction, setPhoneActionState] = useState<PhoneAction>(loadPhoneAction);
+  const [ticketOpenTarget, setTicketOpenTargetState] = useState<TicketOpenTarget>(loadTicketOpenTarget);
 
   useEffect(() => {
     applyTheme(theme);
@@ -50,6 +56,10 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     savePhoneAction(phoneAction);
   }, [phoneAction]);
+
+  useEffect(() => {
+    saveTicketOpenTarget(ticketOpenTarget);
+  }, [ticketOpenTarget]);
 
   useEffect(() => {
     if (theme !== "system") return;
@@ -75,18 +85,35 @@ export function UiPreferencesProvider({ children }: { children: ReactNode }) {
     setPhoneActionState(next);
   }, []);
 
+  const setTicketOpenTarget = useCallback((next: TicketOpenTarget) => {
+    setTicketOpenTargetState(next);
+  }, []);
+
   const value = useMemo(
     () => ({
       theme,
       dateTimeFormat,
       ticketPeriodDays,
       phoneAction,
+      ticketOpenTarget,
       setTheme,
       setDateTimeFormat,
       setTicketPeriodDays,
       setPhoneAction,
+      setTicketOpenTarget,
     }),
-    [theme, dateTimeFormat, ticketPeriodDays, phoneAction, setTheme, setDateTimeFormat, setTicketPeriodDays, setPhoneAction],
+    [
+      theme,
+      dateTimeFormat,
+      ticketPeriodDays,
+      phoneAction,
+      ticketOpenTarget,
+      setTheme,
+      setDateTimeFormat,
+      setTicketPeriodDays,
+      setPhoneAction,
+      setTicketOpenTarget,
+    ],
   );
 
   return <UiPreferencesContext.Provider value={value}>{children}</UiPreferencesContext.Provider>;

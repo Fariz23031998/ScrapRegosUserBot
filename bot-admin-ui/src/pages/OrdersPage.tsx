@@ -23,7 +23,19 @@ import { COMPACT_LAYOUT_QUERY, useMediaQuery } from "../hooks/useMediaQuery";
 import { usePagedInfiniteQuery } from "../hooks/usePagedInfiniteQuery";
 import { useUiPreferences } from "../hooks/useUiPreferences";
 import type { Order, OrderSummary } from "../lib/types";
+import { ticketDetailHref, ticketDetailPath, type TicketOpenTarget } from "../lib/ui-preferences";
 import { formatAmount, formatDateTime } from "../lib/utils";
+
+function TicketIdLink({ ticketId, target }: { ticketId: string | number; target: TicketOpenTarget }) {
+  if (target === "new") {
+    return (
+      <a href={ticketDetailHref(ticketId)} target="_blank" rel="noopener noreferrer">
+        {ticketId}
+      </a>
+    );
+  }
+  return <Link to={ticketDetailPath(ticketId)}>{ticketId}</Link>;
+}
 
 type OrderFilters = {
   search: string;
@@ -248,7 +260,7 @@ function orderActionButtons(
 
 export default function OrdersPage() {
   const { hasPermission } = useAuth();
-  const { dateTimeFormat } = useUiPreferences();
+  const { dateTimeFormat, ticketOpenTarget } = useUiPreferences();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const compact = useMediaQuery(COMPACT_LAYOUT_QUERY);
@@ -364,7 +376,7 @@ export default function OrdersPage() {
         accessorFn: (row) => row.ticket_id ?? null,
         cell: ({ row }) =>
           row.original.ticket_id ? (
-            <Link to={`/tickets/${row.original.ticket_id}`}>{row.original.ticket_id}</Link>
+            <TicketIdLink ticketId={row.original.ticket_id} target={ticketOpenTarget} />
           ) : (
             "—"
           ),
@@ -379,7 +391,7 @@ export default function OrdersPage() {
         },
       },
     ],
-    [hasPermission, dateTimeFormat],
+    [hasPermission, dateTimeFormat, ticketOpenTarget],
   );
 
   const orders = ordersQuery.items;
@@ -470,7 +482,7 @@ export default function OrdersPage() {
               {
                 label: "Тикет",
                 value: order.ticket_id ? (
-                  <Link to={`/tickets/${order.ticket_id}`}>{order.ticket_id}</Link>
+                  <TicketIdLink ticketId={order.ticket_id} target={ticketOpenTarget} />
                 ) : (
                   "—"
                 ),

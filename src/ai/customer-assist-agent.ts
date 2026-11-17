@@ -97,6 +97,8 @@ async function assembleTicketAssistPrompt({
   deps = {},
   history,
   onReplySent,
+  onReplyPending,
+  requireConfirm = false,
 }: Unchecked = {}) {
   const modelHistory = history || toModelHistory(listTicketAssistMessages(db, session.id));
   const chatId = ticket.chat_id != null ? String(ticket.chat_id).trim() : '';
@@ -125,7 +127,9 @@ async function assembleTicketAssistPrompt({
         ticket,
         chatId,
         deps,
+        requireConfirm: Boolean(requireConfirm),
         onSent: onReplySent,
+        onPending: onReplyPending,
       }),
     ],
     { db, settings, agentSlug: 'customer_assist', ticket },
@@ -189,13 +193,59 @@ async function loadTicketAssistSession({ db, userId, ticketId, sessionId, reset 
   return serializeTicketAssistSession(db, session);
 }
 
-function createReplyToCustomerTool({ ticket, chatId, deps = {}, onSent }: Unchecked = {}) {
-  const addTicketMessage = deps.addTicketMessage || (require('../integrations/regos-crm') as typeof import('../integrations/regos-crm')).addTicketMessage;
-  const ensureParticipant =
-    deps.ensureTicketParticipant || (require('../integrations/regos-crm') as typeof import('../integrations/regos-crm')).ensureTicketParticipant;
-  const isParticipant =
-    deps.isTicketStaffParticipant || (require('../integrations/regos-crm') as typeof import('../integrations/regos-crm')).isTicketStaffParticipant;
+async function sendAssistCustomerReply({
+  ticket,
+  chatId,
+  text,
+  deps = {},
+}: Unchecked = {}): Promise<{ ok: true; reply: string } | { ok: false; error: string }> {
+  const reply = truncateText(text);
+  if (!reply) return { ok: false, error: 'empty_text' };
+  const id = String(chatId || ticket?.chat_id || '').trim();
+  if (!id) return { ok: false, error: 'no-chat' };
+  const authorEntityId = resolveAiAuthorUserId();
+  if (!authorEntityId) return { ok: false, error: 'no-author' };
+  if (!ticket?.id) return { ok: false, error: 'missing_ticket' };
 
+  const addTicketMessage =
+    deps.addTicketMessage || (require('../integrations/regos-crm') as typeof import('../integrations/regos-crm')).addTicketMessage;
+  const ensureParticipant =
+    deps.ensureTicketParticipant ||
+    (require('../integrations/regos-crm') as typeof import('../integrations/regos-crm')).ensureTicketParticipant;
+  const isParticipant =
+    deps.isTicketStaffParticipant ||
+    (require('../integrations/regos-crm') as typeof import('../integrations/regos-crm')).isTicketStaffParticipant;
+
+  if (!isParticipant(ticket, authorEntityId)) {
+    try {
+      await ensureParticipant(ticket.id, authorEntityId);
+    } catch (error: any) {
+      return { ok: false, error: error.message || 'not-participant' };
+    }
+  }
+
+  try {
+    await addTicketMessage({
+      chatId: id,
+      text: reply,
+      authorEntityType: 'User',
+      authorEntityId,
+    });
+  } catch (error: any) {
+    return { ok: false, error: error.message || 'send-failed' };
+  }
+
+  return { ok: true, reply };
+}
+
+function createReplyToCustomerTool({
+  ticket,
+  chatId,
+  deps = {},
+  onSent,
+  onPending,
+  requireConfirm = false,
+}: Unchecked = {}) {
   return {
     name: 'reply_to_customer',
     description: factoryToolDescription('reply_to_customer'),
@@ -209,35 +259,59 @@ function createReplyToCustomerTool({ ticket, chatId, deps = {}, onSent }: Unchec
     execute: async ({ text }: Unchecked = {}) => {
       const reply = truncateText(text);
       if (!reply) return { ok: false, error: 'empty_text' };
-      const id = String(chatId || ticket?.chat_id || '').trim();
-      if (!id) return { ok: false, error: 'no-chat' };
-      const authorEntityId = resolveAiAuthorUserId();
-      if (!authorEntityId) return { ok: false, error: 'no-author' };
-      if (!ticket?.id) return { ok: false, error: 'missing_ticket' };
 
-      if (!isParticipant(ticket, authorEntityId)) {
-        try {
-          await ensureParticipant(ticket.id, authorEntityId);
-        } catch (error: any) {
-          return { ok: false, error: error.message || 'not-participant' };
-        }
+      if (requireConfirm) {
+        onPending?.(reply);
+        return { ok: true, pending_confirmation: true, text: reply };
       }
 
-      try {
-        await addTicketMessage({
-          chatId: id,
-          text: reply,
-          authorEntityType: 'User',
-          authorEntityId,
-        });
-      } catch (error: any) {
-        return { ok: false, error: error.message || 'send-failed' };
-      }
+      const sent = await sendAssistCustomerReply({ ticket, chatId, text: reply, deps });
+      if (!sent.ok) return { ok: false, error: sent.error };
 
-      onSent?.(reply);
+      onSent?.(sent.reply);
       return { ok: true, sent: true };
     },
   };
+}
+
+async function confirmTicketAssistCustomerReply({
+  db,
+  userId,
+  ticketId,
+  sessionId,
+  text,
+  deps = {},
+}: Unchecked = {}) {
+  const reply = truncateText(text);
+  if (!reply) {
+    throw new Error('EMPTY_MESSAGE');
+  }
+
+  const findTicket =
+    deps.findTicketById || (require('../integrations/regos-crm') as typeof import('../integrations/regos-crm')).findTicketById;
+  const ticket = await findTicket(ticketId);
+  if (!ticket) {
+    throw new Error('TICKET_NOT_FOUND');
+  }
+
+  const session = getOrCreateTicketAssistSession(db, {
+    sessionId,
+    userId,
+    ticketId: ticket.id,
+  });
+  const chatId = ticket.chat_id != null ? String(ticket.chat_id).trim() : '';
+  const sent = await sendAssistCustomerReply({ ticket, chatId, text: reply, deps });
+  if (!sent.ok) {
+    const error = new Error(sent.error);
+    (error as any).assistSendError = sent.error;
+    throw error;
+  }
+
+  return serializeTicketAssistSession(db, session, {
+    replied_to_customer: true,
+    customer_reply: sent.reply,
+    pending_customer_reply: null,
+  });
 }
 
 async function runTicketAssistAgent({
@@ -247,6 +321,7 @@ async function runTicketAssistAgent({
   sessionId,
   message,
   files = [],
+  confirmBeforeSend = false,
   deps = {},
   onDelta,
 }: Unchecked = {}) {
@@ -290,8 +365,10 @@ async function runTicketAssistAgent({
 
     const run = deps.runAgent || runAgent;
     const provider = deps.provider || getProvider(settings.provider);
+    const requireConfirm = Boolean(confirmBeforeSend);
     let repliedToCustomer = false;
     let customerReply: any = null;
+    let pendingCustomerReply: any = null;
     const assembled = await assembleTicketAssistPrompt({
       db,
       ticket,
@@ -299,9 +376,16 @@ async function runTicketAssistAgent({
       settings,
       deps,
       history,
+      requireConfirm,
       onReplySent: (reply?: any) => {
         repliedToCustomer = true;
         customerReply = reply;
+        pendingCustomerReply = null;
+      },
+      onReplyPending: (reply?: any) => {
+        pendingCustomerReply = reply;
+        repliedToCustomer = false;
+        customerReply = null;
       },
     });
 
@@ -327,6 +411,7 @@ async function runTicketAssistAgent({
       reply,
       replied_to_customer: repliedToCustomer,
       customer_reply: customerReply,
+      pending_customer_reply: pendingCustomerReply,
     });
   } finally {
     inflightSessions.delete(lockKey);
@@ -342,10 +427,12 @@ export {
   CUSTOMER_ASSIST_PROMPT_SUFFIX,
   buildCustomerAssistSystemPrompt,
   buildCustomerAssistContextContent,
+  confirmTicketAssistCustomerReply,
   createReplyToCustomerTool,
   formatTicketChatSnapshot,
   loadTicketAssistSession,
   previewTicketAssistPrompt,
   runTicketAssistAgent,
   resetTicketAssistLocks,
+  sendAssistCustomerReply,
 };

@@ -36,11 +36,21 @@ async function getTicketMessages(
     include_staff_private: Boolean(includeStaffPrivate),
   });
 
+  const result = sortChatMessagesAscending(page.result);
+  // REGOS sometimes returns a stuck next_offset (same as request offset) on the
+  // final short page; always advance at least by the rows we actually received.
+  const advanced = safeOffset + result.length;
+  const crmNext = Number(page.next_offset);
+  const nextOffset = Math.max(
+    Number.isFinite(crmNext) && crmNext >= 0 ? crmNext : 0,
+    advanced
+  );
+
   return {
     ok: true,
-    result: sortChatMessagesAscending(page.result),
-    next_offset: page.next_offset ?? safeOffset + page.result.length,
-    total: page.total ?? page.result.length,
+    result,
+    next_offset: nextOffset,
+    total: page.total ?? result.length,
     offset: safeOffset,
   };
 }

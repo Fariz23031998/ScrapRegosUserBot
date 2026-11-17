@@ -239,12 +239,14 @@ export function nextOlderMessagesOffset(
   page: { next_offset?: number; offset?: number; messages?: unknown[] },
   fallback = 0,
 ): number {
-  const next = Number(page.next_offset);
-  if (Number.isInteger(next) && next >= 0) return next;
   const offset = Number(page.offset);
   const count = Array.isArray(page.messages) ? page.messages.length : 0;
-  const inferred = (Number.isInteger(offset) && offset >= 0 ? offset : 0) + count;
-  return inferred > 0 ? inferred : fallback;
+  const advanced = (Number.isInteger(offset) && offset >= 0 ? offset : 0) + count;
+  const next = Number(page.next_offset);
+  const fromApi = Number.isInteger(next) && next >= 0 ? next : 0;
+  // Prefer API cursor, but never go backwards/stuck when the page itself advanced.
+  const resolved = Math.max(fromApi, advanced);
+  return resolved > 0 ? resolved : fallback;
 }
 
 export function chatFileDisplayName(file: ChatFile): string {

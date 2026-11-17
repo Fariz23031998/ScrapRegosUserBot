@@ -5,7 +5,7 @@ import { RegosCrmError, fetchAllUsers, fetchAllChannels, searchClients, mapRegos
 import { ticketEventHub } from './ticket-events';
 import { loadActiveTicketForRequest } from './bot-admin-shared';
 import { writeSseEvent } from './bot-admin-media';
-import { loadTicketSummary, parseTicketListQuery } from './bot-admin-routes-tickets';
+import { loadTicketRating, loadTicketSummary, parseTicketListQuery } from './bot-admin-routes-tickets';
 
 export function registerBotAdminTicketListRoutes(router: any, deps: { db: Db }) {
   const { db } = deps;
@@ -47,6 +47,23 @@ export function registerBotAdminTicketListRoutes(router: any, deps: { db: Db }) 
       }
       console.error('Ticket summary error:', error);
       return res.status(500).json({ message: 'Не удалось рассчитать итоги по тикетам.' });
+    }
+  });
+
+  router.get('/api/tickets/rating', requireRight(db, 'tickets_read'), async (req: Request, res: Response) => {
+    try {
+      const query = parseTicketListQuery(req);
+      if (query.error) {
+        return res.status(400).json({ message: query.error });
+      }
+      const rating = await loadTicketRating(db, query);
+      return res.json(rating);
+    } catch (error: any) {
+      if (error instanceof RegosCrmError) {
+        return res.status(error.status!).json({ message: error.message });
+      }
+      console.error('Ticket rating error:', error);
+      return res.status(500).json({ message: 'Не удалось рассчитать рейтинг по тикетам.' });
     }
   });
 

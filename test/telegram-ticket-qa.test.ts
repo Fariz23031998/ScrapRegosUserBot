@@ -50,6 +50,7 @@ describe('telegram ticket settings', () => {
     createDb();
     const defaults = loadTelegramTicketSettings(db);
     assert.equal(defaults.enabled, false);
+    assert.equal(defaults.aiEnabled, true);
     assert.equal(defaults.channelId, null);
     assert.equal(defaults.direction, 'Inbound');
     assert.equal(defaults.subject, 'Вопрос из Telegram');
@@ -57,6 +58,7 @@ describe('telegram ticket settings', () => {
 
     const saved = saveTelegramTicketSettings(db, {
       enabled: true,
+      aiEnabled: false,
       channelId: 22,
       direction: 'Outbound',
       responsibleUserId: 7,
@@ -65,6 +67,7 @@ describe('telegram ticket settings', () => {
       fallbackClientId: 100,
     });
     assert.equal(saved.enabled, true);
+    assert.equal(saved.aiEnabled, false);
     assert.equal(saved.channelId, 22);
     assert.equal(saved.direction, 'Outbound');
     assert.deepEqual(saved.participantUserIds, [7, 9]);
@@ -74,6 +77,7 @@ describe('telegram ticket settings', () => {
     const reloaded = loadTelegramTicketSettings(db);
     assert.deepEqual(serializeTelegramTicketSettings(reloaded), {
       enabled: true,
+      ai_enabled: false,
       channel_id: 22,
       direction: 'Outbound',
       responsible_user_id: 7,
@@ -81,6 +85,13 @@ describe('telegram ticket settings', () => {
       subject: 'Поддержка Telegram',
       fallback_client_id: 100,
     });
+  });
+
+  it('defaults telegram AI replies to enabled when the setting is missing', () => {
+    createDb();
+    const defaults = loadTelegramTicketSettings(db);
+    assert.equal(defaults.aiEnabled, true);
+    assert.equal(serializeTelegramTicketSettings(defaults).ai_enabled, true);
   });
 
   it('requires channel when enabled and validates direction', () => {

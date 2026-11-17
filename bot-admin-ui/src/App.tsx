@@ -13,6 +13,7 @@ const OrderLogsPage = lazy(() => import("./pages/OrderLogsPage"));
 const LogsPage = lazy(() => import("./pages/LogsPage"));
 const TicketsPage = lazy(() => import("./pages/TicketsPage"));
 const TicketDetailPage = lazy(() => import("./pages/TicketDetailPage"));
+const RatingPage = lazy(() => import("./pages/RatingPage"));
 const TasksPage = lazy(() => import("./pages/TasksPage"));
 const TaskDetailPage = lazy(() => import("./pages/TaskDetailPage"));
 const TaskRefundPage = lazy(() => import("./pages/TaskRefundPage"));
@@ -123,6 +124,14 @@ export default function App() {
               element={
                 <SuspensePage>
                   <TicketDetailPage />
+                </SuspensePage>
+              }
+            />
+            <Route
+              path="rating"
+              element={
+                <SuspensePage>
+                  <RatingPage />
                 </SuspensePage>
               }
             />

@@ -197,4 +197,47 @@ describe('customer message gate', () => {
       'rate-limit'
     );
   });
+
+  it('uses the Telegram AI toggle only for tickets on the Telegram channel', () => {
+    const database = createDb();
+    const telegramTicket = { id: 10, status: 'Open', channel_id: 22, client_id: 3 };
+    const otherTicket = { id: 11, status: 'Open', channel_id: 99, client_id: 4 };
+
+    assert.equal(
+      evaluateCustomerMessageGateWithDb(database, {
+        settings: { enabled: true },
+        message: clientMessage,
+        ticket: telegramTicket,
+        telegramSettings: { channelId: 22, aiEnabled: false },
+      }).reason,
+      'telegram-ai-disabled'
+    );
+    assert.equal(
+      evaluateCustomerMessageGateWithDb(database, {
+        settings: { enabled: false },
+        message: clientMessage,
+        ticket: telegramTicket,
+        telegramSettings: { channelId: 22, aiEnabled: true },
+      }).handle,
+      true
+    );
+    assert.equal(
+      evaluateCustomerMessageGateWithDb(database, {
+        settings: { enabled: false },
+        message: clientMessage,
+        ticket: otherTicket,
+        telegramSettings: { channelId: 22, aiEnabled: true },
+      }).reason,
+      'disabled'
+    );
+    assert.equal(
+      evaluateCustomerMessageGateWithDb(database, {
+        settings: { enabled: true },
+        message: clientMessage,
+        ticket: otherTicket,
+        telegramSettings: { channelId: 22, aiEnabled: false },
+      }).handle,
+      true
+    );
+  });
 });

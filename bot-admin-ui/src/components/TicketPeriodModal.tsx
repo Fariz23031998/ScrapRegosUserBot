@@ -1,6 +1,7 @@
 import { CalendarDays } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getTodayPeriodDefaults } from "../lib/ticket-display";
+import type { TicketPeriodPreset } from "../lib/ticket-period-db";
+import { getTicketPeriodDefaults, getTodayPeriodDefaults } from "../lib/ticket-display";
 import Modal from "./Modal";
 
 export function formatPeriodButtonLabel(from: string, to: string): string {
@@ -21,22 +22,28 @@ export function formatPeriodButtonLabel(from: string, to: string): string {
   return `${formatPart(from)} — ${formatPart(to)}`;
 }
 
+export type TicketPeriodApplyMeta = {
+  preset: TicketPeriodPreset;
+};
+
 type TicketPeriodModalProps = {
   open: boolean;
   dateFrom: string;
   dateTo: string;
   onClose: () => void;
-  onApply: (dateFrom: string, dateTo: string) => void;
+  onApply: (dateFrom: string, dateTo: string, meta: TicketPeriodApplyMeta) => void;
 };
 
 export function TicketPeriodModal({ open, dateFrom, dateTo, onClose, onApply }: TicketPeriodModalProps) {
   const [draftFrom, setDraftFrom] = useState(dateFrom);
   const [draftTo, setDraftTo] = useState(dateTo);
+  const [preset, setPreset] = useState<TicketPeriodPreset>("custom");
 
   useEffect(() => {
     if (!open) return;
     setDraftFrom(dateFrom);
     setDraftTo(dateTo);
+    setPreset("custom");
   }, [open, dateFrom, dateTo]);
 
   return (
@@ -45,7 +52,7 @@ export function TicketPeriodModal({ open, dateFrom, dateTo, onClose, onApply }: 
         className="stack-form"
         onSubmit={(event) => {
           event.preventDefault();
-          onApply(draftFrom, draftTo);
+          onApply(draftFrom, draftTo, { preset });
           onClose();
         }}
       >
@@ -54,7 +61,10 @@ export function TicketPeriodModal({ open, dateFrom, dateTo, onClose, onApply }: 
           <input
             type="datetime-local"
             value={draftFrom}
-            onChange={(event) => setDraftFrom(event.target.value)}
+            onChange={(event) => {
+              setPreset("custom");
+              setDraftFrom(event.target.value);
+            }}
           />
         </label>
         <label>
@@ -62,7 +72,10 @@ export function TicketPeriodModal({ open, dateFrom, dateTo, onClose, onApply }: 
           <input
             type="datetime-local"
             value={draftTo}
-            onChange={(event) => setDraftTo(event.target.value)}
+            onChange={(event) => {
+              setPreset("custom");
+              setDraftTo(event.target.value);
+            }}
           />
         </label>
         <div className="period-modal__presets">
@@ -71,6 +84,7 @@ export function TicketPeriodModal({ open, dateFrom, dateTo, onClose, onApply }: 
             className="btn-secondary btn-sm"
             onClick={() => {
               const today = getTodayPeriodDefaults();
+              setPreset("today");
               setDraftFrom(today.from);
               setDraftTo(today.to);
             }}
@@ -81,6 +95,19 @@ export function TicketPeriodModal({ open, dateFrom, dateTo, onClose, onApply }: 
             type="button"
             className="btn-secondary btn-sm"
             onClick={() => {
+              const defaults = getTicketPeriodDefaults();
+              setPreset("preference");
+              setDraftFrom(defaults.from);
+              setDraftTo(defaults.to);
+            }}
+          >
+            Сбросить
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => {
+              setPreset("custom");
               setDraftFrom("");
               setDraftTo("");
             }}

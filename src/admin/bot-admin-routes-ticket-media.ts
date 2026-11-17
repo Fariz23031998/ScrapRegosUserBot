@@ -48,7 +48,9 @@ export function registerBotAdminTicketMediaRoutes(router: any, deps: { db: Db; r
       });
       return undefined;
     } catch (error: any) {
+      // Browser duration probes / modal close abort the HTTP body; that is expected.
       if (abortController.signal.aborted) return undefined;
+      if (error?.code === 'ERR_STREAM_PREMATURE_CLOSE') return undefined;
       console.error('Get ticket recording error:', error);
       if (res.headersSent) {
         res.destroy(error);
@@ -113,7 +115,13 @@ export function registerBotAdminTicketMediaRoutes(router: any, deps: { db: Db; r
         userNames,
       });
       const total = Number(page.total) || messages.length;
-      const nextOffset = page.next_offset ?? page.offset + messages.length;
+      const nextOffset = Math.max(
+        Number(page.next_offset) || 0,
+        Number(page.offset) + messages.length
+      );
+      // Stop paging when the cursor did not move past this request offset (stuck
+      // CRM next_offset) or the page was empty — otherwise scroll-top loops forever.
+      const hasOlder = messages.length > 0 && nextOffset < total && nextOffset > Number(page.offset);
 
       return res.json({
         chat_id: chatId,
@@ -121,7 +129,7 @@ export function registerBotAdminTicketMediaRoutes(router: any, deps: { db: Db; r
         next_offset: nextOffset,
         total,
         offset: page.offset,
-        has_older: nextOffset < total,
+        has_older: hasOlder,
       });
     } catch (error: any) {
       if (error instanceof RegosCrmError) {

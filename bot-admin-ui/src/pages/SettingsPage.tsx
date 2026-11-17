@@ -54,6 +54,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; title: string }> = [
 function emptyTelegramTicketSettings(): TelegramTicketSettings {
   return {
     enabled: false,
+    ai_enabled: true,
     channel_id: null,
     direction: "Inbound",
     responsible_user_id: null,
@@ -302,6 +303,7 @@ export default function SettingsPage() {
       const settings = telegramDraft || emptyTelegramTicketSettings();
       return saveTelegramTicketSettings({
         enabled: settings.enabled,
+        ai_enabled: settings.ai_enabled,
         channel_id: settings.channel_id,
         direction: settings.direction,
         responsible_user_id: settings.responsible_user_id,
@@ -1127,6 +1129,21 @@ export default function SettingsPage() {
                 />
                 <span>Принимать вопросы клиентов в Telegram и создавать тикеты REGOS</span>
               </label>
+              <label className="field-checkbox">
+                <input
+                  type="checkbox"
+                  checked={telegram.ai_enabled !== false}
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    setTelegramDraft({ ...telegram, ai_enabled: event.target.checked })
+                  }
+                />
+                <span>Включить ответы AI в тикетах из Telegram</span>
+              </label>
+              <p className="muted-copy">
+                Независимо от настройки AI «Включить ответы AI в чатах клиентов». Действует только для
+                тикетов канала Telegram, указанного ниже.
+              </p>
               <label>
                 Канал REGOS
                 <select

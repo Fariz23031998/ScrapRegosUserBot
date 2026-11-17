@@ -133,12 +133,34 @@ describe('customer agent handler', () => {
 
   it('does not reply when disabled', async () => {
     const database = createDb();
+    saveAiSettings(database, { enabled: false, testMode: false });
     let replied = false;
     const result = await handleCustomerChatMessage({
       db: database,
       chatId: 'chat-1',
       messageId: '1',
       deps: {
+        findTicketByChatId: async () => ({
+          id: 1,
+          status: 'Open',
+          chat_id: 'chat-1',
+          channel_id: 99,
+          client_id: 5,
+          client: { id: 5, phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            {
+              id: '1',
+              author_entity_type: 'Client',
+              message_type: 'Regular',
+              text: 'Вопрос',
+              created_date: 1000,
+            },
+          ],
+        }),
+        getChatFilesByIds: async () => [],
         addTicketMessage: async () => {
           replied = true;
         },
@@ -146,6 +168,51 @@ describe('customer agent handler', () => {
     });
     assert.equal(result.handled, false);
     assert.equal(result.reason, 'disabled');
+    assert.equal(replied, false);
+  });
+
+  it('does not reply on Telegram-channel tickets when Telegram AI is disabled', async () => {
+    const database = createDb();
+    saveAiSettings(database, { enabled: true, testMode: false });
+    let replied = false;
+    const result = await handleCustomerChatMessage({
+      db: database,
+      chatId: 'chat-tg',
+      messageId: '1',
+      deps: {
+        findTicketByChatId: async () => ({
+          id: 22,
+          status: 'Open',
+          chat_id: 'chat-tg',
+          channel_id: 22,
+          client_id: 5,
+          client: { id: 5, phone: '+998901112233' },
+        }),
+        getTicketMessages: async () => ({
+          total: 1,
+          result: [
+            {
+              id: '1',
+              author_entity_type: 'Client',
+              message_type: 'Regular',
+              text: 'Вопрос из Telegram',
+              created_date: 1000,
+            },
+          ],
+        }),
+        getChatFilesByIds: async () => [],
+        loadTelegramTicketSettings: () => ({
+          enabled: true,
+          aiEnabled: false,
+          channelId: 22,
+        }),
+        addTicketMessage: async () => {
+          replied = true;
+        },
+      },
+    });
+    assert.equal(result.handled, false);
+    assert.equal(result.reason, 'telegram-ai-disabled');
     assert.equal(replied, false);
   });
 
