@@ -3692,6 +3692,19 @@ body.is-column-resizing * {
   word-break: break-word;
 }
 
+.ticket-board-card__last-message {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 .ticket-board-card__line {
   margin: 0;
   font-size: 0.86rem;

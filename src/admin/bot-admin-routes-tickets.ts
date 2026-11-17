@@ -2,6 +2,7 @@ import type { Db } from '../types/db';
 import type { Request, Response } from 'express';
 import { requireRight } from './bot-admin-auth';
 import { enrichTicketsWithLocalData, resolveMissingTicketRecordings, scheduleTicketRecordingDurationBackfill } from './ticket-local-enrichment';
+import { attachLastMessagesToTickets } from './ticket-last-message';
 import { listRegosChannelSettings } from '../db/regos-channel-settings';
 import {
   RegosCrmError,
@@ -67,6 +68,7 @@ export type TicketListQuery = {
   minimumCallDuration: number;
   fromUnix: number | null;
   toUnix: number | null;
+  includeLastMessage: boolean;
 };
 
 function parseUnixQueryParam(raw: string): number | null {
@@ -89,6 +91,8 @@ export function parseTicketListQuery(req: Request): TicketListQuery {
   const minimumCallDuration = Number(minimumCallDurationRaw);
   const withoutDuplicates =
     req.query.without_duplicates === '1' || req.query.without_duplicates === 'true';
+  const includeLastMessage =
+    req.query.include_last_message === '1' || req.query.include_last_message === 'true';
   let duplicateIntervalMinutes = Number(req.query.duplicate_interval_minutes);
   if (!Number.isFinite(duplicateIntervalMinutes) || duplicateIntervalMinutes < 0) {
     duplicateIntervalMinutes = DEFAULT_DUPLICATE_INTERVAL_MINUTES;
@@ -117,6 +121,7 @@ export function parseTicketListQuery(req: Request): TicketListQuery {
     minimumCallDuration,
     fromUnix: parseUnixQueryParam(fromDate),
     toUnix: parseUnixQueryParam(toDate),
+    includeLastMessage,
   };
 
   if (
@@ -225,7 +230,8 @@ async function enrichTicketPage(
   db: Db,
   recordingUrlCache: Map<any, any>,
   cacheTicketRecordingUrl: (ticket?: any) => any,
-  rows: any[]
+  rows: any[],
+  { includeLastMessage = false }: { includeLastMessage?: boolean } = {}
 ) {
   const pageTickets = enrichTicketsWithLocalData(db, rows);
   // Keep list responses fast: sync missing URLs only, never download audio here.
@@ -240,6 +246,9 @@ async function enrichTicketPage(
   }
   // Warm duration cache after the response path; cooldown skips repeated failures.
   scheduleTicketRecordingDurationBackfill(db, pageTickets);
+  if (includeLastMessage) {
+    await attachLastMessagesToTickets(db, pageTickets);
+  }
   return pageTickets;
 }
 
@@ -273,7 +282,8 @@ export function registerBotAdminTicketsCollectionRoutes(router: any, deps: { db:
           db,
           recordingUrlCache,
           cacheTicketRecordingUrl,
-          pageResult.result
+          pageResult.result,
+          { includeLastMessage: query.includeLastMessage }
         );
         return res.json({
           tickets: pageTickets,
@@ -300,7 +310,8 @@ export function registerBotAdminTicketsCollectionRoutes(router: any, deps: { db:
         db,
         recordingUrlCache,
         cacheTicketRecordingUrl,
-        tickets.slice(safeOffset, safeOffset + query.limit)
+        tickets.slice(safeOffset, safeOffset + query.limit),
+        { includeLastMessage: query.includeLastMessage }
       );
 
       return res.json({

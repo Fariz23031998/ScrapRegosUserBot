@@ -488,6 +488,9 @@ function TicketBoardCardBody({
         {ticket.sla_breached ? <span className="badge badge--warn">SLA нарушен</span> : null}
       </div>
       <h3 className="ticket-board-card__subject">{ticket.subject || "Без темы"}</h3>
+      {ticket.last_message?.text ? (
+        <p className="ticket-board-card__last-message">{ticket.last_message.text}</p>
+      ) : null}
       <p className="ticket-board-card__line ticket-board-card__client">
         {hasClient ? (
           canOpenClient ? (

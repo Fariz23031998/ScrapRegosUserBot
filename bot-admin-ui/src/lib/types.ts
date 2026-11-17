@@ -541,6 +541,11 @@ export type TicketField = {
   value?: string;
 };
 
+export type TicketLastMessage = {
+  text: string;
+  created_date?: number;
+};
+
 export type Ticket = {
   id: number;
   subject?: string;
@@ -557,6 +562,8 @@ export type Ticket = {
   fields?: TicketField[];
   local?: TicketLocalData;
   description?: string;
+  /** Latest non-system chat preview (board view, message_only channels). */
+  last_message?: TicketLastMessage | null;
   /** Legacy flat aliases used in some views */
   client_name?: string;
   client_phone?: string;

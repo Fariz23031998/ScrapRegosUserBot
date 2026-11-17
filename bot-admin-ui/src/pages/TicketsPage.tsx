@@ -213,6 +213,7 @@ function buildListParams(
   limit: number,
   filters: TicketFilters,
   sort = "",
+  { includeLastMessage = false }: { includeLastMessage?: boolean } = {},
 ): Record<string, string> {
   const params: Record<string, string> = {
     page: String(page),
@@ -227,6 +228,7 @@ function buildListParams(
   const toUnix = datetimeLocalToUnix(filters.dateTo);
   if (fromUnix != null) params.from_date = String(fromUnix);
   if (toUnix != null) params.to_date = String(toUnix);
+  if (includeLastMessage) params.include_last_message = "1";
   return params;
 }
 
@@ -492,7 +494,11 @@ export default function TicketsPage() {
     filters: listScope,
     enabled: filtersReady && ticketView === "cards",
     fetchPage: (status, page, pageSize) =>
-      listTickets(buildListParams(page, pageSize, { ...appliedFilters, statuses: [status] }, ticketSort)),
+      listTickets(
+        buildListParams(page, pageSize, { ...appliedFilters, statuses: [status] }, ticketSort, {
+          includeLastMessage: true,
+        }),
+      ),
   });
 
   const userNames = useMemo(() => {
