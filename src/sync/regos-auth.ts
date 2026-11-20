@@ -92,6 +92,33 @@ async function acceptRegosPersonalDevice(page?: any) {
  * Those pages stay on auth.regos.uz, so waiting to leave the host never finishes
  * unless the button is clicked.
  */
+async function regosIdLoginFormVisible(page: any) {
+  if (typeof page?.locator !== 'function') return false;
+  try {
+    return (await page.locator('#PhoneNumber').count()) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The vcr1 SSO hop often stops on the Regos ID credential form.
+ * Submit the same phone and password the billing session already uses.
+ * Returns true when the form was submitted.
+ */
+async function completeRegosIdLoginForm(page: any, credentials: any) {
+  if (!(await regosIdLoginFormVisible(page))) return false;
+  const phone = credentials?.phone;
+  const password = credentials?.password;
+  if (!phone || !password) {
+    throw new Error('Regos ID login form is waiting for a phone and password');
+  }
+  await page.locator('#PhoneNumber').fill(phone, { timeout: 5000 });
+  await page.locator('#Password').fill(password, { timeout: 5000 });
+  await page.getByRole('button', { name: /^войти$/i }).click();
+  return true;
+}
+
 async function waitUntilLeftRegosAuth(page: any, timeoutMs: any = 90000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -254,7 +281,12 @@ async function startVcr1ExternalLogin(page: any, returnPath: any) {
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 }
 
-async function ensureVcr1IndexPage(page: any, indexPath: any, accountLabel: any = 'account') {
+async function ensureVcr1IndexPage(
+  page: any,
+  indexPath: any,
+  accountLabel: any = 'account',
+  credentials: any = null
+) {
   const url = `${VCR1_BASE_URL}${indexPath}`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
@@ -270,7 +302,7 @@ async function ensureVcr1IndexPage(page: any, indexPath: any, accountLabel: any 
               const href = typeof next === 'string' ? next : String(next?.href || next || '');
               return isRegosAuthUrl(href) || isAuthenticatedAppUrl(href) || !isLoginUrl(href);
             },
-            { timeout: 90000 }
+            { timeout: 20000 }
           )
           .catch(() => {});
       }
@@ -280,7 +312,8 @@ async function ensureVcr1IndexPage(page: any, indexPath: any, accountLabel: any 
     }
 
     if (isRegosAuthUrl(page.url())) {
-      await waitUntilLeftRegosAuth(page);
+      const submitted = await completeRegosIdLoginForm(page, credentials);
+      await waitUntilLeftRegosAuth(page, submitted ? 25000 : 90000);
     }
 
     if (!page.url().includes(indexPath) && !isLoginUrl(page.url()) && !isRegosAuthUrl(page.url())) {
@@ -309,12 +342,12 @@ async function ensureVcr1IndexPage(page: any, indexPath: any, accountLabel: any 
   }
 }
 
-async function ensureVcr1PartnersIndex(page?: any, accountLabel?: any) {
-  return ensureVcr1IndexPage(page, '/Partners/Index', accountLabel);
+async function ensureVcr1PartnersIndex(page?: any, accountLabel?: any, credentials?: any) {
+  return ensureVcr1IndexPage(page, '/Partners/Index', accountLabel, credentials);
 }
 
-async function ensureVcr1LicensesIndex(page?: any, accountLabel?: any) {
-  return ensureVcr1IndexPage(page, '/Licenses/Index', accountLabel);
+async function ensureVcr1LicensesIndex(page?: any, accountLabel?: any, credentials?: any) {
+  return ensureVcr1IndexPage(page, '/Licenses/Index', accountLabel, credentials);
 }
 
 export {
@@ -330,6 +363,7 @@ export {
   ensurePartnerAccountsIndex,
   ensureEasyTradeSession,
   startVcr1ExternalLogin,
+  completeRegosIdLoginForm,
   ensureVcr1PartnersIndex,
   ensureVcr1LicensesIndex,
   isLoginUrl,

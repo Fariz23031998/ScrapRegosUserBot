@@ -23,19 +23,25 @@ async function bootstrapRegosSession(accountLabel: any, { headless = true }: Unc
         `[bootstrap] ${accountLabel} EasyTrade session skipped: ${String(err?.message || err).split('\n')[0]}`
       );
     });
-    await ensureVcr1PartnersIndex(page, accountLabel).catch((err: any) => {
+    let vcr1 = false;
+    try {
+      await ensureVcr1PartnersIndex(page, accountLabel, credentials);
+      vcr1 = true;
+    } catch (err: any) {
       console.error(
         `[bootstrap] ${accountLabel} vcr1 session skipped: ${String(err?.message || err).split('\n')[0]}`
       );
-    });
-    await ensureVcr1LicensesIndex(page, accountLabel).catch((err: any) => {
-      console.error(
-        `[bootstrap] ${accountLabel} vcr1 licenses skipped: ${String(err?.message || err).split('\n')[0]}`
-      );
-    });
+    }
+    if (vcr1) {
+      await ensureVcr1LicensesIndex(page, accountLabel, credentials).catch((err: any) => {
+        console.error(
+          `[bootstrap] ${accountLabel} vcr1 licenses skipped: ${String(err?.message || err).split('\n')[0]}`
+        );
+      });
+    }
     const statePath = await persistRegosAuthState(context, accountLabel);
     const storageState = await context.storageState();
-    return { statePath, storageState };
+    return { statePath, storageState, vcr1 };
   } finally {
     await browser.close();
   }

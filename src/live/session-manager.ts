@@ -14,6 +14,38 @@ const rposStates: Map<any, any> = new Map();
 const REFRESH_REUSE_MS = 20_000;
 const REFRESH_FAILURE_COOLDOWN_MS = 60_000;
 
+function isSessionExpiryMessage(message: string) {
+  return /401|login|session|unauthorized|html/i.test(message);
+}
+
+/** vcr1 SSO can be dead while sb.regos.uz and EasyTrade are still usable. */
+function isVcr1SessionExpiry(err: any) {
+  const message = String(err?.message || err);
+  return /vcr1/i.test(message) && isSessionExpiryMessage(message);
+}
+
+/**
+ * What to do after an authenticated Regos call throws.
+ * renew: sign in once and retry. skip: a vcr1 login just failed, so do not open
+ * another browser. rethrow: not a dead session.
+ * A dead billing session still renews during the vcr1 cooldown.
+ */
+function regosSessionRecovery(
+  err: any,
+  { refreshFailedAt, now = Date.now() }: { refreshFailedAt?: number; now?: number } = {}
+) {
+  const message = String(err?.message || err);
+  if (!isSessionExpiryMessage(message)) return 'rethrow';
+  if (
+    isVcr1SessionExpiry(err) &&
+    refreshFailedAt &&
+    now - refreshFailedAt < REFRESH_FAILURE_COOLDOWN_MS
+  ) {
+    return 'skip';
+  }
+  return 'renew';
+}
+
 function withLock(map?: any, key?: any, fn?: any) {
   const prev = map.get(key) || Promise.resolve();
   const next = prev.then(fn, fn);
@@ -109,16 +141,20 @@ async function refreshRegosSession(accountLabel: any, options: any = {}) {
     }
 
     try {
-      const { storageState } = await bootstrapRegosSession(accountLabel, {
+      const { storageState, vcr1 } = await bootstrapRegosSession(accountLabel, {
         headless: process.env.HEADLESS !== '0',
       });
       const filePath = authStatePathForAccount(accountLabel);
-      const next = {
+      const next: any = {
         cookies: storageState.cookies || [],
         origins: storageState.origins || [],
         refreshedAt: Date.now(),
         loadedMtimeMs: readAuthMtime(filePath),
       };
+      if (vcr1 === false) {
+        next.refreshFailedAt = Date.now();
+        next.refreshError = `vcr1 session was not established for ${accountLabel}`;
+      }
       regosStates.set(accountLabel, next);
       return next;
     } catch (err: any) {
@@ -169,7 +205,9 @@ async function ensureRposRequest(accountLabel?: any) {
 }
 
 /**
- * Run an authenticated portal call; on login HTML / 401 refresh session once and retry.
+ * Run an authenticated portal call. On login HTML or HTTP 401, sign in once and retry.
+ * A vcr1 login that just failed does not start another browser; the other portals
+ * still return, and the next search after the cooldown tries vcr1 again.
  */
 async function withRegosSession(accountLabel?: any, fn?: any) {
   let request = await ensureRegosRequest(accountLabel);
@@ -178,8 +216,9 @@ async function withRegosSession(accountLabel?: any, fn?: any) {
     persistRegos(accountLabel);
     return result;
   } catch (err: any) {
-    const message = String(err?.message || err);
-    if (!/401|login|session|unauthorized|html/i.test(message)) throw err;
+    const failedAt = regosStates.get(accountLabel)?.refreshFailedAt;
+    const recovery = regosSessionRecovery(err, { refreshFailedAt: failedAt });
+    if (recovery !== 'renew') throw err;
     await refreshRegosSession(accountLabel);
     request = await ensureRegosRequest(accountLabel);
     const result = await fn(request);
@@ -227,6 +266,9 @@ export {
   ensureRposRequest,
   getRegosState,
   getRposState,
+  REFRESH_FAILURE_COOLDOWN_MS,
+  isVcr1SessionExpiry,
+  regosSessionRecovery,
   withRegosSession,
   withRposSession,
   refreshRegosSession,
