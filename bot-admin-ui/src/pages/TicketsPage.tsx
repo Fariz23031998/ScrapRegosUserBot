@@ -990,6 +990,7 @@ export default function TicketsPage() {
             busyTicketId={statusMutation.isPending ? statusMutation.variables?.id ?? null : null}
             highlightedTicketId={activeTicket?.id ?? null}
             recordingDurations={recordingDurations}
+            currentRegosUserId={actor?.regosUserId ?? null}
             onNearEnd={(status) => {
               const column = board.columns.find((item) => item.id === status);
               if (column?.hasNextPage && !column.isFetchingNextPage) {

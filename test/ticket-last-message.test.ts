@@ -51,6 +51,27 @@ describe('pickLastNonSystemMessage', () => {
     assert.deepEqual(picked, { text: 'latest client', created_date: 300 });
   });
 
+  it('passes through author entity fields', () => {
+    const picked = pickLastNonSystemMessage([
+      {
+        id: 1,
+        message_type: 'Regular',
+        text: 'from staff',
+        created_date: 100,
+        author_entity_id: 42,
+        author_entity_type: 'User',
+        author_entity_name: 'Alex Carter',
+      },
+    ]);
+    assert.deepEqual(picked, {
+      text: 'from staff',
+      created_date: 100,
+      author_entity_id: 42,
+      author_entity_type: 'User',
+      author_entity_name: 'Alex Carter',
+    });
+  });
+
   it('skips trailing system messages', () => {
     const picked = pickLastNonSystemMessage([
       { id: 1, message_type: 'Regular', text: 'hello', created_date: 10 },

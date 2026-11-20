@@ -544,6 +544,9 @@ export type TicketField = {
 export type TicketLastMessage = {
   text: string;
   created_date?: number;
+  author_entity_id?: number | string;
+  author_entity_type?: string;
+  author_entity_name?: string;
 };
 
 export type Ticket = {

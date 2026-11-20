@@ -42,6 +42,7 @@ function buildFormData({ draw, start, length, search = '' }: Unchecked) {
     'search[regex]': 'false',
     'order[0][column]': '0',
     'order[0][dir]': 'DESC',
+    'additionalproperty[0][name]': 'status',
   };
 
   COLUMNS.forEach((data?: any, index?: any) => {
@@ -130,6 +131,8 @@ async function fetchAllVcr1Licenses(
 export {
   DEFAULT_PAGE_SIZE,
   LIVE_PAGE_SIZE,
+  COLUMNS,
+  buildFormData,
   fetchAllVcr1Licenses,
   fetchVcr1LicensesPage,
   searchVcr1Licenses,

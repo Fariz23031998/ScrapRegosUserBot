@@ -240,29 +240,55 @@ async function ensureEasyTradeSession(page?: any) {
   return { reused: false };
 }
 
+/**
+ * Billing 1.22+ uses the hosted Regos Account widget + OAuth PKCE.
+ * Start the same flow the widget uses: /account/external-login → auth.regos.uz → /signin-regos.
+ */
+async function startVcr1ExternalLogin(page: any, returnPath: any) {
+  const returnUrl = String(returnPath || '/Billing/Search').startsWith('/')
+    ? String(returnPath || '/Billing/Search')
+    : `/${returnPath}`;
+  const loginUrl = `${VCR1_BASE_URL}/account/external-login?provider=Regos&returnUrl=${encodeURIComponent(
+    returnUrl
+  )}&ui_locales=ru`;
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+}
+
 async function ensureVcr1IndexPage(page: any, indexPath: any, accountLabel: any = 'account') {
   const url = `${VCR1_BASE_URL}${indexPath}`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
   if (isLoginUrl(page.url()) || isRegosAuthUrl(page.url())) {
     if (isLoginUrl(page.url())) {
-      const loginLink = page.getByRole('link', { name: /войти через regos/i });
-      if (!(await loginLink.count())) {
-        const screenshot = await saveLoginErrorScreenshot(page, `vcr1-${accountLabel}`);
-        throw new Error(
-          `vcr1 Regos ID login link not found on ${indexPath}${screenshot ? ` (screenshot: ${screenshot})` : ''}`
-        );
+      // Hosted widget button, else navigate to external-login directly (no «Войти через Regos» link).
+      const signIn = page.getByRole('button', { name: /^войти$/i });
+      if (await signIn.count()) {
+        await signIn.first().click();
+        await page
+          .waitForURL(
+            (next?: any) => {
+              const href = typeof next === 'string' ? next : String(next?.href || next || '');
+              return isRegosAuthUrl(href) || isAuthenticatedAppUrl(href) || !isLoginUrl(href);
+            },
+            { timeout: 90000 }
+          )
+          .catch(() => {});
       }
-      await loginLink.click();
+      if (isLoginUrl(page.url())) {
+        await startVcr1ExternalLogin(page, indexPath);
+      }
     }
 
-    await waitUntilLeftRegosAuth(page);
-    if (!page.url().includes(indexPath)) {
+    if (isRegosAuthUrl(page.url())) {
+      await waitUntilLeftRegosAuth(page);
+    }
+
+    if (!page.url().includes(indexPath) && !isLoginUrl(page.url()) && !isRegosAuthUrl(page.url())) {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     }
   }
 
-  if (isLoginUrl(page.url())) {
+  if (isLoginUrl(page.url()) || isRegosAuthUrl(page.url())) {
     const screenshot = await saveLoginErrorScreenshot(page, `vcr1-${accountLabel}`);
     throw new Error(
       `vcr1 session not available on ${indexPath} for ${accountLabel}${
@@ -275,7 +301,7 @@ async function ensureVcr1IndexPage(page: any, indexPath: any, accountLabel: any 
     await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
   }
 
-  if (isLoginUrl(page.url()) || !page.url().includes(indexPath)) {
+  if (isLoginUrl(page.url()) || isRegosAuthUrl(page.url()) || !page.url().includes(indexPath)) {
     const screenshot = await saveLoginErrorScreenshot(page, `vcr1-${accountLabel}`);
     throw new Error(
       `Failed to open vcr1 ${indexPath} for ${accountLabel}${screenshot ? ` (screenshot: ${screenshot})` : ''}`
@@ -303,6 +329,7 @@ export {
   ensurePartnersIndex,
   ensurePartnerAccountsIndex,
   ensureEasyTradeSession,
+  startVcr1ExternalLogin,
   ensureVcr1PartnersIndex,
   ensureVcr1LicensesIndex,
   isLoginUrl,

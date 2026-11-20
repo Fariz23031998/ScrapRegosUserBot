@@ -12,6 +12,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
+import { ShoppingCart } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject, type SyntheticEvent, type UIEvent } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -21,6 +22,7 @@ import {
   getTicketClientId,
   statusBadgeClass,
   statusLabel,
+  lastMessageAuthorLabel,
   unpaidOrdersHref,
   unpaidOrdersLabel,
   userDisplayName,
@@ -106,6 +108,7 @@ export type TicketBoardProps = {
   onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
   onStatusChange: (ticket: Ticket, status: string) => void;
+  currentRegosUserId?: number | null;
 };
 
 export default function TicketBoard({
@@ -126,6 +129,7 @@ export default function TicketBoard({
   onCreateOrder,
   onOpenRecording,
   onStatusChange,
+  currentRegosUserId = null,
 }: TicketBoardProps) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const suppressClickRef = useRef<boolean>(false);
@@ -238,6 +242,7 @@ export default function TicketBoard({
               onCreateOrder={onCreateOrder}
               onOpenRecording={onOpenRecording}
               onNearEnd={() => onNearEnd(column.id)}
+              currentRegosUserId={currentRegosUserId}
             />
           ))}
         </div>
@@ -255,6 +260,7 @@ export default function TicketBoard({
               onEditClient={onEditClient}
               onCreateOrder={onCreateOrder}
               onOpenRecording={onOpenRecording}
+              currentRegosUserId={currentRegosUserId}
             />
           </article>
         ) : null}
@@ -281,6 +287,7 @@ function TicketBoardColumn({
   onCreateOrder,
   onOpenRecording,
   onNearEnd,
+  currentRegosUserId,
 }: {
   column: TicketBoardColumn & TicketBoardColumnState;
   userNames: Record<string, string>;
@@ -299,6 +306,7 @@ function TicketBoardColumn({
   onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
   onNearEnd: () => void;
+  currentRegosUserId?: number | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `status:${column.id}`,
@@ -365,6 +373,7 @@ function TicketBoardColumn({
               onEditClient={onEditClient}
               onCreateOrder={onCreateOrder}
               onOpenRecording={onOpenRecording}
+              currentRegosUserId={currentRegosUserId}
             />
           ))
         ) : (
@@ -393,6 +402,7 @@ function TicketBoardCard({
   onEditClient,
   onCreateOrder,
   onOpenRecording,
+  currentRegosUserId,
 }: {
   ticket: Ticket;
   userNames: Record<string, string>;
@@ -407,6 +417,7 @@ function TicketBoardCard({
   onEditClient?: (clientId: number) => void;
   onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
+  currentRegosUserId?: number | null;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `ticket:${ticket.id}`,
@@ -439,6 +450,7 @@ function TicketBoardCard({
         onEditClient={onEditClient}
         onCreateOrder={onCreateOrder}
         onOpenRecording={onOpenRecording}
+        currentRegosUserId={currentRegosUserId}
       />
     </article>
   );
@@ -454,6 +466,7 @@ function TicketBoardCardBody({
   onEditClient,
   onCreateOrder,
   onOpenRecording,
+  currentRegosUserId = null,
 }: {
   ticket: Ticket;
   userNames: Record<string, string>;
@@ -464,6 +477,7 @@ function TicketBoardCardBody({
   onEditClient?: (clientId: number) => void;
   onCreateOrder?: (ticket: Ticket) => void;
   onOpenRecording: (ticket: Ticket) => void;
+  currentRegosUserId?: number | null;
 }) {
   const clientName = ticket.client?.name || ticket.client_name || "—";
   const phone = ticket.client?.phone || ticket.client_phone || "";
@@ -478,6 +492,10 @@ function TicketBoardCardBody({
   const duration = getCachedRecordingDuration(ticket) ?? recordingDurations[String(ticket.id)];
   const showRecording = duration != null && duration > 0;
   const channelName = channelDisplayName(ticket.channel_id, channelNames);
+  const lastMessageText = ticket.last_message?.text ? String(ticket.last_message.text) : "";
+  const lastMessageAuthor = lastMessageText
+    ? lastMessageAuthorLabel(ticket.last_message, currentRegosUserId)
+    : null;
   return (
     <>
       <div className="ticket-board-card__top">
@@ -488,8 +506,11 @@ function TicketBoardCardBody({
         {ticket.sla_breached ? <span className="badge badge--warn">SLA нарушен</span> : null}
       </div>
       <h3 className="ticket-board-card__subject">{ticket.subject || "Без темы"}</h3>
-      {ticket.last_message?.text ? (
-        <p className="ticket-board-card__last-message">{ticket.last_message.text}</p>
+      {lastMessageText ? (
+        <p className="ticket-board-card__last-message">
+          {lastMessageAuthor ? `${lastMessageAuthor}: ` : null}
+          {lastMessageText}
+        </p>
       ) : null}
       <p className="ticket-board-card__line ticket-board-card__client">
         {hasClient ? (
@@ -552,7 +573,9 @@ function TicketBoardCardBody({
         <div className="ticket-card__actions ticket-board-card__actions">
           <button
             type="button"
-            className="btn-primary btn-sm ticket-create-order-btn"
+            className="btn-primary btn-sm btn-icon ticket-create-order-btn"
+            aria-label="Создать заказ"
+            title="Создать заказ"
             onPointerDown={stopCardAction}
             onClick={(event) => {
               stopCardAction(event);
@@ -560,7 +583,7 @@ function TicketBoardCardBody({
             }}
             onKeyDown={stopCardAction}
           >
-            Создать заказ
+            <ShoppingCart size={20} aria-hidden="true" />
           </button>
         </div>
       ) : null}

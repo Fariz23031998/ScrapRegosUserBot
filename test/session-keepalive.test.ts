@@ -51,6 +51,13 @@ describe('classifyProbeResponse', () => {
       'expired'
     );
   });
+
+  it('treats a vcr1 HTTP 401 probe error as an expired session', () => {
+    assert.equal(
+      classifyThrownProbe(new Error('vcr1 Partners/Get failed with status 401')),
+      'expired'
+    );
+  });
 });
 
 describe('session keepalive worker', () => {

@@ -93,11 +93,13 @@ function Wait-NgrokHttpsUrl([int]$TimeoutSeconds) {
 }
 
 function Start-WtTab([string]$Title, [string]$Command, [switch]$NewWindow) {
+  # Use -w new for the first tab, then -w 0 (last-used window) for the rest.
+  # Avoid --name / --window-name: older wt builds reject those flags.
   $wtArgs = @()
   if ($NewWindow) {
-    $wtArgs += @('-w', 'new', '--name', 'ScrapRegosDev')
+    $wtArgs += @('-w', 'new')
   } else {
-    $wtArgs += @('-w', 'ScrapRegosDev')
+    $wtArgs += @('-w', '0')
   }
   $wtArgs += @(
     'new-tab',
@@ -172,7 +174,7 @@ Start-Sleep -Milliseconds 400
 Start-WtTab -Title 'admin-ui' -Command 'npm run bot-admin-ui:dev'
 
 Write-Host ''
-Write-Host 'Dev environment launched in Windows Terminal window "ScrapRegosDev".'
+Write-Host 'Dev environment launched in one Windows Terminal window (separate tabs).'
 Write-Host '  Admin UI:  http://localhost:5301/bot-admin/'
 Write-Host "  Server:    http://127.0.0.1:$port"
 Write-Host "  Public:    $publicUrl"

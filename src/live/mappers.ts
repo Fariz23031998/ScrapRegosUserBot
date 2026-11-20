@@ -81,6 +81,7 @@ function vcr1LicenseFromApiRow(row?: any) {
     fm: row.fm ?? null,
     serial: row.serial ?? null,
     license: row.license ?? null,
+    monthly_fee: row.monthly_fee ?? null,
     fda_version: row.fda_version ?? null,
     app_build_time: row.app_build_time ?? null,
     db_version: row.db_version ?? null,

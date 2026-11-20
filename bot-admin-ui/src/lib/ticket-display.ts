@@ -272,6 +272,26 @@ export function channelDisplayName(
   return channelNames[key] || `Канал #${key}`;
 }
 
+/** Author label for board last-message preview: "Ты" for current employee, else writer name. */
+export function lastMessageAuthorLabel(
+  lastMessage: { author_entity_id?: number | string; author_entity_type?: string; author_entity_name?: string } | null | undefined,
+  currentRegosUserId?: number | null,
+): string | null {
+  if (!lastMessage) return null;
+  const entityType = String(lastMessage.author_entity_type || "").trim();
+  const entityId = Number(lastMessage.author_entity_id);
+  if (
+    entityType === "User" &&
+    currentRegosUserId != null &&
+    Number.isFinite(entityId) &&
+    entityId === Number(currentRegosUserId)
+  ) {
+    return "Ты";
+  }
+  const name = String(lastMessage.author_entity_name || "").trim();
+  return name || null;
+}
+
 const recordingDurationCache = new Map<string, number>();
 /** Remember failed probes so list re-renders do not re-download multi‑MB WAVs. */
 const recordingDurationFailures = new Set<string>();

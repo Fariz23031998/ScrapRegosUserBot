@@ -1,4 +1,4 @@
-import { Play } from "lucide-react";
+import { Play, ShoppingCart } from "lucide-react";
 import { Link } from "react-router-dom";
 import EntityAvatar from "./EntityAvatar";
 import LoadingState from "./LoadingState";
@@ -225,13 +225,15 @@ export default function TicketCards({
             <div className="ticket-card__actions">
               <button
                 type="button"
-                className="btn-primary btn-sm ticket-create-order-btn"
+                className="btn-primary btn-sm btn-icon ticket-create-order-btn"
+                aria-label="Создать заказ"
+                title="Создать заказ"
                 onClick={(event) => {
                   event.stopPropagation();
                   onCreateOrder(ticket);
                 }}
               >
-                Создать заказ
+                <ShoppingCart size={20} aria-hidden="true" />
               </button>
             </div>
           </article>

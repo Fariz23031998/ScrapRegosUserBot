@@ -8,8 +8,9 @@ const DEFAULT_PAGE_SIZE = 100;
 const LIVE_PAGE_SIZE = 50;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
-const COLUMNS = ['id', 'name', 'inn', 'phone', 'contacts', 'company', 'balance', 'id'];
-const ORDERABLE = [true, true, true, false, false, true, false, false];
+/** DataTables columns from Billing 1.22 Partners/Index (contacts/legal_status still returned in rows). */
+const COLUMNS = ['id', 'name', 'inn', 'phone', 'company', 'balance'];
+const ORDERABLE = [true, true, true, false, true, true];
 
 function vcr1AjaxHeaders(referer?: any) {
   return {
@@ -29,6 +30,7 @@ function buildFormData({ draw, start, length, search = '' }: Unchecked) {
     'order[0][dir]': 'DESC',
     'additionalproperty[0][name]': 'legal_status',
     'additionalproperty[1][name]': 'company',
+    'additionalproperty[2][name]': 'archived',
   };
 
   COLUMNS.forEach((data?: any, index?: any) => {
@@ -117,6 +119,8 @@ async function fetchAllVcr1Partners(
 export {
   DEFAULT_PAGE_SIZE,
   LIVE_PAGE_SIZE,
+  COLUMNS,
+  buildFormData,
   fetchAllVcr1Partners,
   fetchVcr1PartnersPage,
   searchVcr1Partners,

@@ -1,6 +1,13 @@
 import type { Unchecked } from '../types/unchecked';
 import { chromium } from 'playwright';
-import { createRegosContext, ensureRegosSession, ensureEasyTradeSession, ensureVcr1PartnersIndex, persistRegosAuthState } from '../sync/regos-auth';
+import {
+  createRegosContext,
+  ensureRegosSession,
+  ensureEasyTradeSession,
+  ensureVcr1PartnersIndex,
+  ensureVcr1LicensesIndex,
+  persistRegosAuthState,
+} from '../sync/regos-auth';
 import { createRposContext, ensureRposSession, persistRposAuthState } from '../sync/rpos-auth';
 import { getAccountCredentials, getRposCredentials } from '../sync/accounts';
 
@@ -19,6 +26,11 @@ async function bootstrapRegosSession(accountLabel: any, { headless = true }: Unc
     await ensureVcr1PartnersIndex(page, accountLabel).catch((err: any) => {
       console.error(
         `[bootstrap] ${accountLabel} vcr1 session skipped: ${String(err?.message || err).split('\n')[0]}`
+      );
+    });
+    await ensureVcr1LicensesIndex(page, accountLabel).catch((err: any) => {
+      console.error(
+        `[bootstrap] ${accountLabel} vcr1 licenses skipped: ${String(err?.message || err).split('\n')[0]}`
       );
     });
     const statePath = await persistRegosAuthState(context, accountLabel);

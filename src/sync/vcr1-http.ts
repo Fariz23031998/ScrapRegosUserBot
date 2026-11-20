@@ -7,14 +7,21 @@ const SESSION_CHECK_TIMEOUT_MS = 15000;
 function looksLikeVcr1Login(text?: any, url?: any) {
   const body = String(text || '');
   const href = String(url || '');
-  if (/\/account\/login/i.test(href) || /auth\.regos\.uz/i.test(href)) return true;
+  if (/\/account\/login/i.test(href) || /auth\.regos\.uz/i.test(href) || /\/signin-regos/i.test(href)) {
+    return true;
+  }
+  // Billing 1.22+ hosted Regos Account login (no «Войти через Regos» link).
   if (/войти через regos/i.test(body)) return true;
+  if (/вход в биллинг/i.test(body)) return true;
+  if (/единый профиль regos/i.test(body)) return true;
+  if (/hosted-account-shell/i.test(body) && /data-login-page\s*=\s*["']true["']/i.test(body)) return true;
   return false;
 }
 
 /**
- * vcr1 often answers dead sessions with an empty HTTP 500 on /Get instead of login HTML.
- * Probe Partners/Index so callers can refresh the Regos SSO jar.
+ * vcr1 may answer dead sessions with HTTP 401 on /Get (Billing 1.22+),
+ * or historically with an empty HTTP 500 instead of login HTML.
+ * Probe Partners/Index so callers can refresh the Regos SSO jar when needed.
  */
 async function readVcr1ApiText(request: any, response: any, label: any, { timeout = SESSION_CHECK_TIMEOUT_MS }: Unchecked = {}) {
   if (response.ok()) {
@@ -23,6 +30,11 @@ async function readVcr1ApiText(request: any, response: any, label: any, { timeou
       throw new Error(`vcr1 ${label} returned login/HTML (session expired)`);
     }
     return text;
+  }
+
+  const status = Number(response.status?.() ?? response.status ?? 0);
+  if (status === 401) {
+    throw new Error(`vcr1 ${label} returned login/HTML (session expired)`);
   }
 
   try {
@@ -35,7 +47,7 @@ async function readVcr1ApiText(request: any, response: any, label: any, { timeou
     if (/session expired/i.test(String(err?.message || err))) throw err;
   }
 
-  throw new Error(`vcr1 ${label} failed with status ${response.status()}`);
+  throw new Error(`vcr1 ${label} failed with status ${status || response.status()}`);
 }
 
 export { looksLikeVcr1Login, readVcr1ApiText };

@@ -38,10 +38,27 @@ function pickLastNonSystemMessage(messages?: any) {
     const text = previewTextFromMessage(message);
     if (!text) continue;
     const created = Number(message?.created_date);
-    return {
+    const preview: {
+      text: string;
+      created_date?: number;
+      author_entity_id?: number | string;
+      author_entity_type?: string;
+      author_entity_name?: string;
+    } = {
       text,
       created_date: Number.isFinite(created) && created > 0 ? created : undefined,
     };
+    const authorEntityId = message?.author_entity_id;
+    if (authorEntityId != null && authorEntityId !== '') {
+      preview.author_entity_id = authorEntityId;
+    }
+    const authorEntityType =
+      message?.author_entity_type != null ? String(message.author_entity_type).trim() : '';
+    if (authorEntityType) preview.author_entity_type = authorEntityType;
+    const authorEntityName =
+      message?.author_entity_name != null ? String(message.author_entity_name).trim() : '';
+    if (authorEntityName) preview.author_entity_name = authorEntityName;
+    return preview;
   }
   return null;
 }

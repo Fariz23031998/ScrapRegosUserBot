@@ -232,6 +232,7 @@ function formatVcr1License(license: any, partner: any = null) {
     field('📄', 'Договор', license.contract || '-'),
     field('📅', 'Создано', license.created_at || '-'),
     field('📌', 'Статус', license.status || '-'),
+    field('💵', 'Абонплата', license.monthly_fee || '-'),
     field('🖨', 'Фискальный модуль', license.fm || '-'),
     field('🔢', 'Серийный номер', license.serial || '-'),
     field('🔑', 'Лицензия', license.license || '-'),

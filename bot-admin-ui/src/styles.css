@@ -3060,6 +3060,7 @@ body.is-column-resizing * {
 .btn-icon.btn-sm {
   width: 2rem;
   height: 2rem;
+  padding: 0;
 }
 
 .tickets-sticky-head {
@@ -3762,6 +3763,11 @@ body.is-column-resizing * {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease;
+}
+
+.ticket-create-order-btn svg {
+  width: 1.35rem;
+  height: 1.35rem;
 }
 
 .ticket-card:hover .ticket-create-order-btn,
